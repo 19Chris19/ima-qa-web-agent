@@ -1,25 +1,95 @@
 # IMA Shared Knowledge Base QA Web App
 
-Lightweight read-only web QA for a single IMA shared knowledge base. The current local version proxies IMA Web's own knowledge-base Agent flow, so answers use IMA's shared-KB retrieval and stream back to the browser without calling Xiaomi MIMO in the normal path.
+这是一个把 IMA 共享知识库问答能力接到网页里的轻量服务。用户在网页里提问，服务端只访问一个固定知识库，然后把答案流式返回给浏览器或其他网站。
 
-## Setup
+这个项目不做知识库管理，也不让前端选择知识库。知识库 ID 必须在服务端环境变量里配置好，避免调用方随意切库。
 
-```bash
-cd apps/ima-qa-web
-npm install
-cp .env.example .env
+## 一句话架构
+
+```mermaid
+flowchart LR
+  User["用户或接入网站"] --> Web["本项目网页 / POST /api/ask"]
+  Web --> Server["Node / Express 服务"]
+  Server --> Provider{"问答后端模式"}
+  Provider -->|ima-web-agent| IMAWeb["IMA Web 知识库 Agent"]
+  Provider -->|openapi-mimo| IMAOpenAPI["IMA OpenAPI 检索"]
+  IMAOpenAPI --> MIMO["小米 MIMO 生成答案"]
+  IMAWeb --> Server
+  MIMO --> Server
+  Server --> Stream["SSE 流式答案 + 来源"]
+  Stream --> User
 ```
 
-Fill `.env` or `../../runtime/ima-web-agent.env` with local credentials. Do not commit either file.
+## 两种模式怎么选
 
-Current local provider:
+| 模式 | 适合谁 | 优点 | 代价 |
+| --- | --- | --- | --- |
+| `ima-web-agent` | 想尽量对齐 IMA 网页版共享知识库问答体验的人 | 复用 IMA 网页自己的知识库 Agent，召回更积极，答案质量更接近 IMA | 依赖 IMA 网页登录态，需要维护 cookie / refresh token |
+| `openapi-mimo` | 想稳定部署到普通服务器、尽量使用官方 API 的人 | 只需要 IMA OpenAPI 凭证和 MIMO API Key，更像常规后端服务 | 受 IMA OpenAPI 可返回内容限制，某些 IMA 网页能读到的原文 OpenAPI 不一定能取到 |
+
+当前本地调试和高质量版本默认用 `ima-web-agent`。如果要给别人开源部署，建议文档里把 `openapi-mimo` 作为更稳的官方部署路径，把 `ima-web-agent` 标注为“高质量但需要登录态维护”的私有适配路径。
+
+## 凭证先讲人话
+
+这个项目会用到三类凭证：
+
+| 凭证 | 谁提供 | 用在哪里 | 是否必须 |
+| --- | --- | --- | --- |
+| IMA Web 登录态 | 能登录目标 IMA 账号的人 | `ima-web-agent` 模式，让服务端模拟 IMA 网页问共享知识库 | 只在 `ima-web-agent` 模式必须 |
+| IMA OpenAPI 凭证 | IMA 开放接口后台 | `openapi-mimo` 模式，用来搜索固定共享知识库 | 只在 `openapi-mimo` 模式必须 |
+| 小米 MIMO API Key | 小米 MIMO / OpenAI-compatible 平台 | `openapi-mimo` 模式，用检索片段生成答案 | 只在 `openapi-mimo` 模式必须 |
+
+还有两类不是外部平台凭证，但生产环境建议配置：
+
+| 配置 | 作用 |
+| --- | --- |
+| `IMA_QA_API_TOKEN` | 给 `/api/ask` 加一层 Bearer Token，适合服务器到服务器调用 |
+| `ALLOWED_ORIGINS` | 限制哪些网页域名能从浏览器跨域调用这个服务 |
+
+详细部署和凭证说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+
+## 两个知识库 ID 不要混用
+
+IMA 网页和 IMA OpenAPI 看到的知识库 ID 可能不是同一种格式：
+
+| ID | 用在哪个模式 | 长什么样 | 说明 |
+| --- | --- | --- | --- |
+| `IMA_WEB_KNOWLEDGE_BASE_ID` | `ima-web-agent` | 通常是数字字符串 | IMA 网页 URL / 网页请求里用的知识库 ID |
+| `IMA_SHARED_KNOWLEDGE_BASE_ID` | `openapi-mimo` | OpenAPI 返回的共享知识库 ID | IMA OpenAPI 搜索接口用的知识库 ID |
+
+这两个值不能凭感觉互相替换。填错后最常见的表现是：服务能启动，但检索不到正确资料，或者回答质量明显不像目标共享知识库。
+
+## 方案 A：IMA Web Agent 模式
+
+这个模式相当于服务端帮你打开 IMA 网页里的“@共享知识库后提问”能力。
+
+```mermaid
+sequenceDiagram
+  participant Browser as 浏览器/接入网站
+  participant App as 本项目 Express 服务
+  participant IMA as IMA Web Agent
+
+  Browser->>App: POST /api/ask { question }
+  App->>App: 读取服务端固定 IMA_WEB_KNOWLEDGE_BASE_ID
+  App->>IMA: init_session，指定共享知识库
+  App->>IMA: assistant/qa，发起知识库问答
+  IMA-->>App: SEARCH_MEDIAS / MESSAGE / COMPLETED
+  App-->>Browser: sources / delta / done SSE 事件
+```
+
+最小环境变量：
 
 ```env
 IMA_QA_PROVIDER=ima-web-agent
-IMA_WEB_KNOWLEDGE_BASE_ID=web-kb-id
+IMA_WEB_KNOWLEDGE_BASE_ID=your_ima_web_numeric_kb_id
 IMA_WEB_AGENT_HEADERS_JSON={"x-ima-cookie":"...","x-ima-bkn":"..."}
 IMA_WEB_AGENT_MODEL_ID=official_3
 IMA_WEB_AGENT_MODEL_TYPE=3
+```
+
+登录态维护变量：
+
+```env
 IMA_WEB_AGENT_RUNTIME_ENV_PATH=/absolute/path/to/runtime/ima-web-agent.env
 IMA_WEB_AGENT_TOKEN_EXPIRES_AT=1785257551943
 IMA_WEB_AGENT_REFRESH_TOKEN_EXPIRES_AT=1787842056525
@@ -27,51 +97,84 @@ IMA_WEB_AGENT_REFRESH_SKEW_MS=600000
 IMA_WEB_AGENT_REFRESH_INTERVAL_MS=60000
 ```
 
-`IMA_WEB_KNOWLEDGE_BASE_ID` is the numeric ID used by IMA Web for the same shared knowledge base. The header JSON is a secret from a logged-in IMA Web session; keep it out of git and rotate it when the web login expires.
+这些字段的含义：
 
-Optional fallback provider:
+| 变量 | 含义 | 维护说明 |
+| --- | --- | --- |
+| `IMA_WEB_KNOWLEDGE_BASE_ID` | IMA 网页里这个共享知识库的数字 ID | 这是服务端唯一允许访问的知识库，不要从前端传 |
+| `IMA_WEB_AGENT_HEADERS_JSON` | IMA 网页登录态请求头，主要是 `x-ima-cookie` 和 `x-ima-bkn` | 是秘密，不能提交、截图、写日志 |
+| `IMA_WEB_AGENT_TOKEN_EXPIRES_AT` | 短 token 到期时间，毫秒时间戳 | 一般约 2 小时有效，用来提前刷新 |
+| `IMA_WEB_AGENT_REFRESH_TOKEN_EXPIRES_AT` | refresh token 到期时间，毫秒时间戳 | 一般约 30 天，到期后必须重新登录 IMA Web |
+| `IMA_WEB_AGENT_RUNTIME_ENV_PATH` | 刷新登录态后回写到哪个本地 env 文件 | 推荐放在 gitignored 的 `runtime/` 目录 |
+| `IMA_WEB_AGENT_REFRESH_SKEW_MS` | 提前多久刷新短 token | 默认 10 分钟 |
+| `IMA_WEB_AGENT_REFRESH_INTERVAL_MS` | 后台多久检查一次 token | 默认 1 分钟 |
+
+接手人一般不需要手写 `IMA_WEB_AGENT_HEADERS_JSON`。更推荐由维护者从已登录 IMA Web 的浏览器会话生成一份 `runtime/ima-web-agent.env`，再放到服务器安全目录里。这个文件等价于登录态，权限建议 `600`。
+
+## 方案 B：IMA OpenAPI + 小米 MIMO 模式
+
+这个模式更像传统 RAG：先用 IMA OpenAPI 搜索共享知识库，再把检索到的片段交给小米 MIMO 生成答案。
+
+```mermaid
+sequenceDiagram
+  participant Browser as 浏览器/接入网站
+  participant App as 本项目 Express 服务
+  participant IMA as IMA OpenAPI
+  participant MIMO as 小米 MIMO
+
+  Browser->>App: POST /api/ask { question }
+  App->>App: 读取服务端固定 IMA_SHARED_KNOWLEDGE_BASE_ID
+  App->>IMA: search_knowledge
+  IMA-->>App: 知识库片段和来源
+  App->>MIMO: 只带检索片段生成答案
+  MIMO-->>App: 流式答案
+  App-->>Browser: sources / delta / done SSE 事件
+```
+
+最小环境变量：
 
 ```env
 IMA_QA_PROVIDER=openapi-mimo
-IMA_OPENAPI_CLIENTID=...
-IMA_OPENAPI_APIKEY=...
-IMA_SHARED_KNOWLEDGE_BASE_ID=...
+IMA_OPENAPI_CLIENTID=your_ima_client_id
+IMA_OPENAPI_APIKEY=your_ima_api_key
+IMA_SHARED_KNOWLEDGE_BASE_ID=your_shared_knowledge_base_id
 MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-MIMO_API_KEY=...
+MIMO_API_KEY=your_mimo_api_key
 MIMO_MODEL=mimo-v2.5
 ```
 
-The OpenAPI + Xiaomi MIMO path is kept for official-API compatibility and tests, but it is not used by the current LaunchAgent service.
+这些字段的含义：
 
-## Run
+| 变量 | 含义 | 维护说明 |
+| --- | --- | --- |
+| `IMA_OPENAPI_CLIENTID` | IMA OpenAPI 应用 Client ID | 和 API Key 配套使用 |
+| `IMA_OPENAPI_APIKEY` | IMA OpenAPI 应用密钥 | 是秘密，不能进 git |
+| `IMA_SHARED_KNOWLEDGE_BASE_ID` | IMA OpenAPI 里的共享知识库 ID | 服务端固定使用，不允许前端覆盖 |
+| `MIMO_BASE_URL` | 小米 MIMO 的 OpenAI-compatible 地址 | 默认 `https://token-plan-cn.xiaomimimo.com/v1` |
+| `MIMO_API_KEY` | 小米 MIMO API Key | 是秘密，不能进 git |
+| `MIMO_MODEL` | 生成答案的模型名 | 默认 `mimo-v2.5` |
+
+如果接手人只想“先跑起来”，优先让他准备 `openapi-mimo` 这一组。它不需要浏览器登录态，也更符合常规服务器部署习惯。
+
+## 本地运行
 
 ```bash
+cd apps/ima-qa-web
+npm install
+cp .env.example .env
 npm start
 ```
 
-For the local IMA Web Agent mode, `npm start` also auto-loads
-`../../runtime/ima-web-agent.env` when it exists. That file is gitignored and
-should be mode `0600`; it is rewritten after successful token refreshes.
-
-Optional macOS LaunchAgent service for local development:
-
-```bash
-launchctl print gui/$(id -u)/com.openlongxia.ima-qa-web
-launchctl kickstart -k gui/$(id -u)/com.openlongxia.ima-qa-web
-launchctl bootout gui/$(id -u)/com.openlongxia.ima-qa-web
-```
-
-The LaunchAgent plist should live under `~/Library/LaunchAgents/`. It should not contain
-secrets; it only needs to run `node server.js` in this app directory.
-
-Pages:
+默认页面：
 
 - `http://localhost:3000/`
 - `http://localhost:3000/embed.html`
 
-For Linux/server/Docker deployment, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Docker / Linux / Nginx 部署见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
-API:
+## API
+
+流式调用：
 
 ```http
 POST /api/ask
@@ -84,50 +187,30 @@ Content-Type: application/json
 }
 ```
 
-The API rejects any request that attempts to specify a knowledge base. In Web Agent mode it always reads `IMA_WEB_KNOWLEDGE_BASE_ID`; in OpenAPI fallback mode it always reads `IMA_SHARED_KNOWLEDGE_BASE_ID`.
+SSE 事件：
 
-Optional production controls:
+| 事件 | 含义 |
+| --- | --- |
+| `sources` | 本轮检索到的来源列表 |
+| `delta` | 答案片段 |
+| `done` | 回答结束 |
+| `error` | 用户可见错误 |
 
-```env
-ALLOWED_ORIGINS=https://your-domain.example.com
-IMA_QA_API_TOKEN=replace_with_a_long_random_server_token
+如果配置了 `IMA_QA_API_TOKEN`：
+
+```http
+Authorization: Bearer your_server_token
 ```
 
-When `IMA_QA_API_TOKEN` is set, `POST /api/ask` requires `Authorization: Bearer ...`. Use this for server-to-server API access; do not put the token into public frontend JavaScript.
+注意：如果直接把本项目网页公开给普通用户，不要把 `IMA_QA_API_TOKEN` 写进前端 JavaScript。这个 token 更适合“你的业务后端调用本服务”，或者由反向代理统一加鉴权。
 
-## Retrieval Notes
+## 维护要点
 
-IMA OpenAPI is reliable for shared-KB metadata, search, notes, and downloadable files. Some shared raw Markdown/chat-log entries can appear in `get_knowledge_list` but fail through `get_media_info` with an IMA-side “view in ima” error. The OpenAPI fallback handles that by combining multi-query search, readable note/PDF extraction, and a shared-corpus overview from the configured KB only.
-
-IMA Web has a separate knowledge-base Agent flow (`init_session` -> `assistant/qa`) that can retrieve many more raw chat-log references and streams answer chunks. In a local benchmark against the shared 3DGS KB, it started retrieval status in about 6.6s, answer text in about 7.4s, and completed in about 12.3s while returning 100+ references. This is the current local service path.
-
-The Web Agent adapter works like a small local service:
-
-- It refreshes proactively when the short web token is within `IMA_WEB_AGENT_REFRESH_SKEW_MS` of expiry.
-- It also retries once after a login failure by calling IMA Web's refresh endpoint with the local `IMA-REFRESH-TOKEN`.
-- After a successful refresh, it updates the in-memory `x-ima-cookie` / `x-ima-bkn` headers and safely rewrites `IMA_WEB_AGENT_RUNTIME_ENV_PATH` with mode `0600`.
-- `/healthz` exposes sanitized expiry metadata such as remaining seconds and runtime persistence status, never raw cookies or tokens.
-- If the refresh token itself expires, refresh the browser login and regenerate the local runtime env file.
-
-## Maintenance Notes
-
-Authentication:
-
-- The short `IMA-TOKEN` is expected to last about 2 hours. The service checks every `IMA_WEB_AGENT_REFRESH_INTERVAL_MS` and refreshes when the remaining time is within `IMA_WEB_AGENT_REFRESH_SKEW_MS`.
-- The refresh token is expected to last about 30 days. It cannot be refreshed forever; when `/healthz` shows `refreshTokenSecondsRemaining` near zero or refresh starts failing, open IMA Web in the logged-in browser and regenerate `runtime/ima-web-agent.env`.
-- After a successful refresh, the service rewrites `runtime/ima-web-agent.env` with mode `0600`. Do not copy that file into commits, logs, issue reports, or screenshots.
-- Use `/healthz` for maintenance checks. It should show `provider`, `model`, token expiry timestamps, remaining seconds, and `runtimePersistence`, but never raw `x-ima-cookie`, `IMA-TOKEN`, or `IMA-REFRESH-TOKEN`.
-
-IMA knowledge base:
-
-- The app does not maintain its own vector index or document cache in Web Agent mode. New or edited IMA shared-KB content is picked up by IMA Web's own retrieval once IMA has indexed it.
-- If answers look stale after a knowledge-base update, first verify the same question in IMA Web with `@` selecting the shared KB. If IMA Web is updated but this app is not, restart the local service with `launchctl kickstart -k gui/$(id -u)/com.openlongxia.ima-qa-web`.
-- If the shared KB is replaced or recreated, update `IMA_WEB_KNOWLEDGE_BASE_ID` in the runtime env. Do not accept a KB ID from frontend requests.
-
-Xiaomi MIMO:
-
-- The current LaunchAgent service does not call Xiaomi MIMO. It streams the answer produced by IMA Web Agent.
-- Keep `MIMO_*` variables only for the optional `openapi-mimo` fallback path. They are not required for the current local service.
+- `.env`、`runtime/`、IMA cookie、refresh token、IMA API Key、MIMO API Key 都不能提交。
+- `/healthz` 只显示脱敏状态，比如 provider、model、token 剩余时间，不显示真实 token。
+- Web Agent 模式不维护自己的向量库。知识库新增内容后，等 IMA 自己索引完成即可。
+- 如果答案看起来过旧，先在 IMA 网页里用 `@共享知识库` 问同一个问题对照；如果 IMA 网页是新的、本项目还是旧的，再重启服务。
+- 如果 IMA Web 私有接口变更，临时切回 `openapi-mimo` 是最稳的降级方案。
 
 ## Verify
 
