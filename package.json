@@ -1,0 +1,28 @@
+{
+  "name": "ima-qa-web",
+  "version": "0.1.0",
+  "description": "Read-only IMA shared knowledge base QA web app with streaming IMA Web Agent answers.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "ima",
+    "knowledge-base",
+    "qa",
+    "mimo",
+    "streaming"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pdf-parse": "^2.4.5"
+  },
+  "engines": {
+    "node": ">=18.18"
+  }
+}

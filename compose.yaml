@@ -1,0 +1,11 @@
+services:
+  ima-qa-web:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${HOST_PORT:-3117}:${PORT:-3000}"
+    volumes:
+      - ./runtime:/app/runtime

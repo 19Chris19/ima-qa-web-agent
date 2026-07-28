@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>共享知识库问答</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23167c80'/%3E%3Cpath d='M9 8h14v16H9zM12 13h8M12 17h6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body data-mode="main">
+    <main class="shell">
+      <section class="workspace" aria-label="共享知识库问答">
+        <header class="topbar">
+          <div class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" role="img">
+              <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H20v14.5H7.5A2.5 2.5 0 0 0 5 20V5.5Z" />
+              <path d="M5 5.5A2.5 2.5 0 0 1 7.5 8H20" />
+              <path d="M9 12h7M9 15h5" />
+            </svg>
+          </div>
+          <div class="title-group">
+            <h1>共享知识库问答</h1>
+            <p id="providerLabel">IMA Shared KB</p>
+          </div>
+          <div class="status-pill" id="statusPill">ready</div>
+        </header>
+
+        <div class="chat" id="chatLog" aria-live="polite">
+          <article class="message assistant">
+            <div class="avatar" aria-hidden="true">A</div>
+            <div class="bubble">
+              <p>可以开始提问。</p>
+            </div>
+          </article>
+        </div>
+
+        <form class="composer" id="askForm">
+          <textarea
+            id="questionInput"
+            name="question"
+            rows="1"
+            maxlength="2000"
+            autocomplete="off"
+            placeholder="输入问题"
+            aria-label="输入问题"
+          ></textarea>
+          <button class="icon-button" id="sendButton" type="submit" title="发送" aria-label="发送">
+            <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+              <path d="M5 12h13" />
+              <path d="m13 6 6 6-6 6" />
+            </svg>
+          </button>
+        </form>
+      </section>
+    </main>
+    <script src="/client.js" defer></script>
+  </body>
+</html>
