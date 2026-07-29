@@ -6,9 +6,15 @@ const test = require('node:test');
 const {
   DEFAULT_MIMO_BASE_URL,
   DEFAULT_MIMO_MODEL,
+  DEFAULT_MAX_CONCURRENT_ASK,
   DEFAULT_QA_PROVIDER,
+  DEFAULT_QUEUE_LIMIT,
+  DEFAULT_RATE_LIMIT_MAX,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   getConfig,
   parseAllowedOrigins,
+  parseBoolean,
 } = require('../src/config');
 const { defaultRuntimeEnvPath, loadRuntimeEnv } = require('../src/runtime-env');
 
@@ -39,6 +45,11 @@ test('getConfig uses the planned defaults without writing secrets', () => {
   assert.equal(config.ima.sharedKnowledgeBaseId, 'shared-kb');
   assert.equal(config.mimo.baseUrl, DEFAULT_MIMO_BASE_URL);
   assert.equal(config.mimo.model, DEFAULT_MIMO_MODEL);
+  assert.equal(config.concurrency.maxConcurrentAsk, DEFAULT_MAX_CONCURRENT_ASK);
+  assert.equal(config.concurrency.queueLimit, DEFAULT_QUEUE_LIMIT);
+  assert.equal(config.concurrency.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
+  assert.equal(config.rateLimit.windowMs, DEFAULT_RATE_LIMIT_WINDOW_MS);
+  assert.equal(config.rateLimit.max, DEFAULT_RATE_LIMIT_MAX);
 });
 
 test('getConfig trims the MIMO base URL and validates PORT', () => {
@@ -96,6 +107,13 @@ test('getConfig parses optional production security settings', () => {
     IMA_WEB_AGENT_HEADERS_JSON: '{"x-ima-cookie":"cookie","x-ima-bkn":"123"}',
     IMA_QA_API_TOKEN: 'server-token',
     ALLOWED_ORIGINS: 'https://example.com, https://docs.example.com ',
+    TRUST_PROXY: 'true',
+    IMA_QA_HEALTH_DETAILS: 'auth',
+    IMA_QA_MAX_CONCURRENT_ASK: '8',
+    IMA_QA_QUEUE_LIMIT: '40',
+    IMA_QA_REQUEST_TIMEOUT_MS: '90000',
+    IMA_QA_RATE_LIMIT_WINDOW_MS: '30000',
+    IMA_QA_RATE_LIMIT_MAX: '12',
   });
 
   assert.equal(config.security.apiToken, 'server-token');
@@ -103,7 +121,16 @@ test('getConfig parses optional production security settings', () => {
     'https://example.com',
     'https://docs.example.com',
   ]);
+  assert.equal(config.security.trustProxy, true);
+  assert.equal(config.security.healthDetails, 'auth');
+  assert.equal(config.concurrency.maxConcurrentAsk, 8);
+  assert.equal(config.concurrency.queueLimit, 40);
+  assert.equal(config.concurrency.requestTimeoutMs, 90000);
+  assert.equal(config.rateLimit.windowMs, 30000);
+  assert.equal(config.rateLimit.max, 12);
   assert.deepEqual(parseAllowedOrigins(''), []);
+  assert.equal(parseBoolean('yes'), true);
+  assert.equal(parseBoolean('no'), false);
 });
 
 test('getConfig validates Web Agent mode requirements', () => {

@@ -117,6 +117,53 @@ test('IMAWebAgentClient sends init_session then assistant/qa and streams mapped 
   ]);
 });
 
+test('IMAWebAgentClient creates an isolated IMA session for concurrent asks', async () => {
+  let sessionCounter = 0;
+  const qaSessionIds = [];
+  const fetchMock = async (url, options) => {
+    const body = JSON.parse(options.body);
+
+    if (url.endsWith('/init_session')) {
+      sessionCounter += 1;
+      return new Response(JSON.stringify({ code: 0, session_id: `session-${sessionCounter}` }), {
+        status: 200,
+      });
+    }
+
+    if (url.endsWith('/assistant/qa')) {
+      qaSessionIds.push(body.session_id);
+      return new Response(
+        sseStream([
+          `event: MESSAGE\ndata: {"Text":"${body.session_id}"}`,
+          'event: COMPLETED\ndata: {"Code":0,"Msg":""}',
+        ]),
+        { status: 200 },
+      );
+    }
+
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  const client = new IMAWebAgentClient(
+    {
+      knowledgeBaseId: 'web-kb-id',
+      headers: { 'x-ima-cookie': 'cookie', 'x-ima-bkn': '123' },
+      modelId: 'official_3',
+      modelType: 3,
+    },
+    fetchMock,
+  );
+
+  const [first, second] = await Promise.all([
+    collectText(client.streamAsk({ question: '问题1' })),
+    collectText(client.streamAsk({ question: '问题2' })),
+  ]);
+
+  assert.equal(sessionCounter, 2);
+  assert.deepEqual(qaSessionIds.sort(), ['session-1', 'session-2']);
+  assert.notEqual(first, second);
+});
+
 test('IMAWebAgentClient refreshes expired web auth and retries init_session once', async () => {
   const requests = [];
   let initCount = 0;
@@ -249,6 +296,56 @@ test('IMAWebAgentClient proactively refreshes near-expired auth and persists run
   assert.doesNotMatch(persisted, /token-old/);
   assert.match(persisted, /token-new/);
   assert.equal(requests.length, 1);
+  assert.equal(fs.readdirSync(tempDir).some((name) => name.endsWith('.tmp')), false);
+});
+
+test('IMAWebAgentClient shares one refresh across concurrent near-expired auth checks', async () => {
+  const cookie = stringifyCookie({
+    'IMA-UID': 'user-1',
+    'IMA-TOKEN': 'token-old',
+    'IMA-REFRESH-TOKEN': 'refresh-old',
+    'TOKEN-TYPE': '0',
+  });
+  let refreshCalls = 0;
+  const fetchMock = async (url) => {
+    if (url.endsWith('/auth_login/refresh')) {
+      refreshCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            token: 'token-new',
+            refreshToken: 'refresh-new',
+            userId: 'user-1',
+            tokenType: 0,
+            tokenValidTime: 7200,
+            refreshTokenValidTime: 2592000,
+          },
+        }),
+        { status: 200 },
+      );
+    }
+
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  const client = new IMAWebAgentClient(
+    {
+      knowledgeBaseId: 'web-kb-id',
+      headers: { 'x-ima-cookie': cookie, 'x-ima-bkn': String(getBkn('token-old')) },
+      modelId: 'official_3',
+      modelType: 3,
+      tokenExpiresAt: Date.now() + 1000,
+      refreshSkewMs: 600000,
+    },
+    fetchMock,
+  );
+
+  await Promise.all([client.ensureFreshAuth(), client.ensureFreshAuth(), client.ensureFreshAuth()]);
+
+  assert.equal(refreshCalls, 1);
+  assert.equal(parseCookieHeader(client.headers['x-ima-cookie'])['IMA-TOKEN'], 'token-new');
 });
 
 test('buildRuntimeEnvText and extractExpiryMs format local service state', () => {
@@ -270,3 +367,13 @@ test('buildRuntimeEnvText and extractExpiryMs format local service state', () =>
   assert.equal(extractExpiryMs({ tokenExpiredTime: 1785257551943 }, ['tokenExpiredTime']), 1785257551943);
   assert.equal(extractExpiryMs({ tokenExpiredTime: 1785257551 }, ['tokenExpiredTime']), 1785257551000);
 });
+
+async function collectText(stream) {
+  let text = '';
+  for await (const event of stream) {
+    if (event.type === 'delta') {
+      text += event.text;
+    }
+  }
+  return text;
+}

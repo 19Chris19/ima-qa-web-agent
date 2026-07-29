@@ -6,6 +6,12 @@ const DEFAULT_QA_PROVIDER = 'openapi-mimo';
 const DEFAULT_PORT = 3000;
 const DEFAULT_WEB_AGENT_REFRESH_SKEW_MS = 10 * 60 * 1000;
 const DEFAULT_WEB_AGENT_REFRESH_INTERVAL_MS = 60 * 1000;
+const DEFAULT_MAX_CONCURRENT_ASK = 1;
+const DEFAULT_QUEUE_LIMIT = 30;
+const DEFAULT_REQUEST_TIMEOUT_MS = 180 * 1000;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const DEFAULT_RATE_LIMIT_MAX = 20;
+const DEFAULT_HEALTH_DETAILS = 'basic';
 
 class ConfigError extends Error {
   constructor(message) {
@@ -73,6 +79,32 @@ function parseAllowedOrigins(rawValue) {
     .filter(Boolean);
 }
 
+function parseBoolean(rawValue) {
+  return ['1', 'true', 'yes', 'on'].includes(String(rawValue || '').trim().toLowerCase());
+}
+
+function parseEnum(rawValue, allowedValues, fallback) {
+  const value = String(rawValue || '').trim() || fallback;
+  if (!allowedValues.includes(value)) {
+    throw new ConfigError(`${value} is not a supported value`);
+  }
+  return value;
+}
+
+function parseIntegerWithDefault(rawValue, name, fallback, options = {}) {
+  const raw = String(rawValue || '').trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const value = Number(raw);
+  const min = Number.isFinite(options.min) ? options.min : 0;
+  if (!Number.isInteger(value) || value < min) {
+    throw new ConfigError(`${name} must be an integer greater than or equal to ${min}`);
+  }
+  return value;
+}
+
 function getConfig(env = process.env) {
   const qaProvider = parseProvider(readEnv(env, 'IMA_QA_PROVIDER'));
   const requiredNames =
@@ -106,6 +138,42 @@ function getConfig(env = process.env) {
     security: {
       apiToken: readEnv(env, 'IMA_QA_API_TOKEN'),
       allowedOrigins: parseAllowedOrigins(readEnv(env, 'ALLOWED_ORIGINS')),
+      trustProxy: parseBoolean(readEnv(env, 'TRUST_PROXY')),
+      healthDetails: parseEnum(readEnv(env, 'IMA_QA_HEALTH_DETAILS'), ['basic', 'auth', 'full'], DEFAULT_HEALTH_DETAILS),
+    },
+    concurrency: {
+      maxConcurrentAsk: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_MAX_CONCURRENT_ASK'),
+        'IMA_QA_MAX_CONCURRENT_ASK',
+        DEFAULT_MAX_CONCURRENT_ASK,
+        { min: 1 },
+      ),
+      queueLimit: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_QUEUE_LIMIT'),
+        'IMA_QA_QUEUE_LIMIT',
+        DEFAULT_QUEUE_LIMIT,
+        { min: 0 },
+      ),
+      requestTimeoutMs: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_REQUEST_TIMEOUT_MS'),
+        'IMA_QA_REQUEST_TIMEOUT_MS',
+        DEFAULT_REQUEST_TIMEOUT_MS,
+        { min: 1 },
+      ),
+    },
+    rateLimit: {
+      windowMs: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_RATE_LIMIT_WINDOW_MS'),
+        'IMA_QA_RATE_LIMIT_WINDOW_MS',
+        DEFAULT_RATE_LIMIT_WINDOW_MS,
+        { min: 0 },
+      ),
+      max: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_RATE_LIMIT_MAX'),
+        'IMA_QA_RATE_LIMIT_MAX',
+        DEFAULT_RATE_LIMIT_MAX,
+        { min: 0 },
+      ),
     },
     ima: {
       clientId: readEnv(env, 'IMA_OPENAPI_CLIENTID'),
@@ -148,10 +216,17 @@ module.exports = {
   DEFAULT_MIMO_BASE_URL,
   DEFAULT_MIMO_MODEL,
   DEFAULT_QA_PROVIDER,
+  DEFAULT_HEALTH_DETAILS,
+  DEFAULT_MAX_CONCURRENT_ASK,
   DEFAULT_WEB_AGENT_REFRESH_INTERVAL_MS,
   DEFAULT_WEB_AGENT_REFRESH_SKEW_MS,
+  DEFAULT_QUEUE_LIMIT,
+  DEFAULT_RATE_LIMIT_MAX,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WEB_AGENT_MODEL_ID,
   DEFAULT_WEB_AGENT_MODEL_TYPE,
   parseAllowedOrigins,
+  parseBoolean,
   getConfig,
 };

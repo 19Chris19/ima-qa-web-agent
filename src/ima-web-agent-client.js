@@ -33,6 +33,7 @@ class IMAWebAgentClient {
     this.lastRefreshAt = null;
     this.lastRefreshError = '';
     this.refreshTimer = null;
+    this.refreshPromise = null;
   }
 
   async initSession(options = {}) {
@@ -85,6 +86,20 @@ class IMAWebAgentClient {
   }
 
   async refreshAuth(options = {}) {
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+      return;
+    }
+
+    this.refreshPromise = this._refreshAuthOnce(options);
+    try {
+      await this.refreshPromise;
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  async _refreshAuthOnce(options = {}) {
     const cookie = parseCookieHeader(this.headers['x-ima-cookie'] || this.headers.cookie || '');
     const refreshToken = cookie['IMA-REFRESH-TOKEN'];
     const userId = cookie['IMA-UID'];
@@ -266,12 +281,24 @@ class IMAWebAgentClient {
       refreshIntervalMs: this.refreshIntervalMs,
     });
 
-    fs.mkdirSync(path.dirname(this.runtimeEnvPath), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(this.runtimeEnvPath, envText, { mode: 0o600 });
+    const dir = path.dirname(this.runtimeEnvPath);
+    const tempPath = path.join(
+      dir,
+      `.${path.basename(this.runtimeEnvPath)}.${process.pid}.${Date.now()}.tmp`,
+    );
+
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tempPath, envText, { mode: 0o600 });
+    try {
+      fs.chmodSync(tempPath, 0o600);
+    } catch {
+      // Best effort only; writeFileSync mode covers normal creation.
+    }
+    fs.renameSync(tempPath, this.runtimeEnvPath);
     try {
       fs.chmodSync(this.runtimeEnvPath, 0o600);
     } catch {
-      // Best effort only; writeFileSync mode covers normal creation.
+      // Best effort only; temp file mode covers normal writes.
     }
     return true;
   }

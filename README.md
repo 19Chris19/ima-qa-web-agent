@@ -45,6 +45,8 @@ flowchart LR
 | --- | --- |
 | `IMA_QA_API_TOKEN` | 给 `/api/ask` 加一层 Bearer Token，适合服务器到服务器调用 |
 | `ALLOWED_ORIGINS` | 限制哪些网页域名能从浏览器跨域调用这个服务 |
+| `IMA_QA_MAX_CONCURRENT_ASK` | 限制同一实例同时跑多少个上游问答，保护 IMA 和 MIMO |
+| `IMA_QA_QUEUE_LIMIT` | 并发满时最多排队多少个请求，队列满返回 429 |
 
 详细部署和凭证说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
@@ -204,10 +206,39 @@ Authorization: Bearer your_server_token
 
 注意：如果直接把本项目网页公开给普通用户，不要把 `IMA_QA_API_TOKEN` 写进前端 JavaScript。这个 token 更适合“你的业务后端调用本服务”，或者由反向代理统一加鉴权。
 
+## 公网多人访问策略
+
+默认策略是 **单问单答、服务端不保存用户上下文**。每个请求都有自己的 `requestId`、来源列表、答案流；`ima-web-agent` 模式下每次提问都会新建 IMA session，不复用上一位用户或上一轮问题。
+
+上线初期建议按 10 以内并发配置：
+
+```env
+IMA_QA_MAX_CONCURRENT_ASK=1
+IMA_QA_QUEUE_LIMIT=30
+IMA_QA_REQUEST_TIMEOUT_MS=180000
+IMA_QA_RATE_LIMIT_WINDOW_MS=60000
+IMA_QA_RATE_LIMIT_MAX=20
+TRUST_PROXY=true
+IMA_QA_HEALTH_DETAILS=basic
+```
+
+含义：
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `IMA_QA_MAX_CONCURRENT_ASK` | `1` | 同一实例最多同时处理 1 个上游问答；Web Agent 单登录态建议串行，OpenAPI/MIMO 可压测后调高 |
+| `IMA_QA_QUEUE_LIMIT` | `30` | 并发满后最多排队 30 个请求 |
+| `IMA_QA_REQUEST_TIMEOUT_MS` | `180000` | 单个请求总超时时间，包含排队时间 |
+| `IMA_QA_RATE_LIMIT_WINDOW_MS` | `60000` | 限流窗口 |
+| `IMA_QA_RATE_LIMIT_MAX` | `20` | 每个 IP 每分钟最多 20 次 |
+| `TRUST_PROXY` | `false` | 部署在 Nginx/CDN 后面时设为 `true`，按 `X-Forwarded-For` 识别真实 IP |
+| `IMA_QA_HEALTH_DETAILS` | `basic` | 默认只展示队列/限流状态；设为 `auth` 才展示 Web Agent token 剩余时间 |
+
 ## 维护要点
 
 - `.env`、`runtime/`、IMA cookie、refresh token、IMA API Key、MIMO API Key 都不能提交。
 - `/healthz` 只显示脱敏状态，比如 provider、model、token 剩余时间，不显示真实 token。
+- 公网部署时保留并发池、队列、限流和超时；`ima-web-agent` 同一登录态建议串行访问，超过 50 并发要优先评估 `openapi-mimo`、上游限流和横向扩展。
 - Web Agent 模式不维护自己的向量库。知识库新增内容后，等 IMA 自己索引完成即可。
 - 如果答案看起来过旧，先在 IMA 网页里用 `@共享知识库` 问同一个问题对照；如果 IMA 网页是新的、本项目还是旧的，再重启服务。
 - 如果 IMA Web 私有接口变更，临时切回 `openapi-mimo` 是最稳的降级方案。

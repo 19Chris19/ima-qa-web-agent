@@ -30,6 +30,17 @@ const baseConfig = {
   security: {
     apiToken: '',
     allowedOrigins: [],
+    healthDetails: 'basic',
+    trustProxy: false,
+  },
+  concurrency: {
+    maxConcurrentAsk: 6,
+    queueLimit: 30,
+    requestTimeoutMs: 120000,
+  },
+  rateLimit: {
+    windowMs: 0,
+    max: 0,
   },
 };
 
@@ -45,6 +56,25 @@ async function withServer(app, fn) {
       server.close((error) => (error ? reject(error) : resolve()));
     });
   }
+}
+
+async function waitFor(predicate, options = {}) {
+  const timeoutMs = options.timeoutMs || 1000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition');
+}
+
+async function waitForHealth(baseUrl, predicate) {
+  await waitFor(async () => {
+    const health = await (await fetch(`${baseUrl}/healthz`)).json();
+    return predicate(health);
+  });
 }
 
 function makeApp(overrides = {}) {
@@ -240,7 +270,11 @@ test('POST /api/ask SSE can proxy IMA Web Agent mode', async () => {
 
 test('GET /healthz exposes sanitized Web Agent auth status', async () => {
   const app = makeApp({
-    config: { ...baseConfig, qaProvider: 'ima-web-agent' },
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, healthDetails: 'auth' },
+    },
     imaWebAgentClient: {
       getAuthStatus() {
         return {
@@ -259,6 +293,350 @@ test('GET /healthz exposes sanitized Web Agent auth status', async () => {
     assert.equal(data.auth.tokenSecondsRemaining, 3000);
     assert.equal(data.auth.runtimePersistence, 'enabled');
     assert.equal(JSON.stringify(data).includes('x-ima-cookie'), false);
+  });
+});
+
+test('GET /healthz defaults to basic queue status without auth details', async () => {
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      concurrency: { ...baseConfig.concurrency, maxConcurrentAsk: 2, queueLimit: 3 },
+    },
+    imaWebAgentClient: {
+      getAuthStatus() {
+        return { tokenSecondsRemaining: 3000 };
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/healthz`);
+    const data = await response.json();
+    assert.equal(data.provider, 'ima-web-agent');
+    assert.equal(data.queue.maxConcurrent, 2);
+    assert.equal(data.queue.queueLimit, 3);
+    assert.equal(Object.prototype.hasOwnProperty.call(data, 'auth'), false);
+  });
+});
+
+test('POST /api/ask rate limits by client IP', async () => {
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      rateLimit: { windowMs: 60000, max: 1 },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '怎么报销？' }),
+    });
+    const second = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '怎么报销？' }),
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 429);
+    const data = await second.json();
+    assert.match(data.error, /频繁/);
+    assert.match(second.headers.get('retry-after'), /\d+/);
+  });
+});
+
+test('POST /api/ask can rate limit with trusted X-Forwarded-For clients', async () => {
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      security: { ...baseConfig.security, trustProxy: true },
+      rateLimit: { windowMs: 60000, max: 1 },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const request = (ip) =>
+      fetch(`${baseUrl}/api/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+        body: JSON.stringify({ question: '怎么报销？' }),
+      });
+
+    assert.equal((await request('203.0.113.1')).status, 200);
+    assert.equal((await request('203.0.113.2')).status, 200);
+    assert.equal((await request('203.0.113.1')).status, 429);
+  });
+});
+
+test('POST /api/ask queues concurrent Web Agent requests and rejects when queue is full', async () => {
+  let releaseFirst;
+  let activeStreams = 0;
+  let streamCalls = 0;
+  const firstBlocker = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      concurrency: { ...baseConfig.concurrency, maxConcurrentAsk: 1, queueLimit: 1 },
+    },
+    imaWebAgentClient: {
+      async *streamAsk() {
+        streamCalls += 1;
+        activeStreams += 1;
+        if (streamCalls === 1) {
+          await firstBlocker;
+        }
+        yield {
+          type: 'sources',
+          searchSummary: '找到了1篇知识库资料',
+          sources: [{ index: streamCalls, title: `资料 ${streamCalls}`, snippet: '' }],
+        };
+        yield { type: 'delta', text: `答案 ${streamCalls}` };
+        yield { type: 'done' };
+        activeStreams -= 1;
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const first = fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '问题1' }),
+    });
+    await waitFor(() => streamCalls === 1 && activeStreams === 1);
+
+    const second = fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '问题2' }),
+    });
+    await waitForHealth(baseUrl, (health) => health.queue.activeRequests === 1 && health.queue.queuedRequests === 1);
+
+    const third = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '问题3' }),
+    });
+    assert.equal(third.status, 429);
+
+    releaseFirst();
+    const firstData = await (await first).json();
+    const secondData = await (await second).json();
+    assert.equal(firstData.answer, '答案 1');
+    assert.equal(secondData.answer, '答案 2');
+    const finalHealth = await (await fetch(`${baseUrl}/healthz`)).json();
+    assert.equal(finalHealth.queue.activeRequests, 0);
+    assert.equal(finalHealth.queue.queuedRequests, 0);
+  });
+});
+
+test('POST /api/ask aborts active Web Agent requests on timeout and releases the slot', async () => {
+  let streamCalls = 0;
+  let aborts = 0;
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      concurrency: { maxConcurrentAsk: 1, queueLimit: 1, requestTimeoutMs: 30 },
+    },
+    imaWebAgentClient: {
+      async *streamAsk({ signal }) {
+        streamCalls += 1;
+        if (streamCalls === 1) {
+          await new Promise((resolve, reject) => {
+            if (signal.aborted) {
+              aborts += 1;
+              reject(new Error('aborted'));
+              return;
+            }
+            signal.addEventListener(
+              'abort',
+              () => {
+                aborts += 1;
+                reject(new Error('aborted'));
+              },
+              { once: true },
+            );
+          });
+        }
+        yield { type: 'delta', text: `答案 ${streamCalls}` };
+        yield { type: 'done' };
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const first = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '慢问题' }),
+    });
+    assert.equal(first.status, 504);
+    assert.match((await first.json()).error, /超时/);
+    assert.equal(aborts, 1);
+
+    const afterTimeoutHealth = await (await fetch(`${baseUrl}/healthz`)).json();
+    assert.equal(afterTimeoutHealth.queue.activeRequests, 0);
+    assert.equal(afterTimeoutHealth.queue.queuedRequests, 0);
+
+    const second = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '后续问题' }),
+    });
+    const data = await second.json();
+    assert.equal(second.status, 200);
+    assert.equal(data.answer, '答案 2');
+  });
+});
+
+test('POST /api/ask releases the slot when the client disconnects', async () => {
+  let streamCalls = 0;
+  let aborts = 0;
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      concurrency: { maxConcurrentAsk: 1, queueLimit: 1, requestTimeoutMs: 1000 },
+    },
+    imaWebAgentClient: {
+      async *streamAsk({ signal }) {
+        streamCalls += 1;
+        await new Promise((resolve, reject) => {
+          if (signal.aborted) {
+            aborts += 1;
+            reject(new Error('aborted'));
+            return;
+          }
+          signal.addEventListener(
+            'abort',
+            () => {
+              aborts += 1;
+              reject(new Error('aborted'));
+            },
+            { once: true },
+          );
+        });
+        yield { type: 'delta', text: '不会走到这里' };
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const controller = new AbortController();
+    const request = fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ question: '断开连接测试' }),
+    }).catch(() => null);
+
+    await waitFor(() => streamCalls === 1);
+    controller.abort();
+    await request;
+    await waitForHealth(baseUrl, (health) => health.queue.activeRequests === 0 && health.queue.queuedRequests === 0);
+    assert.equal(aborts, 1);
+  });
+});
+
+test('POST /api/ask times out queued Web Agent requests', async () => {
+  let releaseFirst;
+  const firstBlocker = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  let streamCalls = 0;
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      concurrency: { maxConcurrentAsk: 1, queueLimit: 1, requestTimeoutMs: 30 },
+    },
+    imaWebAgentClient: {
+      async *streamAsk() {
+        streamCalls += 1;
+        if (streamCalls === 1) {
+          await firstBlocker;
+        }
+        yield { type: 'delta', text: '答案' };
+        yield { type: 'done' };
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const first = fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '问题1' }),
+    });
+    await waitFor(() => streamCalls === 1);
+
+    const second = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '问题2' }),
+    });
+    assert.equal(second.status, 504);
+    assert.match((await second.json()).error, /超时/);
+
+    releaseFirst();
+    await first;
+  });
+});
+
+test('POST /api/ask keeps answers and sources isolated across 10 concurrent Web Agent requests', async () => {
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      concurrency: { maxConcurrentAsk: 6, queueLimit: 30, requestTimeoutMs: 1000 },
+    },
+    imaWebAgentClient: {
+      async *streamAsk({ question }) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        yield {
+          type: 'sources',
+          searchSummary: `只检索 ${question}`,
+          sources: [{ index: 1, title: `资料 ${question}`, snippet: '' }],
+        };
+        yield { type: 'delta', text: `答案 ${question}` };
+        yield { type: 'done' };
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const questions = Array.from({ length: 10 }, (_, index) => `问题${index + 1}`);
+    const responses = await Promise.all(
+      questions.map((question) =>
+        fetch(`${baseUrl}/api/ask`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question }),
+        }),
+      ),
+    );
+    const payloads = await Promise.all(responses.map((response) => response.json()));
+
+    for (const [index, response] of responses.entries()) {
+      assert.equal(response.status, 200);
+      assert.equal(payloads[index].answer, `答案 ${questions[index]}`);
+      assert.deepEqual(payloads[index].sources, [
+        { index: 1, title: `资料 ${questions[index]}`, snippet: '' },
+      ]);
+      assert.equal(payloads[index].searchSummary, `只检索 ${questions[index]}`);
+    }
+
+    const finalHealth = await (await fetch(`${baseUrl}/healthz`)).json();
+    assert.equal(finalHealth.queue.activeRequests, 0);
+    assert.equal(finalHealth.queue.queuedRequests, 0);
   });
 });
 

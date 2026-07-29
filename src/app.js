@@ -2,7 +2,9 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const cors = require('cors');
 const express = require('express');
+const { QueueFullError, RequestAbortedError, createAskQueue } = require('./ask-queue');
 const { buildMessages } = require('./prompt');
+const { createRateLimiter } = require('./rate-limit');
 
 const FORBIDDEN_KB_FIELDS = [
   'knowledge_base_id',
@@ -14,74 +16,131 @@ const FORBIDDEN_KB_FIELDS = [
 
 function createApp({ config, imaClient, mimoClient, imaWebAgentClient }) {
   const app = express();
+  const askQueue = createAskQueue({
+    maxConcurrent: config.concurrency?.maxConcurrentAsk,
+    queueLimit: config.concurrency?.queueLimit,
+  });
+  const rateLimiter = createRateLimiter(config.rateLimit);
 
   app.disable('x-powered-by');
+  if (config.security?.trustProxy) {
+    app.set('trust proxy', true);
+  }
   app.use(createCorsMiddleware(config.security?.allowedOrigins));
   app.use(express.json({ limit: '32kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   app.get('/healthz', (_req, res) => {
     const provider = config.qaProvider || 'openapi-mimo';
-    res.json({
+    const health = {
       ok: true,
       provider,
       model: provider === 'ima-web-agent' ? config.webAgent?.modelId : config.mimo.model,
-      auth: provider === 'ima-web-agent' ? imaWebAgentClient?.getAuthStatus?.() : undefined,
-    });
+      queue: askQueue.stats(),
+      rateLimit: rateLimiter.stats(),
+    };
+    if (
+      provider === 'ima-web-agent' &&
+      ['auth', 'full'].includes(config.security?.healthDetails)
+    ) {
+      health.auth = imaWebAgentClient?.getAuthStatus?.();
+    }
+    res.json(health);
   });
 
   app.post('/api/ask', requireApiToken(config.security?.apiToken), async (req, res) => {
     const requestId = crypto.randomUUID();
+    const isSse = wantsSse(req);
+    const rateLimit = rateLimiter.consume(getClientIp(req));
+    if (!rateLimit.ok) {
+      res.setHeader('Retry-After', String(rateLimit.retryAfterSeconds));
+      return rejectAskRequest({
+        req,
+        res,
+        requestId,
+        statusCode: 429,
+        message: '请求太频繁，请稍后再试',
+      });
+    }
+
     const validation = validateAskRequest(req.body, config.limits);
 
     if (!validation.ok) {
       return res.status(400).json({ success: false, error: validation.error, requestId });
     }
 
-    if (wantsSse(req)) {
-      if ((config.qaProvider || 'openapi-mimo') === 'ima-web-agent') {
-        return handleStreamingWebAgentAsk({
+    const { signal, cleanup, isTimedOut } = createRequestSignal(req, res, {
+      timeoutMs: config.concurrency?.requestTimeoutMs,
+    });
+
+    try {
+      await askQueue.run(
+        () =>
+          dispatchAsk({
+            config,
+            history: validation.history,
+            imaClient,
+            imaWebAgentClient,
+            isSse,
+            mimoClient,
+            question: validation.question,
+            requestId,
+            req,
+            res,
+            signal,
+            isTimedOut,
+          }),
+        { signal },
+      );
+    } catch (error) {
+      if (error instanceof QueueFullError) {
+        return rejectAskRequest({
           req,
           res,
           requestId,
-          question: validation.question,
-          imaWebAgentClient,
+          statusCode: 429,
+          message: error.message,
         });
       }
-
-      return handleStreamingAsk({
-        req,
-        res,
-        requestId,
-        question: validation.question,
-        history: validation.history,
-        config,
-        imaClient,
-        mimoClient,
-      });
+      if (error instanceof RequestAbortedError && isTimedOut()) {
+        return rejectAskRequest({
+          req,
+          res,
+          requestId,
+          statusCode: 504,
+          message: '请求处理超时，请稍后再试',
+        });
+      }
+      if (!res.writableEnded && !(error instanceof RequestAbortedError)) {
+        return rejectAskRequest({
+          req,
+          res,
+          requestId,
+          statusCode: 500,
+          message: toUserSafeError(error),
+        });
+      }
+    } finally {
+      cleanup();
     }
-
-    if ((config.qaProvider || 'openapi-mimo') === 'ima-web-agent') {
-      return handleJsonWebAgentAsk({
-        res,
-        requestId,
-        question: validation.question,
-        imaWebAgentClient,
-      });
-    }
-
-    return handleJsonAsk({
-      res,
-      requestId,
-      question: validation.question,
-      history: validation.history,
-      config,
-      imaClient,
-      mimoClient,
-    });
   });
 
   return app;
+}
+
+function dispatchAsk(context) {
+  const { config, isSse } = context;
+  if (isSse) {
+    if ((config.qaProvider || 'openapi-mimo') === 'ima-web-agent') {
+      return handleStreamingWebAgentAsk(context);
+    }
+    return handleStreamingAsk(context);
+  }
+
+  if ((config.qaProvider || 'openapi-mimo') === 'ima-web-agent') {
+    return handleJsonWebAgentAsk(context);
+  }
+  return handleJsonAsk(context);
 }
 
 function createCorsMiddleware(allowedOrigins = []) {
@@ -120,12 +179,13 @@ function requireApiToken(expectedToken) {
 }
 
 async function handleJsonWebAgentAsk(context) {
-  const { res, requestId, question, imaWebAgentClient } = context;
+  const { res, requestId, question, imaWebAgentClient, signal, isTimedOut } = context;
 
   try {
     const { answer, sources, searchSummary } = await collectWebAgentAnswer({
       question,
       imaWebAgentClient,
+      signal,
     });
     return res.json({
       success: true,
@@ -135,16 +195,16 @@ async function handleJsonWebAgentAsk(context) {
       requestId,
     });
   } catch (error) {
-    return res.status(500).json({
+    return res.status(isTimedOut?.() ? 504 : 500).json({
       success: false,
-      error: toUserSafeError(error),
+      error: isTimedOut?.() ? '请求处理超时，请稍后再试' : toUserSafeError(error),
       requestId,
     });
   }
 }
 
 async function handleStreamingWebAgentAsk(context) {
-  const { req, res, requestId, question, imaWebAgentClient } = context;
+  const { res, requestId, question, imaWebAgentClient, signal } = context;
 
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -153,14 +213,11 @@ async function handleStreamingWebAgentAsk(context) {
   res.flushHeaders?.();
 
   try {
-    const abortController = new AbortController();
-    res.on('close', () => abortController.abort());
-
     const sources = [];
     let searchSummary = '';
     for await (const event of imaWebAgentClient.streamAsk({
       question,
-      signal: abortController.signal,
+      signal,
     })) {
       if (event.type === 'sources') {
         sources.push(...(event.sources || []));
@@ -182,17 +239,20 @@ async function handleStreamingWebAgentAsk(context) {
 
     return res.end();
   } catch (error) {
-    writeSse(res, 'error', { error: toUserSafeError(error), requestId });
+    writeSse(res, 'error', {
+      error: signal?.aborted ? '请求处理超时，请稍后再试' : toUserSafeError(error),
+      requestId,
+    });
     return res.end();
   }
 }
 
-async function collectWebAgentAnswer({ question, imaWebAgentClient }) {
+async function collectWebAgentAnswer({ question, imaWebAgentClient, signal }) {
   let answer = '';
   let searchSummary = '';
   const sources = [];
 
-  for await (const event of imaWebAgentClient.streamAsk({ question })) {
+  for await (const event of imaWebAgentClient.streamAsk({ question, signal })) {
     if (event.type === 'sources') {
       sources.push(...(event.sources || []));
       searchSummary = event.searchSummary || searchSummary;
@@ -233,7 +293,7 @@ function validateAskRequest(body, limits) {
 }
 
 async function handleJsonAsk(context) {
-  const { res, requestId, question, history, config, imaClient, mimoClient } = context;
+  const { res, requestId, question, history, config, imaClient, mimoClient, signal, isTimedOut } = context;
 
   try {
     const sources = await imaClient.searchKnowledge(question);
@@ -248,7 +308,7 @@ async function handleJsonAsk(context) {
 
     const messages = buildMessages({ question, history, sources, limits: config.limits });
     let answer = '';
-    for await (const delta of mimoClient.streamAnswer(messages)) {
+    for await (const delta of mimoClient.streamAnswer(messages, { signal })) {
       answer += delta;
     }
 
@@ -260,16 +320,16 @@ async function handleJsonAsk(context) {
       requestId,
     });
   } catch (error) {
-    return res.status(500).json({
+    return res.status(isTimedOut?.() ? 504 : 500).json({
       success: false,
-      error: toUserSafeError(error),
+      error: isTimedOut?.() ? '请求处理超时，请稍后再试' : toUserSafeError(error),
       requestId,
     });
   }
 }
 
 async function handleStreamingAsk(context) {
-  const { req, res, requestId, question, history, config, imaClient, mimoClient } = context;
+  const { res, requestId, question, history, config, imaClient, mimoClient, signal } = context;
 
   res.status(200);
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -289,12 +349,9 @@ async function handleStreamingAsk(context) {
     }
 
     const messages = buildMessages({ question, history, sources, limits: config.limits });
-    const abortController = new AbortController();
-    res.on('close', () => abortController.abort());
-
     let pendingAnswerText = '';
     for await (const delta of mimoClient.streamAnswer(messages, {
-      signal: abortController.signal,
+      signal,
     })) {
       pendingAnswerText += delta;
       const { flushable, pending } = splitFlushableAnswerText(pendingAnswerText);
@@ -313,13 +370,70 @@ async function handleStreamingAsk(context) {
     writeSse(res, 'done', { requestId });
     return res.end();
   } catch (error) {
-    writeSse(res, 'error', { error: toUserSafeError(error), requestId });
+    writeSse(res, 'error', {
+      error: signal?.aborted ? '请求处理超时，请稍后再试' : toUserSafeError(error),
+      requestId,
+    });
     return res.end();
   }
 }
 
 function wantsSse(req) {
   return String(req.headers.accept || '').includes('text/event-stream');
+}
+
+function rejectAskRequest({ req, res, requestId, statusCode, message }) {
+  if (res.writableEnded) {
+    return undefined;
+  }
+
+  if (wantsSse(req)) {
+    res.status(statusCode);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    writeSse(res, 'error', { error: message, requestId });
+    return res.end();
+  }
+
+  return res.status(statusCode).json({ success: false, error: message, requestId });
+}
+
+function createRequestSignal(_req, res, options = {}) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutMs = Number(options.timeoutMs || 0);
+  const timeout = timeoutMs > 0
+    ? setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeoutMs)
+    : null;
+
+  const onClose = () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  };
+  res.on('close', onClose);
+
+  return {
+    signal: controller.signal,
+    cleanup() {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      res.off('close', onClose);
+    },
+    isTimedOut() {
+      return timedOut;
+    },
+  };
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return req.app?.get('trust proxy') && forwarded ? forwarded : req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
 function writeSse(res, event, data) {
@@ -378,7 +492,10 @@ function toUserSafeError(error) {
 module.exports = {
   createCorsMiddleware,
   createApp,
+  createRequestSignal,
+  getClientIp,
   noReliableContentAnswer,
+  rejectAskRequest,
   requireApiToken,
   sanitizeKnowledgeBoundAnswer,
   validateAskRequest,

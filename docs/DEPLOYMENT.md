@@ -110,8 +110,26 @@ flowchart TD
 | --- | --- | --- |
 | `ALLOWED_ORIGINS` | 限制哪些网页域名可以从浏览器跨域调用 API | 服务暴露到公网时建议配 |
 | `IMA_QA_API_TOKEN` | 要求调用 `/api/ask` 时带 `Authorization: Bearer ...` | 做服务器到服务器调用时建议配 |
+| `TRUST_PROXY` | 信任 Nginx/CDN 传来的 `X-Forwarded-For` | 服务在反向代理后面时建议配 |
+| `IMA_QA_HEALTH_DETAILS` | 控制 `/healthz` 是否展示 auth 细节 | 公网用 `basic`，维护环境可用 `auth` |
 
 不要把 `IMA_QA_API_TOKEN` 写进公开网页前端。浏览器端代码人人能看见，写进去等于公开。
+
+### 并发、队列、限流
+
+这些变量控制多人同时访问时的服务行为：
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `IMA_QA_MAX_CONCURRENT_ASK` | `1` | 同一 Node 实例最多同时跑多少个上游问答；Web Agent 单登录态建议串行，OpenAPI/MIMO 可压测后调高 |
+| `IMA_QA_QUEUE_LIMIT` | `30` | 并发满后最多排队多少个请求 |
+| `IMA_QA_REQUEST_TIMEOUT_MS` | `180000` | 单个请求从进入服务开始的总超时时间，包含排队时间 |
+| `IMA_QA_RATE_LIMIT_WINDOW_MS` | `60000` | IP 限流窗口长度 |
+| `IMA_QA_RATE_LIMIT_MAX` | `20` | 每个 IP 在窗口内最多请求次数 |
+
+队列满或限流时，JSON 调用返回 429；SSE 调用返回 `event:error` 后结束连接。
+
+初期建议保持默认值。真实烟测里 IMA Web Agent 对同一登录态的并发非常敏感，2 个并发也出现过“提问太快啦”的上游限流提示；如果使用 `openapi-mimo`，可以再单独压测后提高并发。超过 50 并发时，不要只调大数字，要先压测 IMA 上游限制、服务器连接数、Nginx SSE 配置和账号登录态稳定性。
 
 ## Docker Deploy
 
@@ -151,6 +169,11 @@ IMA_WEB_AGENT_HEADERS_JSON={"x-ima-cookie":"...","x-ima-bkn":"..."}
 IMA_WEB_AGENT_MODEL_ID=official_3
 IMA_WEB_AGENT_MODEL_TYPE=3
 IMA_WEB_AGENT_RUNTIME_ENV_PATH=/app/runtime/ima-web-agent.env
+IMA_QA_MAX_CONCURRENT_ASK=1
+IMA_QA_QUEUE_LIMIT=30
+IMA_QA_REQUEST_TIMEOUT_MS=180000
+IMA_QA_RATE_LIMIT_WINDOW_MS=60000
+IMA_QA_RATE_LIMIT_MAX=20
 PORT=3000
 HOST_PORT=3117
 ```
@@ -237,21 +260,23 @@ curl https://your-domain.example.com/healthz
   "ok": true,
   "provider": "ima-web-agent",
   "model": "official_3",
-  "auth": {
-    "tokenSecondsRemaining": 3600,
-    "refreshTokenSecondsRemaining": 2500000,
-    "runtimePersistence": "enabled"
+  "queue": {
+    "activeRequests": 0,
+    "queuedRequests": 0,
+    "maxConcurrent": 1,
+    "queueLimit": 30
   }
 }
 ```
 
-`healthz` 是脱敏的，不会返回 cookie、API Key 或 token 原文。
+`healthz` 是脱敏的，不会返回 cookie、API Key 或 token 原文。默认 `IMA_QA_HEALTH_DETAILS=basic` 不展示 auth 到期细节；维护环境可设为 `auth`。
 
 ## Security Checklist
 
 - 提交到 GitHub 的只能是 `.env.example`，不能是 `.env`。
 - 不能提交 `runtime/`、`node_modules/`、浏览器 profile、日志、截图里的 token。
 - 对公网开放前，加 Nginx/网关限流。
+- 保留应用内并发池和限流，不要裸奔。
 - 需要服务端调用时，配置 `IMA_QA_API_TOKEN`。
 - 需要浏览器跨域调用时，配置 `ALLOWED_ORIGINS`。
 - Web Agent 模式要安排 refresh token 过期前的维护流程。
