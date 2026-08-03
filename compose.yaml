@@ -6,6 +6,6 @@ services:
       - path: .env
         required: false
     ports:
-      - "${HOST_PORT:-3117}:${PORT:-3000}"
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-3117}:${PORT:-3000}"
     volumes:
       - ./runtime:/app/runtime

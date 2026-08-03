@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IMA QA 账号管理</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body data-mode="admin">
+    <main class="admin-shell">
+      <header class="admin-topbar">
+        <a class="admin-back" href="/" title="返回问答" aria-label="返回问答">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6M9 12h10" /></svg>
+        </a>
+        <div>
+          <h1>账号管理</h1>
+          <p>IMA Web Agent</p>
+        </div>
+        <button class="admin-icon-button" id="reloadButton" type="button" title="刷新状态" aria-label="刷新状态">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7" /></svg>
+        </button>
+      </header>
+
+      <section class="admin-login" id="adminLogin">
+        <form class="admin-token-form" id="adminTokenForm">
+          <label for="adminTokenInput">管理员 Token</label>
+          <div class="admin-token-row">
+            <input id="adminTokenInput" type="password" autocomplete="current-password" />
+            <button type="submit">进入</button>
+          </div>
+          <p class="admin-feedback" id="loginFeedback" role="status"></p>
+        </form>
+      </section>
+
+      <section class="admin-panel" id="adminPanel" hidden>
+        <div class="admin-summary" id="adminSummary"></div>
+
+        <section class="admin-enroll" aria-label="接入账号">
+          <div class="admin-section-heading">
+            <div>
+              <h2>接入账号</h2>
+              <p>在有图形界面的维护机运行</p>
+            </div>
+          </div>
+          <label for="enrollName">账号名称</label>
+          <div class="admin-command-row">
+            <input id="enrollName" maxlength="80" autocomplete="off" placeholder="account-a" />
+            <button id="copyEnrollCommand" type="button">复制命令</button>
+          </div>
+          <pre class="admin-command" id="enrollCommand"></pre>
+          <p class="admin-feedback" id="enrollFeedback" role="status"></p>
+        </section>
+
+        <section class="admin-accounts" aria-label="账号列表">
+          <div class="admin-section-heading">
+            <div>
+              <h2>账号池</h2>
+              <p id="accountCountLabel">0 个账号</p>
+            </div>
+          </div>
+          <div class="admin-account-list" id="accountList"></div>
+        </section>
+      </section>
+    </main>
+    <script src="/admin.js" defer></script>
+  </body>
+</html>

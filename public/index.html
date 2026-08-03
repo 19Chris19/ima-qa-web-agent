@@ -10,49 +10,62 @@
   <body data-mode="main">
     <main class="shell">
       <section class="workspace" aria-label="共享知识库问答">
-        <header class="topbar">
-          <div class="mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" role="img">
-              <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H20v14.5H7.5A2.5 2.5 0 0 0 5 20V5.5Z" />
-              <path d="M5 5.5A2.5 2.5 0 0 1 7.5 8H20" />
-              <path d="M9 12h7M9 15h5" />
-            </svg>
+        <aside class="conversation-sidebar" id="conversationSidebar" aria-label="会话列表">
+          <div class="sidebar-header">
+            <span>会话</span>
+            <button class="sidebar-new-button" id="newConversationButton" type="button" title="新建会话" aria-label="新建会话">
+              <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
           </div>
-          <div class="title-group">
-            <h1>共享知识库问答</h1>
-            <p id="providerLabel">IMA Shared KB</p>
-          </div>
-          <div class="status-pill" id="statusPill">ready</div>
-        </header>
-
-        <div class="chat" id="chatLog" aria-live="polite">
-          <article class="message assistant">
-            <div class="avatar" aria-hidden="true">A</div>
-            <div class="bubble">
-              <p>可以开始提问。</p>
+          <nav class="conversation-list" id="conversationList" aria-label="最近会话"></nav>
+        </aside>
+        <button class="sidebar-backdrop" id="sidebarBackdrop" type="button" aria-label="关闭会话列表"></button>
+        <section class="chat-panel">
+          <header class="topbar">
+            <button class="sidebar-toggle" id="sidebarToggle" type="button" title="会话列表" aria-label="会话列表" aria-expanded="false">
+              <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <path d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <div class="mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H20v14.5H7.5A2.5 2.5 0 0 0 5 20V5.5Z" />
+                <path d="M5 5.5A2.5 2.5 0 0 1 7.5 8H20" />
+                <path d="M9 12h7M9 15h5" />
+              </svg>
             </div>
-          </article>
-        </div>
+            <div class="title-group">
+              <h1>共享知识库问答</h1>
+              <p id="providerLabel">IMA Shared KB</p>
+            </div>
+            <div class="status-pill" id="statusPill">ready</div>
+          </header>
 
-        <form class="composer" id="askForm">
-          <textarea
-            id="questionInput"
-            name="question"
-            rows="1"
-            maxlength="2000"
-            autocomplete="off"
-            placeholder="输入问题"
-            aria-label="输入问题"
-          ></textarea>
-          <button class="icon-button" id="sendButton" type="submit" title="发送" aria-label="发送">
-            <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
-              <path d="M5 12h13" />
-              <path d="m13 6 6 6-6 6" />
-            </svg>
-          </button>
-        </form>
+          <div class="chat" id="chatLog" aria-live="polite"></div>
+
+          <form class="composer" id="askForm">
+            <textarea
+              id="questionInput"
+              name="question"
+              rows="1"
+              maxlength="2000"
+              autocomplete="off"
+              placeholder="输入问题"
+              aria-label="输入问题"
+            ></textarea>
+            <button class="icon-button" id="sendButton" type="submit" title="发送" aria-label="发送">
+              <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <path d="M5 12h13" />
+                <path d="m13 6 6 6-6 6" />
+              </svg>
+            </button>
+          </form>
+        </section>
       </section>
     </main>
+    <script src="/answer-markdown.js" defer></script>
     <script src="/client.js" defer></script>
   </body>
 </html>

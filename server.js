@@ -1,20 +1,54 @@
 const { createApp } = require('./src/app');
+const { registerAdminRoutes } = require('./src/admin-routes');
 const { getConfig } = require('./src/config');
 const { IMAClient } = require('./src/ima-client');
-const { IMAWebAgentClient } = require('./src/ima-web-agent-client');
+const { IMAWebAgentPool } = require('./src/ima-web-agent-pool');
+const { WebAgentAccountDirectory } = require('./src/web-agent-account-directory');
+const { ConversationStore } = require('./src/conversation-store');
+const { LocalRAGClient } = require('./src/local-rag-client');
 const { MIMOClient } = require('./src/mimo-client');
+const { synchronizeProviderAQueueCapacity } = require('./src/provider-a-capacity');
 const { loadRuntimeEnv } = require('./src/runtime-env');
 
 async function main() {
   const envLoad = loadRuntimeEnv();
   const config = getConfig(process.env);
   const qaProvider = config.qaProvider || 'openapi-mimo';
+  const accountDirectory =
+    qaProvider === 'ima-web-agent'
+      ? new WebAgentAccountDirectory({
+          storePath: config.webAgent.accountStorePath,
+          keyPath: config.webAgent.accountStoreKeyPath,
+        })
+      : null;
+  const conversationStore = new ConversationStore(config.conversations);
+  if (accountDirectory) {
+    seedAccountDirectory(accountDirectory, config.webAgent.accounts);
+    validateDirectoryKnowledgeBase(accountDirectory, config.webAgent.sharedKnowledgeBaseId);
+  }
+  let synchronizeQueueCapacity = () => {};
   const imaWebAgentClient =
-    qaProvider === 'ima-web-agent' ? new IMAWebAgentClient(config.webAgent) : null;
+    qaProvider === 'ima-web-agent'
+      ? new IMAWebAgentPool(
+          {
+            ...config.webAgent,
+            accounts: accountDirectory?.getPoolAccounts() || config.webAgent.accounts,
+          },
+          {
+            onAccountStateChange(snapshot) {
+              accountDirectory?.recordRuntimeState(snapshot);
+              synchronizeQueueCapacity();
+            },
+            onAccountCredentialsChange(accountId, snapshot) {
+              accountDirectory?.updateCredentialsFromClient(accountId, snapshot);
+            },
+          },
+        )
+      : null;
   if (imaWebAgentClient) {
     try {
       const refreshed = await imaWebAgentClient.ensureFreshAuth();
-      imaWebAgentClient.persistRuntimeEnv();
+      imaWebAgentClient.persistRuntimeEnv?.();
       if (refreshed) {
         console.log('IMA Web Agent auth refreshed on startup');
       }
@@ -27,8 +61,28 @@ async function main() {
   const app = createApp({
     config,
     imaClient: qaProvider === 'openapi-mimo' ? new IMAClient(config.ima) : null,
-    mimoClient: qaProvider === 'openapi-mimo' ? new MIMOClient(config.mimo) : null,
+    mimoClient:
+      qaProvider === 'openapi-mimo' || qaProvider === 'local-rag-mimo'
+        ? new MIMOClient(config.mimo)
+        : null,
     imaWebAgentClient,
+    localRagClient: qaProvider === 'local-rag-mimo' ? new LocalRAGClient(config.localRag) : null,
+    accountDirectory,
+    conversationStore,
+  });
+  synchronizeQueueCapacity = () =>
+    synchronizeProviderAQueueCapacity({
+      askQueue: app.locals.imaQaAskQueue,
+      config,
+      pool: imaWebAgentClient,
+    });
+  synchronizeQueueCapacity();
+  registerAdminRoutes(app, {
+    config,
+    accountDirectory,
+    imaWebAgentClient,
+    askQueue: app.locals.imaQaAskQueue,
+    onAccountsSynced: synchronizeQueueCapacity,
   });
 
   app.listen(config.port, () => {
@@ -45,6 +99,44 @@ async function main() {
       }`,
     );
   });
+}
+
+function validateDirectoryKnowledgeBase(accountDirectory, sharedKnowledgeBaseId) {
+  const expected = String(sharedKnowledgeBaseId || '').trim();
+  if (!expected) {
+    return;
+  }
+  const mismatched = accountDirectory
+    .listAccounts()
+    .find((account) => account.knowledgeBaseId && account.knowledgeBaseId !== expected);
+  if (mismatched) {
+    throw new Error(`账号 ${mismatched.name} 不属于当前配置的 IMA 共享知识库，拒绝启动`);
+  }
+}
+
+function seedAccountDirectory(accountDirectory, accounts = []) {
+  for (const account of accounts) {
+    if (!account?.headers || !account?.knowledgeBaseId) {
+      continue;
+    }
+    if (accountDirectory.getAccount(account.id || account.name)) {
+      continue;
+    }
+    accountDirectory.upsertCapturedAccount({
+      id: account.id,
+      name: account.name,
+      knowledgeBaseId: account.knowledgeBaseId,
+      headers: account.headers,
+      runtimeEnvPath: account.runtimeEnvPath,
+      modelId: account.modelId,
+      modelType: account.modelType,
+      tokenExpiresAt: account.tokenExpiresAt,
+      refreshTokenExpiresAt: account.refreshTokenExpiresAt,
+      refreshSkewMs: account.refreshSkewMs,
+      refreshIntervalMs: account.refreshIntervalMs,
+      source: 'env-seed',
+    });
+  }
 }
 
 main().catch((error) => {

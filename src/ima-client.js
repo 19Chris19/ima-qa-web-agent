@@ -5,86 +5,146 @@ const GET_KNOWLEDGE_LIST_PATH = '/openapi/wiki/v1/get_knowledge_list';
 const GET_MEDIA_INFO_PATH = '/openapi/wiki/v1/get_media_info';
 const GET_DOC_CONTENT_PATH = '/openapi/note/v1/get_doc_content';
 const RAW_FOLDER_TITLE_PATTERN = /NotebookLM|raw|群聊|group/i;
+const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 1000;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_BASE_DELAY_MS = 800;
+const DEFAULT_MAX_ENRICHED_SOURCES = 6;
+const DEFAULT_ENRICH_SNIPPET_THRESHOLD = 700;
+const IMA_OPENAPI_QUOTA_EXCEEDED_CODE = 200005;
+const DOMAIN_QUERY_TERMS = [
+  'PostShot',
+  'BSD',
+  'Metashape',
+  'LichtFeld Studio',
+  'LFS',
+  'RealityScan',
+  'SuperSplat',
+  'Spark 2.0',
+  '知天下',
+  'Quest 3',
+  'Insta360',
+  'LiDAR',
+  'NeRF',
+  '4DGS',
+  'SfM',
+  '空三',
+  'LOD',
+  'VRAM',
+  'Ply',
+  'sog',
+  'Mesh',
+  'Mask',
+  '遮罩',
+  '无人机',
+  '航拍',
+  '重叠率',
+  '转台',
+  '全景相机',
+  '微距',
+  '点云',
+  '球谐函数',
+  '高斯点数',
+  '显存',
+  '压缩',
+  '流式加载',
+  '空地融合',
+  '数字孪生',
+  '文物保护',
+  '电商展示',
+  '游戏开发',
+  '透明',
+  '反光',
+  '玻璃',
+  '金属',
+  '分块训练',
+  '冰雕状',
+  '创业',
+  '商单',
+  '定价',
+];
+const DOMAIN_QUERY_RULES = [
+  [/空三|SfM/i, ['空三 SfM 对齐', 'Metashape 空三 导入']],
+  [/无人机|航拍|重叠率/, ['无人机 航拍 重叠率', '空地融合 航拍 地面']],
+  [/全景|Insta360/i, ['全景相机 Insta360 训练', '单镜头 双镜头 全景']],
+  [/转台/, ['转台 拍摄 背景 遮罩']],
+  [/微距|小型物体/, ['微距 小物体 采集']],
+  [/显存|VRAM|点数|高斯点数/i, ['显存 VRAM 高斯点数', '降低分辨率 限制高斯点数']],
+  [/遮罩|Mask/i, ['遮罩 Mask 动态物体', '自动遮罩 手动遮罩']],
+  [/LOD|流式加载/i, ['LOD 流式加载 大场景', '多层次细节 在线浏览']],
+  [/知天下/, ['知天下 上传 格式', '知天下 SuperSplat']],
+  [/Quest|VR|AR/i, ['Quest 3 VR AR 3DGS']],
+  [/透明|反光|玻璃|金属/, ['透明 反光 玻璃 金属 3DGS']],
+  [/4DGS|动态/i, ['4DGS 动态场景', '4D 高斯泼溅']],
+  [/创业|商单|定价/, ['3DGS 创业 商单 定价']],
+];
+const {
+  buildEvidencePack,
+  cleanText,
+  normalizeKnowledgeResults,
+  truncateText,
+} = require('./evidence-pack');
 
 let PDFParse;
 
-function cleanText(value) {
-  return String(value || '')
-    .replace(/<[^>]*>/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function truncateText(value, maxLength) {
-  if (value.length <= maxLength) {
-    return value;
+class IMAOpenAPIQuotaExceededError extends Error {
+  constructor(message = 'IMA OpenAPI 请求超量，请明日再试', options = {}) {
+    super(message);
+    this.name = 'IMAOpenAPIQuotaExceededError';
+    this.code = IMA_OPENAPI_QUOTA_EXCEEDED_CODE;
+    this.imaMessage = message;
+    this.exceededAt = options.exceededAt || new Date().toISOString();
+    this.reason = 'openapi_quota_exceeded';
   }
-  return `${value.slice(0, maxLength - 1)}…`;
 }
 
 function buildQueryCandidates(question) {
   const cleanedQuestion = cleanText(question);
-  const candidates = [cleanedQuestion];
+  const candidates = [];
+  const push = (...values) => {
+    for (const value of values) {
+      const text = cleanText(value);
+      if (text && !candidates.includes(text)) {
+        candidates.push(text);
+      }
+    }
+  };
+
+  push(cleanedQuestion);
 
   const asciiTokens = cleanedQuestion.match(/[A-Za-z0-9][A-Za-z0-9._-]{1,}/g) || [];
-  candidates.push(...asciiTokens);
+  push(...asciiTokens);
+
+  const domainTerms = DOMAIN_QUERY_TERMS.filter((term) =>
+    cleanedQuestion.toLowerCase().includes(term.toLowerCase()),
+  );
+  push(...domainTerms);
+
+  if (domainTerms.length >= 2) {
+    push(domainTerms.slice(0, 4).join(' '));
+  }
 
   const compactChinese = cleanedQuestion
     .replace(/[是什么吗呢啊呀的了和与及以及关于请问一下这个那个主要包含内容怎么如何哪些有什么？?，,。.！!：:；;、\s]/g, '')
     .trim();
   if (compactChinese.length >= 2) {
-    candidates.push(compactChinese.slice(0, 18));
+    push(compactChinese.slice(0, 24));
   }
 
   if (/3d|3D|高斯|泼溅|gaussian|splat/i.test(cleanedQuestion)) {
-    candidates.push('3DGS', '3D高斯泼溅');
+    push('3DGS', '3D高斯泼溅');
   }
 
   if (/知识库|内容|包含|介绍|入门|怎么用|能做什么|擅长/.test(cleanedQuestion)) {
-    candidates.push('知识库', '3DGS');
+    push('知识库', '3DGS');
   }
 
-  return [...new Set(candidates.filter(Boolean))].slice(0, 6);
-}
-
-function normalizeKnowledgeResults(infoList, options = {}) {
-  const maxSources = options.maxSources || 6;
-  const maxSnippetLength = options.maxSnippetLength || 900;
-
-  if (!Array.isArray(infoList)) {
-    return [];
-  }
-
-  const seen = new Set();
-  const sources = [];
-
-  for (const item of infoList) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-
-    const title = cleanText(item.title) || '未命名资料';
-    const snippet = truncateText(cleanText(item.highlight_content), maxSnippetLength);
-    const dedupeKey = cleanText(item.media_id) || title;
-
-    if (!dedupeKey || seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-
-    sources.push({
-      index: sources.length + 1,
-      mediaId: cleanText(item.media_id),
-      title,
-      snippet,
-    });
-
-    if (sources.length >= maxSources) {
-      break;
+  for (const [pattern, expansions] of DOMAIN_QUERY_RULES) {
+    if (pattern.test(cleanedQuestion)) {
+      push(...expansions);
     }
   }
 
-  return sources;
+  return candidates.slice(0, 8);
 }
 
 class IMAClient {
@@ -100,10 +160,50 @@ class IMAClient {
     this.maxSources = config.maxSources || 6;
     this.maxSnippetLength = config.maxSnippetLength || 900;
     this.maxSourceContentLength = config.maxSourceContentLength || 1800;
+    this.requestTimeoutMs = config.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS;
+    this.maxRetries = Number.isInteger(config.maxRetries)
+      ? config.maxRetries
+      : DEFAULT_MAX_RETRIES;
+    this.retryBaseDelayMs = Number.isInteger(config.retryBaseDelayMs)
+      ? config.retryBaseDelayMs
+      : DEFAULT_RETRY_BASE_DELAY_MS;
+    this.maxEnrichedSources = Number.isInteger(config.maxEnrichedSources)
+      ? config.maxEnrichedSources
+      : DEFAULT_MAX_ENRICHED_SOURCES;
+    this.enrichSnippetThreshold = Number.isInteger(config.enrichSnippetThreshold)
+      ? config.enrichSnippetThreshold
+      : DEFAULT_ENRICH_SNIPPET_THRESHOLD;
     this.profileCache = null;
+    this.quotaCircuit = {
+      open: false,
+      openedAt: null,
+      code: null,
+      message: '',
+    };
   }
 
   async _request(path, body) {
+    this._assertQuotaAvailable();
+    let lastError = null;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      try {
+        return await this._requestOnce(path, body);
+      } catch (error) {
+        if (isOpenAPIQuotaExceededError(error)) {
+          this._openQuotaCircuit(error);
+          throw this._quotaCircuitError();
+        }
+        lastError = error;
+        if (attempt >= this.maxRetries || !isRetryableIMAError(error)) {
+          throw error;
+        }
+        await sleep(backoffDelay(this.retryBaseDelayMs, attempt));
+      }
+    }
+    throw lastError;
+  }
+
+  async _requestOnce(path, body) {
     const response = await this.fetchImpl(`${IMA_BASE_URL}${path}`, {
       method: 'POST',
       headers: {
@@ -112,24 +212,67 @@ class IMAClient {
         'ima-openapi-apikey': this.apiKey,
       },
       body: JSON.stringify(body),
-      signal: makeTimeoutSignal(8000),
+      signal: makeTimeoutSignal(this.requestTimeoutMs),
     });
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`IMA API returned HTTP ${response.status}: ${text.slice(0, 200)}`);
+      throw createIMAHTTPError(response.status, text);
     }
 
     const result = await response.json();
     if (result.code !== 0) {
-      throw new Error(result.msg || `IMA API returned code ${result.code}`);
+      throw createIMABusinessError(result);
     }
 
     return result.data || {};
   }
 
+  _assertQuotaAvailable() {
+    if (this.quotaCircuit.open) {
+      throw this._quotaCircuitError();
+    }
+  }
+
+  _openQuotaCircuit(error) {
+    if (this.quotaCircuit.open) {
+      return;
+    }
+    this.quotaCircuit = {
+      open: true,
+      openedAt: new Date().toISOString(),
+      code: IMA_OPENAPI_QUOTA_EXCEEDED_CODE,
+      message: error.imaMessage || error.message || 'IMA OpenAPI 请求超量，请明日再试',
+    };
+  }
+
+  _quotaCircuitError() {
+    return new IMAOpenAPIQuotaExceededError(this.quotaCircuit.message, {
+      exceededAt: this.quotaCircuit.openedAt || new Date().toISOString(),
+    });
+  }
+
+  resetQuotaCircuit() {
+    this.quotaCircuit = {
+      open: false,
+      openedAt: null,
+      code: null,
+      message: '',
+    };
+  }
+
+  getQuotaStatus() {
+    return {
+      open: this.quotaCircuit.open,
+      openedAt: this.quotaCircuit.openedAt,
+      code: this.quotaCircuit.code,
+      message: this.quotaCircuit.open ? 'IMA OpenAPI quota exceeded' : '',
+    };
+  }
+
   async _searchOnce(query, options = {}) {
     const maxPages = options.maxPages || 2;
+    const maxSources = options.maxSources || this.maxSources;
     let cursor = '';
     const infoList = [];
 
@@ -150,68 +293,81 @@ class IMAClient {
     }
 
     return normalizeKnowledgeResults(infoList, {
-      maxSources: this.maxSources,
+      maxSources,
       maxSnippetLength: this.maxSnippetLength,
     });
   }
 
-  async searchKnowledge(question) {
+  async retrieveEvidencePack(question) {
     const candidates = buildQueryCandidates(question);
     const merged = [];
-    const seen = new Set();
+    const maxCandidatesBeforeEnrichment = this.maxSources * 3;
+    let lastSearchError = null;
 
     for (const candidate of candidates) {
-      const results = await this._searchOnce(candidate);
-      for (const source of results) {
-        const key = source.mediaId || source.title;
-        if (!key || seen.has(key)) {
-          continue;
+      let results = [];
+      try {
+        results = await this._searchOnce(candidate, {
+          maxSources: this.maxSources * 2,
+        });
+      } catch (error) {
+        if (isOpenAPIQuotaExceededError(error)) {
+          throw error;
         }
-        seen.add(key);
-        merged.push({ ...source, matchedQuery: candidate });
-        if (merged.length >= this.maxSources) {
-          break;
-        }
+        lastSearchError = error;
+        continue;
       }
-      if (merged.length >= this.maxSources) {
+      for (const source of results) {
+        merged.push({ ...source, matchedQuery: candidate, evidenceType: 'search' });
+      }
+      if (merged.length >= maxCandidatesBeforeEnrichment) {
         break;
       }
     }
 
+    if (merged.length === 0 && lastSearchError) {
+      throw lastSearchError;
+    }
+
     const enriched = [];
-    for (const source of merged) {
-      enriched.push(await this._enrichSource(source));
+    const candidatesToEnrich = merged.slice(0, maxCandidatesBeforeEnrichment);
+    for (let index = 0; index < candidatesToEnrich.length; index += 1) {
+      const source = candidatesToEnrich[index];
+      if (index < this.maxEnrichedSources) {
+        enriched.push(await this._enrichSource(source));
+      } else {
+        enriched.push(source);
+      }
     }
 
-    const groundedSources = enriched
-      .filter((source) => source.snippet)
-      .map((source, index) => sanitizePublicSource({ ...source, index: index + 1 }));
+    const directPack = buildEvidencePack(enriched, {
+      maxSources: this.maxSources,
+      maxSnippetLength: this.maxSnippetLength,
+      maxSourceContentLength: this.maxSourceContentLength,
+    });
 
-    if (groundedSources.length > 0) {
-      return this._appendProfileSource(groundedSources);
-    }
-
-    const profileSource = await this._getKnowledgeBaseProfileSource();
-    return profileSource ? [{ ...profileSource, index: 1 }] : [];
-  }
-
-  async _appendProfileSource(sources) {
-    if (sources.length >= this.maxSources) {
-      return sources;
+    if (directPack.sources.length >= this.maxSources) {
+      return directPack;
     }
 
     const profileSource = await this._getKnowledgeBaseProfileSource();
     if (!profileSource) {
-      return sources;
+      return directPack;
     }
 
-    const profileKey = profileSource.title;
-    const alreadyIncluded = sources.some((source) => source.title === profileKey);
-    if (alreadyIncluded) {
-      return sources;
-    }
+    return buildEvidencePack(
+      [...directPack.evidence, { ...profileSource, evidenceType: 'profile' }],
+      {
+        maxSources: this.maxSources,
+        maxSnippetLength: this.maxSnippetLength,
+        maxSourceContentLength: this.maxSourceContentLength,
+      },
+    );
+  }
 
-    return [...sources, { ...profileSource, index: sources.length + 1 }];
+  async searchKnowledge(question) {
+    const evidencePack = await this.retrieveEvidencePack(question);
+    return evidencePack.sources;
   }
 
   async _getKnowledgeBaseProfileSource() {
@@ -220,12 +376,15 @@ class IMAClient {
     }
 
     try {
-      const [baseData, rootItems] = await Promise.all([
-        this._request(GET_KNOWLEDGE_BASE_PATH, { ids: [this.sharedKnowledgeBaseId] }),
-        this._listKnowledge({ limit: 50, maxPages: 2 }),
-      ]);
+      const baseData = await this._request(GET_KNOWLEDGE_BASE_PATH, {
+        ids: [this.sharedKnowledgeBaseId],
+      });
+      const rootItems = await this._listKnowledge({ limit: 50, maxPages: 2 });
 
       const info = baseData.infos?.[this.sharedKnowledgeBaseId] || {};
+      const knowledgeBaseName = cleanText(
+        info.name || info.kb_name || info.knowledge_base_name || info.knowledgeBaseName,
+      );
       const rootTitles = rootItems
         .map((item) => cleanText(item.title))
         .filter((title) => title && !looksLikeBinarySource(title, ''));
@@ -235,7 +394,7 @@ class IMAClient {
       const corpusOverview = await this._buildCorpusOverview(rootItems);
 
       const snippet = [
-        info.name ? `知识库名称：${cleanText(info.name)}` : '',
+        knowledgeBaseName ? `知识库名称：${knowledgeBaseName}` : '',
         info.description ? `描述：${cleanText(info.description)}` : '',
         recommendedQuestions.length
           ? `推荐问题：${recommendedQuestions.join('；')}`
@@ -248,12 +407,15 @@ class IMAClient {
 
       this.profileCache = snippet
         ? {
-            title: cleanText(info.name) || '共享知识库概览',
+            title: knowledgeBaseName || '共享知识库概览',
             snippet: truncateText(snippet, this.maxSourceContentLength),
           }
         : null;
       return this.profileCache;
-    } catch {
+    } catch (error) {
+      if (isOpenAPIQuotaExceededError(error)) {
+        throw error;
+      }
       return null;
     }
   }
@@ -286,36 +448,38 @@ class IMAClient {
 
   async _buildCorpusOverview(rootItems) {
     const rawFolders = rootItems.filter(
-      (item) => item?.media_type === 99 && RAW_FOLDER_TITLE_PATTERN.test(cleanText(item.title)),
+      (item) => item?.media_type === 99 && RAW_FOLDER_TITLE_PATTERN.test(getKnowledgeItemTitle(item)),
     );
 
     if (rawFolders.length === 0) {
       return '';
     }
 
-    const folderSummaries = await Promise.all(
-      rawFolders.slice(0, 6).map(async (folder) => {
-        try {
-          const items = await this._listKnowledge({
-            folderId: folder.media_id,
-            limit: 50,
-            maxPages: 3,
-          });
-          const titles = items.map((item) => cleanText(item.title)).filter(Boolean);
-          return {
-            title: cleanText(folder.title),
-            count: items.length,
-            titles: titles.slice(0, 12),
-          };
-        } catch {
-          return {
-            title: cleanText(folder.title),
-            count: 0,
-            titles: [],
-          };
+    const folderSummaries = [];
+    for (const folder of rawFolders.slice(0, 6)) {
+      try {
+        const items = await this._listKnowledge({
+          folderId: folder.media_id,
+          limit: 50,
+          maxPages: 3,
+        });
+        const titles = items.map(getKnowledgeItemTitle).filter(Boolean);
+        folderSummaries.push({
+          title: getKnowledgeItemTitle(folder),
+          count: items.length,
+          titles: titles.slice(0, 12),
+        });
+      } catch (error) {
+        if (isOpenAPIQuotaExceededError(error)) {
+          throw error;
         }
-      }),
-    );
+        folderSummaries.push({
+          title: getKnowledgeItemTitle(folder),
+          count: 0,
+          titles: [],
+        });
+      }
+    }
 
     const total = folderSummaries.reduce((sum, folder) => sum + folder.count, 0);
     const folderLines = folderSummaries.map((folder) => {
@@ -333,7 +497,7 @@ class IMAClient {
   }
 
   async _enrichSource(source) {
-    if (source.snippet || !source.mediaId) {
+    if (!source.mediaId || shouldSkipSourceEnrichment(source, this.enrichSnippetThreshold)) {
       return source;
     }
 
@@ -345,14 +509,14 @@ class IMAClient {
           target_content_format: 0,
         });
         const content = truncateText(cleanText(note.content), this.maxSourceContentLength);
-        return { ...source, snippet: content };
+        return mergeEnrichedSource(source, content, this.maxSourceContentLength);
       }
 
       if (mediaInfo.url_info?.url && /^https?:\/\//i.test(mediaInfo.url_info.url)) {
         if (looksLikePdfSource(source.title, mediaInfo.url_info.url)) {
           const content = await this._fetchReadablePdf(mediaInfo.url_info);
           if (content) {
-            return { ...source, snippet: content };
+            return mergeEnrichedSource(source, content, this.maxSourceContentLength);
           }
           return source;
         }
@@ -360,11 +524,14 @@ class IMAClient {
         if (!looksLikeBinarySource(source.title, mediaInfo.url_info.url)) {
           const content = await this._fetchReadableUrl(mediaInfo.url_info);
           if (content) {
-            return { ...source, snippet: content };
+            return mergeEnrichedSource(source, content, this.maxSourceContentLength);
           }
         }
       }
-    } catch {
+    } catch (error) {
+      if (isOpenAPIQuotaExceededError(error)) {
+        throw error;
+      }
       return source;
     }
 
@@ -430,6 +597,96 @@ function makeTimeoutSignal(ms) {
     : undefined;
 }
 
+function createIMAHTTPError(status, text) {
+  const error = new Error(`IMA API returned HTTP ${status}: ${String(text || '').slice(0, 200)}`);
+  error.status = status;
+  try {
+    const parsed = JSON.parse(text);
+    error.code = parsed.code;
+    error.imaMessage = parsed.msg;
+  } catch {
+    error.imaMessage = text;
+  }
+  return error;
+}
+
+function createIMABusinessError(result) {
+  if (Number(result.code) === IMA_OPENAPI_QUOTA_EXCEEDED_CODE || /请求超量|明日再试/.test(String(result.msg || ''))) {
+    return new IMAOpenAPIQuotaExceededError(result.msg || 'IMA OpenAPI 请求超量，请明日再试');
+  }
+  const error = new Error(result.msg || `IMA API returned code ${result.code}`);
+  error.code = result.code;
+  error.imaMessage = result.msg;
+  return error;
+}
+
+function isOpenAPIQuotaExceededError(error) {
+  if (!error) {
+    return false;
+  }
+  return (
+    error instanceof IMAOpenAPIQuotaExceededError ||
+    Number(error.code) === IMA_OPENAPI_QUOTA_EXCEEDED_CODE ||
+    /请求超量|明日再试/.test(`${error.message || ''} ${error.imaMessage || ''}`)
+  );
+}
+
+function isRetryableIMAError(error) {
+  if (!error) {
+    return false;
+  }
+  if (isOpenAPIQuotaExceededError(error)) {
+    return false;
+  }
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+    return true;
+  }
+  if (error.status === 429 || error.status === 408 || error.status >= 500) {
+    return true;
+  }
+  const message = `${error.message || ''} ${error.imaMessage || ''}`;
+  return error.code === 200001 || /频率|超限|稍后重试|timeout|timed out/i.test(message);
+}
+
+function backoffDelay(baseDelayMs, attempt) {
+  if (!baseDelayMs) {
+    return 0;
+  }
+  return Math.min(baseDelayMs * 2 ** attempt, baseDelayMs * 8);
+}
+
+function sleep(ms) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function shouldSkipSourceEnrichment(source, threshold) {
+  const snippetLength = cleanText(source.snippet).length;
+  return snippetLength > 0 && snippetLength >= threshold;
+}
+
+function mergeEnrichedSource(source, content, maxLength) {
+  const snippet = cleanText(source.snippet);
+  const enriched = cleanText(content);
+  if (!enriched) {
+    return source;
+  }
+  if (!snippet || enriched.includes(snippet)) {
+    return { ...source, snippet: truncateText(enriched, maxLength), evidenceType: 'enriched' };
+  }
+  if (snippet.includes(enriched)) {
+    return { ...source, snippet: truncateText(snippet, maxLength), evidenceType: 'enriched' };
+  }
+  return {
+    ...source,
+    snippet: truncateText(`${snippet}\n${enriched}`, maxLength),
+    evidenceType: 'enriched',
+  };
+}
+
+function getKnowledgeItemTitle(item) {
+  return cleanText(item?.title || item?.name || item?.media_title || item?.file_name || item?.kb_name);
+}
+
 function looksLikeBinarySource(title, url) {
   return /\.(pdf|docx?|pptx?|xlsx?|zip|png|jpe?g|webp|gif|mp3|m4a|wav|aac)(\s|\?|#|$)/i.test(
     `${title || ''} ${url || ''}`,
@@ -440,17 +697,13 @@ function looksLikePdfSource(title, url) {
   return /\.pdf(\s|\?|#|$)/i.test(`${title || ''} ${url || ''}`);
 }
 
-function sanitizePublicSource(source) {
-  return {
-    index: source.index,
-    title: source.title,
-    snippet: source.snippet,
-  };
-}
-
 module.exports = {
   buildQueryCandidates,
+  buildEvidencePack,
+  IMAOpenAPIQuotaExceededError,
+  IMA_OPENAPI_QUOTA_EXCEEDED_CODE,
   IMAClient,
+  isOpenAPIQuotaExceededError,
   looksLikePdfSource,
   looksLikeBinarySource,
   normalizeKnowledgeResults,

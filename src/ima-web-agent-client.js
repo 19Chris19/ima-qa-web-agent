@@ -21,6 +21,8 @@ class IMAWebAgentClient {
     }
 
     this.knowledgeBaseId = config.knowledgeBaseId;
+    this.accountId = config.id || config.accountId || '';
+    this.accountName = config.name || config.accountName || '';
     this.headers = normalizeAuthHeaders(config.headers);
     this.modelId = config.modelId;
     this.modelType = config.modelType;
@@ -34,6 +36,61 @@ class IMAWebAgentClient {
     this.lastRefreshError = '';
     this.refreshTimer = null;
     this.refreshPromise = null;
+  }
+
+  applyConfig(config = {}) {
+    if (config.knowledgeBaseId) {
+      this.knowledgeBaseId = config.knowledgeBaseId;
+    }
+    if (config.id || config.accountId) {
+      this.accountId = config.id || config.accountId;
+    }
+    if (config.name || config.accountName) {
+      this.accountName = config.name || config.accountName;
+    }
+    if (config.headers && typeof config.headers === 'object') {
+      this.headers = normalizeAuthHeaders(config.headers);
+    }
+    if (config.modelId) {
+      this.modelId = config.modelId;
+    }
+    if (Number.isFinite(Number(config.modelType))) {
+      this.modelType = Number(config.modelType);
+    }
+    if (config.runtimeEnvPath !== undefined) {
+      this.runtimeEnvPath = String(config.runtimeEnvPath || '');
+    }
+    if (Number.isFinite(Number(config.tokenExpiresAt))) {
+      this.tokenExpiresAt = Number(config.tokenExpiresAt);
+    }
+    if (Number.isFinite(Number(config.refreshTokenExpiresAt))) {
+      this.refreshTokenExpiresAt = Number(config.refreshTokenExpiresAt);
+    }
+    if (Number.isFinite(Number(config.refreshSkewMs))) {
+      this.refreshSkewMs = Number(config.refreshSkewMs);
+    }
+    if (Number.isFinite(Number(config.refreshIntervalMs))) {
+      this.refreshIntervalMs = Number(config.refreshIntervalMs);
+    }
+  }
+
+  getConfigSnapshot() {
+    return {
+      id: this.accountId,
+      name: this.accountName,
+      knowledgeBaseId: this.knowledgeBaseId,
+      headers: {
+        'x-ima-cookie': this.headers['x-ima-cookie'] || this.headers.cookie || '',
+        'x-ima-bkn': this.headers['x-ima-bkn'] || '',
+      },
+      modelId: this.modelId,
+      modelType: this.modelType,
+      runtimeEnvPath: this.runtimeEnvPath,
+      tokenExpiresAt: this.tokenExpiresAt,
+      refreshTokenExpiresAt: this.refreshTokenExpiresAt,
+      refreshSkewMs: this.refreshSkewMs,
+      refreshIntervalMs: this.refreshIntervalMs,
+    };
   }
 
   async initSession(options = {}) {
@@ -163,9 +220,24 @@ class IMAWebAgentClient {
     this.persistRuntimeEnv();
   }
 
-  async *streamAsk({ question, signal } = {}) {
+  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession } = {}) {
     await this.ensureFreshAuth({ signal });
-    const sessionId = await this.initSession({ signal });
+    let activeSessionId = requestedSessionId || await this.initSession({ signal });
+    onSession?.(activeSessionId);
+
+    try {
+      yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId });
+    } catch (error) {
+      if (!requestedSessionId || !isSessionExpiredError(error) || signal?.aborted) {
+        throw error;
+      }
+      activeSessionId = await this.initSession({ signal });
+      onSession?.(activeSessionId);
+      yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId });
+    }
+  }
+
+  async *_streamAskOnce({ question, signal, sessionId }) {
     const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${QA_PATH}`, {
       method: 'POST',
       headers: this._headers(),
@@ -266,6 +338,8 @@ class IMAWebAgentClient {
     }
 
     const envText = buildRuntimeEnvText({
+      accountId: this.accountId || '',
+      accountName: this.accountName || '',
       port: process.env.PORT || '',
       knowledgeBaseId: this.knowledgeBaseId,
       headers: {
@@ -335,6 +409,12 @@ function shouldRefreshAuth(payload) {
   return code === 41 || /登录失败|登录过期|token|鉴权|未登录/i.test(message);
 }
 
+function isSessionExpiredError(error) {
+  return /session.?id|会话|上下文|登录过期|未登录|鉴权|401|403/i.test(
+    String(error?.message || error || ''),
+  );
+}
+
 function getBkn(token) {
   let hash = 5381;
   for (let index = 0; index < token.length; index += 1) {
@@ -378,6 +458,12 @@ function shellQuote(value) {
 
 function buildRuntimeEnvText(options) {
   const lines = [];
+  if (options.accountId) {
+    lines.push(`IMA_WEB_AGENT_ACCOUNT_ID=${shellQuote(options.accountId)}`);
+  }
+  if (options.accountName) {
+    lines.push(`IMA_WEB_AGENT_ACCOUNT_NAME=${shellQuote(options.accountName)}`);
+  }
   if (options.port) {
     lines.push(`PORT=${shellQuote(options.port)}`);
   }
@@ -543,5 +629,6 @@ module.exports = {
   parseIMAWebAgentEvent,
   parseIMAWebAgentStream,
   shouldRefreshAuth,
+  isSessionExpiredError,
   stringifyCookie,
 };

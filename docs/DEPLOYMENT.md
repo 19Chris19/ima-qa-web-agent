@@ -1,204 +1,159 @@
-# Deployment Guide
+# Provider A 部署与维护
 
-这份文档给接手项目的人看：先说明要准备哪些凭证，再说明如何部署、如何给别的网站调用、哪里容易踩坑。
-
-## 先理解知识库
-
-IMA 里可能有很多知识库，但这个服务永远只读一个固定知识库。原因很简单：
-
-- 安全：前端不能传一个新的知识库 ID 来偷查别的库。
-- 稳定：所有回答都来自同一套资料，方便排查和对齐体验。
-- 维护：换库时只改服务端环境变量，不改接入网站。
-
-所以接手人只要记住：知识库 ID 是服务端配置，不是 API 请求参数。
-
-## 两个知识库 ID
-
-这个项目里有两个名字很像、但不能混用的 ID：
-
-| 变量 | 对应模式 | 来源 | 常见错误 |
-| --- | --- | --- | --- |
-| `IMA_WEB_KNOWLEDGE_BASE_ID` | `ima-web-agent` | IMA 网页 URL 或网页请求参数 | 拿 OpenAPI 的共享库 ID 来填，导致 Web Agent 找不到正确库 |
-| `IMA_SHARED_KNOWLEDGE_BASE_ID` | `openapi-mimo` | IMA OpenAPI / agent-interface 侧的共享知识库 ID | 拿网页数字 ID 来填，导致 OpenAPI `search_knowledge` 搜不到 |
-
-如果你不确定哪个 ID 对，应先在 IMA 网页里进入目标共享知识库，确认网页版问答能通过 `@共享知识库` 命中资料；再在 OpenAPI 侧确认 `search_knowledge` 使用的是对应共享库 ID。
-
-## 部署路径选择
+## 运行模型
 
 ```mermaid
-flowchart TD
-  Start["准备部署"] --> Q{"更看重什么？"}
-  Q -->|官方 API / 普通服务器稳定运行| OpenAPI["openapi-mimo"]
-  Q -->|尽量复刻 IMA 网页版问答质量| WebAgent["ima-web-agent"]
-  OpenAPI --> NeedA["需要 IMA OpenAPI 凭证"]
-  OpenAPI --> NeedB["需要 MIMO API Key"]
-  WebAgent --> NeedC["需要 IMA Web 登录态"]
-  WebAgent --> NeedD["需要定期维护 refresh token"]
+flowchart LR
+  User[网站用户] --> QA[IMA QA Web]
+  QA --> Pool[账号池]
+  Pool --> IMA[IMA Web 共享知识库问答]
+  Maintainer[维护机扫码] --> Enroll[接入脚本]
+  Enroll --> Store[加密账号库]
+  Store --> Pool
 ```
 
-推荐给外部用户或开源用户的默认路径是 `openapi-mimo`。它是常规服务器凭证模式。
+服务运行时不控制浏览器。浏览器只在逐账号接入时短暂打开，用来完成 IMA 官方登录；成功后脚本提取必要登录态、验证共享库访问、关闭浏览器，并删除临时浏览器 profile。运行期使用加密账号库和 refresh token 维持登录态。
 
-如果你们内部能维护 IMA 登录态，并且最在意“像 IMA 网页版一样回答”，再用 `ima-web-agent`。
+## 发布内容与排除内容
 
-## 凭证详解
+可以发布到 GitHub：源码、`package-lock.json`、Dockerfile、compose、`.env.example`、文档、测试和脚本。
 
-### `IMA_QA_PROVIDER`
+严禁发布：`.env`、`runtime/`、`node_modules/`、浏览器 profile、账号库 key、cookie、refresh token、真实共享库内容、真实会话历史和运行日志。
 
-选择问答后端。
+Provider A 发布不需要：
 
-| 值 | 含义 |
-| --- | --- |
-| `ima-web-agent` | 使用 IMA 网页的知识库 Agent 私有接口 |
-| `openapi-mimo` | 使用 IMA OpenAPI 搜索，再用小米 MIMO 生成答案 |
+- `IMA_OPENAPI_CLIENTID`、`IMA_OPENAPI_APIKEY`、`IMA_SHARED_KNOWLEDGE_BASE_ID`
+- `MIMO_API_KEY`、`MIMO_MODEL`
+- PDF、原始群聊资料或本地 RAG 索引
 
-### IMA Web Agent 凭证
+`npm start` 和 Docker 镜像均固定为 Provider A 入口；配置成其他 Provider 会在启动时明确失败，而不是悄悄切换到另一条问答链路。
 
-这些变量只给 `ima-web-agent` 模式用。
+## 初始化
 
-| 变量 | 怎么理解 | 从哪里来 | 是否秘密 |
-| --- | --- | --- | --- |
-| `IMA_WEB_KNOWLEDGE_BASE_ID` | IMA 网页 URL 或内部请求里的数字知识库 ID | 已登录 IMA 网页，进入目标共享知识库后查看页面/请求参数 | 不算密钥，但不建议公开业务真实值 |
-| `IMA_WEB_AGENT_HEADERS_JSON` | 服务端访问 IMA 网页私有接口所需登录态 | 从已登录 IMA Web 会话提取 | 是 |
-| `IMA_WEB_AGENT_MODEL_ID` | IMA Web Agent 使用的模型 ID | 当前默认 `official_3` | 否 |
-| `IMA_WEB_AGENT_MODEL_TYPE` | IMA Web Agent 模型类型 | 当前默认 `3` | 否 |
-| `IMA_WEB_AGENT_TOKEN_EXPIRES_AT` | 短 token 到期时间 | 从 IMA Web 登录态信息提取 | 不单独算密钥，但和登录态一起保存 |
-| `IMA_WEB_AGENT_REFRESH_TOKEN_EXPIRES_AT` | refresh token 到期时间 | 从 IMA Web 登录态信息提取 | 不单独算密钥，但和登录态一起保存 |
-| `IMA_WEB_AGENT_RUNTIME_ENV_PATH` | 刷新后回写 env 的路径 | 自己指定，推荐 `/app/runtime/ima-web-agent.env` | 否 |
-
-人话版：`IMA_WEB_AGENT_HEADERS_JSON` 就像“这个服务登录 IMA 的通行证”。它不是给浏览器看的，也不是给客户看的，只能放在服务器 `.env` 或 `runtime/` 文件里。
-
-短 token 一般约 2 小时有效，服务会提前刷新。refresh token 一般约 30 天有效，到期后必须重新登录 IMA Web，再生成一份新的 runtime env。
-
-交付时建议这样分工：
-
-- 业务方提供能访问目标共享知识库的 IMA 账号。
-- 维护者用这个账号登录 IMA Web，并生成 `runtime/ima-web-agent.env`。
-- 服务器只保存 runtime env，不把 cookie 或 token 发给前端。
-- 接手人通过 `/healthz` 看剩余有效期，不通过日志看 token 原文。
-
-### IMA OpenAPI 凭证
-
-这些变量只给 `openapi-mimo` 模式用。
-
-| 变量 | 怎么理解 | 从哪里来 | 是否秘密 |
-| --- | --- | --- | --- |
-| `IMA_OPENAPI_CLIENTID` | IMA OpenAPI 应用 ID | IMA OpenAPI/agent-interface 后台 | 否，但也不要随便外泄 |
-| `IMA_OPENAPI_APIKEY` | IMA OpenAPI 应用密钥 | IMA OpenAPI/agent-interface 后台 | 是 |
-| `IMA_SHARED_KNOWLEDGE_BASE_ID` | OpenAPI 要搜索的共享知识库 ID | IMA OpenAPI 返回或后台配置 | 不算密钥，但不建议公开业务真实值 |
-
-人话版：这组凭证让服务端可以“合法调用 IMA 开放接口搜索固定知识库”。它不依赖浏览器登录态，更适合别人自己部署。
-
-交付时建议让对方自己在 IMA OpenAPI 后台创建应用，然后把 `CLIENTID`、`APIKEY` 和目标共享知识库 ID 填进服务器 `.env`。不要共用你的个人 OpenAPI Key。
-
-### 小米 MIMO 凭证
-
-这些变量只给 `openapi-mimo` 模式用。
-
-| 变量 | 怎么理解 | 默认值/来源 | 是否秘密 |
-| --- | --- | --- | --- |
-| `MIMO_BASE_URL` | OpenAI-compatible API 地址 | `https://token-plan-cn.xiaomimimo.com/v1` | 否 |
-| `MIMO_API_KEY` | 调用 MIMO 的密钥 | 小米 MIMO 平台 | 是 |
-| `MIMO_MODEL` | 使用哪个模型回答 | `mimo-v2.5` | 否 |
-
-人话版：IMA OpenAPI 负责“找资料”，MIMO 负责“根据资料组织答案”。当前 Web Agent 模式不需要 MIMO。
-
-交付时建议让对方自己创建 MIMO Key。这样账单、限额、风控都归对方账号管理。
-
-### 生产安全配置
-
-| 变量 | 用途 | 什么时候配 |
-| --- | --- | --- |
-| `ALLOWED_ORIGINS` | 限制哪些网页域名可以从浏览器跨域调用 API | 服务暴露到公网时建议配 |
-| `IMA_QA_API_TOKEN` | 要求调用 `/api/ask` 时带 `Authorization: Bearer ...` | 做服务器到服务器调用时建议配 |
-| `TRUST_PROXY` | 信任 Nginx/CDN 传来的 `X-Forwarded-For` | 服务在反向代理后面时建议配 |
-| `IMA_QA_HEALTH_DETAILS` | 控制 `/healthz` 是否展示 auth 细节 | 公网用 `basic`，维护环境可用 `auth` |
-
-不要把 `IMA_QA_API_TOKEN` 写进公开网页前端。浏览器端代码人人能看见，写进去等于公开。
-
-### 并发、队列、限流
-
-这些变量控制多人同时访问时的服务行为：
-
-| 变量 | 默认值 | 作用 |
-| --- | --- | --- |
-| `IMA_QA_MAX_CONCURRENT_ASK` | `1` | 同一 Node 实例最多同时跑多少个上游问答；Web Agent 单登录态建议串行，OpenAPI/MIMO 可压测后调高 |
-| `IMA_QA_QUEUE_LIMIT` | `30` | 并发满后最多排队多少个请求 |
-| `IMA_QA_REQUEST_TIMEOUT_MS` | `180000` | 单个请求从进入服务开始的总超时时间，包含排队时间 |
-| `IMA_QA_RATE_LIMIT_WINDOW_MS` | `60000` | IP 限流窗口长度 |
-| `IMA_QA_RATE_LIMIT_MAX` | `20` | 每个 IP 在窗口内最多请求次数 |
-
-队列满或限流时，JSON 调用返回 429；SSE 调用返回 `event:error` 后结束连接。
-
-初期建议保持默认值。真实烟测里 IMA Web Agent 对同一登录态的并发非常敏感，2 个并发也出现过“提问太快啦”的上游限流提示；如果使用 `openapi-mimo`，可以再单独压测后提高并发。超过 50 并发时，不要只调大数字，要先压测 IMA 上游限制、服务器连接数、Nginx SSE 配置和账号登录态稳定性。
-
-## Docker Deploy
+### Docker 部署
 
 ```bash
-cd apps/ima-qa-web
-cp .env.example .env
-```
-
-编辑 `.env` 后启动：
-
-```bash
+git clone <你的 GitHub 仓库地址>
+cd <仓库根目录>/apps/ima-qa-web
+npm ci
+npm run setup:provider-a
 docker compose up -d --build
 docker compose logs -f ima-qa-web
-curl http://127.0.0.1:3117/healthz
 ```
 
-如果使用 `openapi-mimo`，`.env` 至少要有：
+`setup:provider-a` 会将以下内容写入权限为 `600` 的 `.env`：
 
-```env
-IMA_QA_PROVIDER=openapi-mimo
-IMA_OPENAPI_CLIENTID=...
-IMA_OPENAPI_APIKEY=...
-IMA_SHARED_KNOWLEDGE_BASE_ID=...
-MIMO_API_KEY=...
-MIMO_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-MIMO_MODEL=mimo-v2.5
-PORT=3000
-HOST_PORT=3117
-```
+| 配置 | 用途 | 获取方式 |
+| --- | --- | --- |
+| `IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID` | 全部账号共同访问的 IMA Web 共享库 | IMA 网页 URL 中的 `knowledgeBaseId` 数字值 |
+| `IMA_QA_ADMIN_TOKEN` | 保护账号接入、刷新、停用和删除 | 初始化向导自动生成 |
+| `ALLOWED_ORIGINS` | 可嵌入 iframe 或跨域调用 API 的业务网页域名 | 可选；为空时只允许同源网页，多个精确 `https://` origin 用逗号分隔 |
+| `PORT` / `HOST_PORT` | 容器内端口和宿主机端口 | 默认 3000 / 3117 |
+| `HOST_BIND` | 宿主机监听地址 | 默认 `127.0.0.1`，由 Nginx 对外提供 HTTPS |
 
-如果使用 `ima-web-agent`，`.env` 至少要有：
+共享库 ID 不等于 OpenAPI ID。所有接入账号都会由服务端强制校验为同一个 `IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID`；不匹配时返回 409，不能写入账号池。
 
-```env
-IMA_QA_PROVIDER=ima-web-agent
-IMA_WEB_KNOWLEDGE_BASE_ID=...
-IMA_WEB_AGENT_HEADERS_JSON={"x-ima-cookie":"...","x-ima-bkn":"..."}
-IMA_WEB_AGENT_MODEL_ID=official_3
-IMA_WEB_AGENT_MODEL_TYPE=3
-IMA_WEB_AGENT_RUNTIME_ENV_PATH=/app/runtime/ima-web-agent.env
-IMA_QA_MAX_CONCURRENT_ASK=1
-IMA_QA_QUEUE_LIMIT=30
-IMA_QA_REQUEST_TIMEOUT_MS=180000
-IMA_QA_RATE_LIMIT_WINDOW_MS=60000
-IMA_QA_RATE_LIMIT_MAX=20
-PORT=3000
-HOST_PORT=3117
-```
-
-端口说明：
-
-| 变量 | 含义 |
-| --- | --- |
-| `PORT` | 容器内 Express 监听端口，默认 `3000` |
-| `HOST_PORT` | 宿主机暴露端口，默认 `3117` |
-
-## Plain Node Deploy
+### 直接用 Node 运行
 
 ```bash
-cd apps/ima-qa-web
-npm ci --omit=dev
-cp .env.example .env
+npm ci
+npm run setup:provider-a
 npm start
 ```
 
-生产环境建议交给 systemd、PM2、Docker 或云平台的服务管理器。macOS LaunchAgent 只适合本地开发机，不适合 Linux 服务器。
+生产环境仍建议 Docker、systemd 或 PM2 托管进程，避免终端关闭导致服务停止。
 
-## Nginx Reverse Proxy
+## 逐账号接入
 
-本项目用 SSE 流式输出，Nginx 要关 buffering：
+本机或有桌面环境的维护机：
+
+```bash
+npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
+```
+
+参数说明：
+
+| 参数 | 含义 |
+| --- | --- |
+| `--name` | 账号在本服务里的名称，建议 `account-a`、`account-b` |
+| `--server-url` | 运行中的 Provider A 服务地址；指定后凭证只落入服务端账号库 |
+| `--kb` | 共享库 Web 数字 ID；项目 `.env` 已配置时可以省略 |
+| `--reset-profile` | 登录窗口意外关闭后，删除该账号残留的临时浏览器 profile 再重登 |
+| `--keep-profile` | 调试用。默认成功后会删除临时 profile，不建议生产启用 |
+| `--replace` | 明确允许同名账号重新绑定登录态；默认拒绝重复名称，防止误覆盖 |
+| `--runtime-env` | 仅兼容旧的本地单账号 env 导出；默认不生成，远程接入不可用 |
+
+接入顺序：
+
+1. 给账号命名并运行命令。脚本先验证管理员 token、同一共享库和账号名称。
+2. 在弹出的独立浏览器窗口里完成 IMA 登录或扫码。
+3. 确认账号已经加入目标共享知识库。
+4. 脚本捕获登录态后调用 `init_session` 验证权限。
+5. 验证成功：凭证加密写入服务端，浏览器自动关闭；验证失败：不写入账号池。
+
+账号间不共享浏览器 cookie。每次接入都是独立 profile，服务运行又不依赖 profile，因此退出维护机浏览器不会使已接入账号立刻失效。
+
+### 远程服务器 + 本机扫码
+
+服务器没有 GUI 时，先在服务器启动服务，再在维护机建立 SSH 隧道：
+
+```bash
+ssh -N -L 3117:127.0.0.1:3117 deploy@your-server
+```
+
+然后在维护机项目副本中运行：
+
+```bash
+IMA_QA_ADMIN_TOKEN='服务器 .env 中的管理员 token' \
+npm run admin:enroll -- \
+  --name account-a \
+  --kb '共享库 Web 数字 ID' \
+  --server-url http://127.0.0.1:3117
+```
+
+这个方式不把管理 API 直接暴露给公网。维护机只需 Node、项目副本和一个可打开的 Chrome、Chromium 或 Ego Lite。
+
+## 账号状态、刷新与失效
+
+管理页：`/admin.html`。输入 `IMA_QA_ADMIN_TOKEN` 后可检查、刷新、启用、停用和删除账号；token 只存在浏览器会话内，不会写入本地存储。
+
+自动行为：
+
+- 每个账号的 refresh lock 独立，多个问答不会同时刷新同一账号。
+- 服务按分钟检查认证，在 access token 接近过期前十分钟 refresh。
+- 刷新后的凭证会原子回写加密账号库；写入中断不会留下半截文件。默认不生成明文账号 env 文件；`--runtime-env` 只用于旧兼容场景，不能替代账号库。
+- IMA 限流、连续错误或“提问太快啦”会让该账号进入冷却，其他账号继续服务。
+- 登录失效会让该账号不可调度，不会把已有会话偷偷迁移到别的账号，避免上下文错接。
+
+上游 token 具体有效期由 IMA 控制。需要维护时看管理页 token 到期、最近错误和账号状态；refresh 失败或共享库成员资格变化时，重新接入单个账号即可。
+
+### 旧版明文导出迁移
+
+当前发布版将加密账号库作为唯一真源。若旧版本曾在 `runtime/web-agent-accounts/` 写过逐账号 cookie env，先预览再显式执行迁移：
+
+```bash
+npm run admin:seal-runtime
+npm run admin:seal-runtime -- --apply
+```
+
+工具只删除账号库受管的逐账号导出，并保留加密凭证；完成后重启 Provider A。它不会自动删除 `runtime/ima-web-agent.env` 或浏览器 profile，因为旧部署可能仍从这些位置启动，需在确认新的 `.env` 已完整配置后由维护者自行清理。
+
+## 会话与并发
+
+每位客户拥有独立 `conversationId`。一个会话会固定到一个 IMA 账号和 IMA session；追问沿用该 session。不同客户和会话不会共享历史、来源或上游 session。
+
+稳定默认值是：一个账号同一时刻一条 active ask。`IMA_QA_ACCOUNT_POOL_CAPACITY_MODE=auto` 会让全局容量跟随已启用账号数：接入、停用或删除账号后立刻重算，无需编辑 `.env` 或重启。多个 session 可以落到同一账号但要排队。同账号提高并发必须经过独立压力实验。
+
+若因容量规划需要固定上限，显式配置：
+
+```env
+IMA_QA_ACCOUNT_POOL_CAPACITY_MODE=fixed
+IMA_QA_MAX_CONCURRENT_ASK=5
+```
+
+## Nginx
+
+SSE 必须关闭 buffering：
 
 ```nginx
 location / {
@@ -213,81 +168,25 @@ location / {
 }
 ```
 
-## How Other Sites Call It
+反向代理或 CDN 后面必须设置 `TRUST_PROXY=true`。Docker 默认把服务绑定在 `127.0.0.1`，避免 3117 端口裸露公网；Nginx 负责 HTTPS、域名和公网入口。`/embed.html` 的 CSP 会只允许 `ALLOWED_ORIGINS` 中的精确域名嵌入，外站 iframe 与前端直调 API 都必须填写它；为空时仅允许同源。公开 API 给业务后端使用时，再设置 `IMA_QA_API_TOKEN`；不要把这个 token 写到公开网页 JavaScript 中。
 
-有两种接入方式。
+## 备份与恢复
 
-方式一：iframe 嵌入现成页面：
+备份 `runtime/` 整个目录，至少包含：
 
-```html
-<iframe
-  src="https://your-domain.example.com/embed.html"
-  style="width: 100%; height: 640px; border: 0"
-></iframe>
-```
+- `ima-web-agent-accounts.json`：加密账号记录。
+- `ima-web-agent-accounts.key`：解密密钥。
+- `ima-qa-conversations.json`：七天内会话历史和精选来源。
 
-方式二：业务网站自己做 UI，调用 API：
+恢复时停止服务，恢复整个目录并确认权限为 `700`（文件为 `600`），再启动服务。丢失 key 文件时旧账号库无法解密，应删除损坏账号库并逐账号重新接入。
 
-```bash
-curl -N \
-  -H 'Accept: text/event-stream' \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"3DGS 是什么？"}' \
-  https://your-domain.example.com/api/ask
-```
-
-如果配置了 `IMA_QA_API_TOKEN`：
-
-```bash
-curl -N \
-  -H 'Authorization: Bearer YOUR_TOKEN' \
-  -H 'Accept: text/event-stream' \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"3DGS 是什么？"}' \
-  https://your-domain.example.com/api/ask
-```
-
-## Health Check
-
-```bash
-curl https://your-domain.example.com/healthz
-```
-
-正常会看到：
-
-```json
-{
-  "ok": true,
-  "provider": "ima-web-agent",
-  "model": "official_3",
-  "queue": {
-    "activeRequests": 0,
-    "queuedRequests": 0,
-    "maxConcurrent": 1,
-    "queueLimit": 30
-  }
-}
-```
-
-`healthz` 是脱敏的，不会返回 cookie、API Key 或 token 原文。默认 `IMA_QA_HEALTH_DETAILS=basic` 不展示 auth 到期细节；维护环境可设为 `auth`。
-
-## Security Checklist
-
-- 提交到 GitHub 的只能是 `.env.example`，不能是 `.env`。
-- 不能提交 `runtime/`、`node_modules/`、浏览器 profile、日志、截图里的 token。
-- 对公网开放前，加 Nginx/网关限流。
-- 保留应用内并发池和限流，不要裸奔。
-- 需要服务端调用时，配置 `IMA_QA_API_TOKEN`。
-- 需要浏览器跨域调用时，配置 `ALLOWED_ORIGINS`。
-- Web Agent 模式要安排 refresh token 过期前的维护流程。
-
-## Open Source Release Checklist
-
-发布前检查：
+## 发布前检查
 
 ```bash
 npm test
-rg -n "真实密钥片段|真实知识库ID|IMA-TOKEN=|IMA-REFRESH-TOKEN=" .
+git status --short
+rg -n "IMA-TOKEN=|IMA-REFRESH-TOKEN=|x-ima-cookie|MIMO_API_KEY|IMA_OPENAPI_APIKEY" . \
+  -g '!node_modules' -g '!runtime' -g '!.env'
 ```
 
-确认提交内容包含源码、测试、Dockerfile、compose、README、部署文档、LICENSE、package lock；不包含任何真实凭证或业务私有知识库内容。
+最后一条扫描只用于发现误提交的敏感文本；示例变量名或源码中的字段名是正常命中，必须确认没有真实值。

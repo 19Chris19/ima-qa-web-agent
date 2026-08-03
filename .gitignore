@@ -1,0 +1,18 @@
+# Private deployment configuration and persisted account/session state.
+.env
+.env.*
+!.env.example
+!.env.provider-a.example
+runtime/
+
+# Local dependencies and generated output.
+node_modules/
+coverage/
+eval/results/
+npm-debug.log*
+.DS_Store
+
+# Local browser and test artifacts.
+.playwright-mcp/
+playwright-report/
+test-results/

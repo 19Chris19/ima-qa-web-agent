@@ -164,6 +164,68 @@ test('IMAWebAgentClient creates an isolated IMA session for concurrent asks', as
   assert.notEqual(first, second);
 });
 
+test('IMAWebAgentClient reuses a provided conversation session and reports a replacement after session expiry', async () => {
+  const requests = [];
+  let initCount = 0;
+  const fetchMock = async (url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push({ url, body });
+    if (url.endsWith('/init_session')) {
+      initCount += 1;
+      return new Response(JSON.stringify({ code: 0, session_id: `new-session-${initCount}` }), { status: 200 });
+    }
+    if (url.endsWith('/assistant/qa')) {
+      if (body.session_id === 'expired-session') {
+        return new Response('session expired', { status: 401 });
+      }
+      return new Response(
+        sseStream([
+          `event: MESSAGE\ndata: {"Text":"${body.session_id}"}`,
+          'event: COMPLETED\ndata: {"Code":0}',
+        ]),
+        { status: 200 },
+      );
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+
+  const client = new IMAWebAgentClient(
+    {
+      knowledgeBaseId: 'web-kb-id',
+      headers: { 'x-ima-cookie': 'cookie', 'x-ima-bkn': '123' },
+      modelId: 'official_3',
+      modelType: 3,
+    },
+    fetchMock,
+  );
+
+  const reused = [];
+  for await (const event of client.streamAsk({
+    question: '追问',
+    sessionId: 'session-keep',
+    onSession: (sessionId) => reused.push(sessionId),
+  })) {
+    if (event.type === 'delta') {
+      assert.equal(event.text, 'session-keep');
+    }
+  }
+  assert.deepEqual(reused, ['session-keep']);
+  assert.equal(requests.filter((request) => request.url.endsWith('/init_session')).length, 0);
+
+  const replaced = [];
+  for await (const event of client.streamAsk({
+    question: '失效后的追问',
+    sessionId: 'expired-session',
+    onSession: (sessionId) => replaced.push(sessionId),
+  })) {
+    if (event.type === 'delta') {
+      assert.equal(event.text, 'new-session-1');
+    }
+  }
+  assert.deepEqual(replaced, ['expired-session', 'new-session-1']);
+  assert.equal(requests.at(-1).body.session_id, 'new-session-1');
+});
+
 test('IMAWebAgentClient refreshes expired web auth and retries init_session once', async () => {
   const requests = [];
   let initCount = 0;

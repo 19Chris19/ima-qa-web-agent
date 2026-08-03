@@ -1,0 +1,655 @@
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const dotenv = require('dotenv');
+const { buildRuntimeEnvText } = require('./ima-web-agent-client');
+
+const STORE_VERSION = 1;
+const DEFAULT_EVENT_LIMIT = 80;
+
+function defaultAccountStorePath() {
+  return path.resolve(__dirname, '..', '..', '..', 'runtime', 'ima-web-agent-accounts.json');
+}
+
+function defaultAccountStoreKeyPath() {
+  return path.resolve(__dirname, '..', '..', '..', 'runtime', 'ima-web-agent-accounts.key');
+}
+
+class WebAgentAccountDirectory {
+  constructor(options = {}) {
+    this.storePath = path.resolve(options.storePath || defaultAccountStorePath());
+    this.keyPath = path.resolve(options.keyPath || defaultAccountStoreKeyPath());
+    this.keyMaterial = options.keyMaterial || process.env.IMA_QA_ACCOUNT_STORE_KEY || '';
+    this.now = options.now || (() => new Date().toISOString());
+    this.store = null;
+  }
+
+  load() {
+    if (this.store) {
+      return this.store;
+    }
+
+    if (!fs.existsSync(this.storePath)) {
+      this.store = createEmptyStore(this.now());
+      this._writeStore();
+      return this.store;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(this.storePath, 'utf8'));
+    this.store = {
+      version: STORE_VERSION,
+      createdAt: parsed.createdAt || this.now(),
+      updatedAt: parsed.updatedAt || this.now(),
+      accounts: Array.isArray(parsed.accounts) ? parsed.accounts.map(normalizeStoredAccount) : [],
+    };
+    return this.store;
+  }
+
+  listAccounts(options = {}) {
+    const includeEvents = Boolean(options.includeEvents);
+    return this.load().accounts.map((account) => sanitizeAccount(account, { includeEvents }));
+  }
+
+  getAccount(accountId) {
+    return this.load().accounts.find((account) => account.id === accountId || account.name === accountId) || null;
+  }
+
+  getPoolAccounts() {
+    return this.load().accounts.map((account) => {
+      const config = this._decryptRuntimeConfig(account);
+      return {
+        id: account.id,
+        name: account.name,
+        knowledgeBaseId: account.knowledgeBaseId,
+        headers: config.headers,
+        modelId: account.modelId,
+        modelType: account.modelType,
+        runtimeEnvPath: account.runtimeEnvPath,
+        tokenExpiresAt: account.runtime.tokenExpiresAt,
+        refreshTokenExpiresAt: account.runtime.refreshTokenExpiresAt,
+        refreshSkewMs: account.runtime.refreshSkewMs,
+        refreshIntervalMs: account.runtime.refreshIntervalMs,
+        disabled: account.runtime.disabled,
+        disabledReason: account.runtime.disabledReason,
+        activeRequests: account.runtime.activeRequests,
+        cooldownUntil: account.runtime.cooldownUntil,
+        consecutiveErrors: account.runtime.consecutiveErrors,
+        totalRequests: account.runtime.totalRequests,
+        lastError: account.runtime.lastError,
+        lastUsedAt: account.runtime.lastUsedAt,
+      };
+    });
+  }
+
+  upsertFromRuntimeEnv(options = {}) {
+    const runtimeConfig = parseRuntimeEnvText(options.runtimeEnvText || '');
+    const name = cleanAccountName(
+      options.name ||
+        runtimeConfig.accountName ||
+        runtimeConfig.accountId ||
+        path.basename(options.runtimeEnvPath || runtimeConfig.runtimeEnvPath || 'account'),
+    );
+    const id = normalizeAccountId(runtimeConfig.accountId || options.id || name);
+    const runtimeEnvPath = options.runtimeEnvPath || runtimeConfig.runtimeEnvPath || '';
+    const account = {
+      id,
+      name,
+      knowledgeBaseId: options.knowledgeBaseId || runtimeConfig.knowledgeBaseId,
+      modelId: runtimeConfig.modelId,
+      modelType: runtimeConfig.modelType,
+      runtimeEnvPath,
+      source: options.source || 'runtime-env',
+      runtime: {
+        ...defaultRuntimeState(),
+        tokenExpiresAt: runtimeConfig.tokenExpiresAt,
+        refreshTokenExpiresAt: runtimeConfig.refreshTokenExpiresAt,
+        refreshSkewMs: runtimeConfig.refreshSkewMs,
+        refreshIntervalMs: runtimeConfig.refreshIntervalMs,
+      },
+    };
+
+    const runtimeEnvText = buildRuntimeEnvText({
+      accountId: id,
+      accountName: name,
+      knowledgeBaseId: account.knowledgeBaseId,
+      headers: runtimeConfig.headers,
+      modelId: account.modelId,
+      modelType: account.modelType,
+      runtimeEnvPath,
+      tokenExpiresAt: account.runtime.tokenExpiresAt,
+      refreshTokenExpiresAt: account.runtime.refreshTokenExpiresAt,
+      refreshSkewMs: account.runtime.refreshSkewMs,
+      refreshIntervalMs: account.runtime.refreshIntervalMs,
+    });
+
+    this._upsertAccount(
+      account,
+      runtimeEnvText,
+      {
+        eventType: 'account_imported',
+        message: `Imported ${name} from runtime env`,
+      },
+      { replace: Boolean(options.replace) },
+    );
+    if (runtimeEnvPath) {
+      this.writeRuntimeEnvFile(id);
+    }
+    return sanitizeAccount(this.getAccount(id), { includeEvents: true });
+  }
+
+  upsertCapturedAccount(options = {}) {
+    const name = cleanAccountName(options.name || options.id || 'account');
+    const id = normalizeAccountId(options.id || name);
+    const runtimeEnvPath = options.runtimeEnvPath || '';
+    const account = {
+      id,
+      name,
+      knowledgeBaseId: cleanRequired(options.knowledgeBaseId, 'knowledgeBaseId'),
+      modelId: String(options.modelId || 'official_3'),
+      modelType: Number(options.modelType || 3),
+      runtimeEnvPath,
+      source: options.source || 'browser-capture',
+      runtime: {
+        ...defaultRuntimeState(),
+        tokenExpiresAt: nullableNumber(options.tokenExpiresAt),
+        refreshTokenExpiresAt: nullableNumber(options.refreshTokenExpiresAt),
+        refreshSkewMs: nullableNumber(options.refreshSkewMs) || 10 * 60 * 1000,
+        refreshIntervalMs: nullableNumber(options.refreshIntervalMs) || 60 * 1000,
+      },
+    };
+
+    const runtimeEnvText = buildRuntimeEnvText({
+      accountId: id,
+      accountName: name,
+      knowledgeBaseId: account.knowledgeBaseId,
+      headers: normalizeHeaders(options.headers),
+      modelId: account.modelId,
+      modelType: account.modelType,
+      runtimeEnvPath,
+      tokenExpiresAt: account.runtime.tokenExpiresAt,
+      refreshTokenExpiresAt: account.runtime.refreshTokenExpiresAt,
+      refreshSkewMs: account.runtime.refreshSkewMs,
+      refreshIntervalMs: account.runtime.refreshIntervalMs,
+    });
+
+    this._upsertAccount(
+      account,
+      runtimeEnvText,
+      {
+        eventType: 'account_captured',
+        message: `Captured ${name} from browser login`,
+      },
+      { replace: Boolean(options.replace) },
+    );
+    if (runtimeEnvPath) {
+      this.writeRuntimeEnvFile(id);
+    }
+    return sanitizeAccount(this.getAccount(id), { includeEvents: true });
+  }
+
+  setDisabled(accountId, disabled, reason = '') {
+    const account = this._requireAccount(accountId);
+    account.runtime.disabled = Boolean(disabled);
+    account.runtime.disabledReason = disabled ? cleanText(reason || 'disabled_by_admin') : '';
+    account.runtime.updatedAt = this.now();
+    addEvent(account, {
+      type: disabled ? 'account_disabled' : 'account_enabled',
+      message: disabled ? 'Account disabled by admin' : 'Account enabled by admin',
+    }, this.now);
+    this._writeStore();
+    return sanitizeAccount(account, { includeEvents: true });
+  }
+
+  deleteAccount(accountId) {
+    const store = this.load();
+    const index = store.accounts.findIndex((account) => account.id === accountId || account.name === accountId);
+    if (index < 0) {
+      return false;
+    }
+    const [account] = store.accounts.splice(index, 1);
+    this._writeStore();
+    this._removeManagedRuntimeEnvFile(account.runtimeEnvPath);
+    return true;
+  }
+
+  recordRuntimeState(snapshot = {}) {
+    const account = this.getAccount(snapshot.id || snapshot.name || '');
+    if (!account) {
+      return false;
+    }
+    account.runtime.activeRequests = Number(snapshot.activeRequests || 0);
+    account.runtime.cooldownUntil = Number(snapshot.cooldownUntil || 0);
+    account.runtime.consecutiveErrors = Number(snapshot.consecutiveErrors || 0);
+    account.runtime.totalRequests = Number(snapshot.totalRequests || 0);
+    account.runtime.lastUsedAt = Number(snapshot.lastUsedAt || 0);
+    account.runtime.lastError = cleanText(snapshot.lastError || '');
+    account.runtime.disabled = Boolean(snapshot.disabled);
+    account.runtime.disabledReason = cleanText(snapshot.disabledReason || '');
+    account.runtime.updatedAt = this.now();
+    this._writeStore();
+    return true;
+  }
+
+  recordEvent(accountId, type, message, meta = {}) {
+    const account = this._requireAccount(accountId);
+    addEvent(account, { type, message, meta }, this.now);
+    this._writeStore();
+    return sanitizeAccount(account, { includeEvents: true });
+  }
+
+  updateCredentialsFromClient(accountId, clientSnapshot = {}) {
+    const account = this._requireAccount(accountId);
+    const runtimeEnvText = buildRuntimeEnvText({
+      accountId: account.id,
+      accountName: account.name,
+      knowledgeBaseId: clientSnapshot.knowledgeBaseId || account.knowledgeBaseId,
+      headers: clientSnapshot.headers,
+      modelId: clientSnapshot.modelId || account.modelId,
+      modelType: clientSnapshot.modelType || account.modelType,
+      runtimeEnvPath: clientSnapshot.runtimeEnvPath || account.runtimeEnvPath,
+      tokenExpiresAt: clientSnapshot.tokenExpiresAt,
+      refreshTokenExpiresAt: clientSnapshot.refreshTokenExpiresAt,
+      refreshSkewMs: clientSnapshot.refreshSkewMs,
+      refreshIntervalMs: clientSnapshot.refreshIntervalMs,
+    });
+    account.knowledgeBaseId = clientSnapshot.knowledgeBaseId || account.knowledgeBaseId;
+    account.modelId = clientSnapshot.modelId || account.modelId;
+    account.modelType = Number(clientSnapshot.modelType || account.modelType);
+    account.runtimeEnvPath = clientSnapshot.runtimeEnvPath || account.runtimeEnvPath;
+    account.runtime.tokenExpiresAt = nullableNumber(clientSnapshot.tokenExpiresAt);
+    account.runtime.refreshTokenExpiresAt = nullableNumber(clientSnapshot.refreshTokenExpiresAt);
+    account.runtime.refreshSkewMs = nullableNumber(clientSnapshot.refreshSkewMs) || account.runtime.refreshSkewMs;
+    account.runtime.refreshIntervalMs =
+      nullableNumber(clientSnapshot.refreshIntervalMs) || account.runtime.refreshIntervalMs;
+    account.runtime.lastRefreshAt = this.now();
+    account.runtime.lastRefreshError = '';
+    account.secret = this._encryptText(runtimeEnvText);
+    addEvent(account, { type: 'auth_refreshed', message: 'Account auth refreshed' }, this.now);
+    this._writeStore();
+    if (account.runtimeEnvPath) {
+      this.writeRuntimeEnvFile(account.id);
+    }
+    return sanitizeAccount(account, { includeEvents: true });
+  }
+
+  writeRuntimeEnvFile(accountId) {
+    const account = this._requireAccount(accountId);
+    if (!account.runtimeEnvPath) {
+      throw new Error('runtimeEnvPath is not configured for this account');
+    }
+    const runtimeEnvText = this._decryptText(account.secret);
+    const dir = path.dirname(account.runtimeEnvPath);
+    const tempPath = path.join(dir, `.${path.basename(account.runtimeEnvPath)}.${process.pid}.tmp`);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tempPath, runtimeEnvText, { mode: 0o600 });
+    fs.renameSync(tempPath, account.runtimeEnvPath);
+    try {
+      fs.chmodSync(account.runtimeEnvPath, 0o600);
+    } catch {
+      // Best effort only; write mode covers normal creation.
+    }
+    return account.runtimeEnvPath;
+  }
+
+  disableRuntimeEnvExport(accountId) {
+    const account = this._requireAccount(accountId);
+    const previousRuntimeEnvPath = account.runtimeEnvPath;
+    if (!previousRuntimeEnvPath) {
+      return {
+        account: sanitizeAccount(account, { includeEvents: true }),
+        removedManagedRuntimeEnv: false,
+      };
+    }
+
+    const runtimeConfig = this._decryptRuntimeConfig(account);
+    const runtimeEnvText = buildRuntimeEnvText({
+      accountId: account.id,
+      accountName: account.name,
+      knowledgeBaseId: account.knowledgeBaseId,
+      headers: runtimeConfig.headers,
+      modelId: account.modelId,
+      modelType: account.modelType,
+      runtimeEnvPath: '',
+      tokenExpiresAt: account.runtime.tokenExpiresAt,
+      refreshTokenExpiresAt: account.runtime.refreshTokenExpiresAt,
+      refreshSkewMs: account.runtime.refreshSkewMs,
+      refreshIntervalMs: account.runtime.refreshIntervalMs,
+    });
+    account.runtimeEnvPath = '';
+    account.secret = this._encryptText(runtimeEnvText);
+    account.runtime.updatedAt = this.now();
+    addEvent(account, {
+      type: 'runtime_export_disabled',
+      message: 'Legacy plaintext runtime export disabled',
+    }, this.now);
+    this._writeStore();
+    const removedManagedRuntimeEnv = this._removeManagedRuntimeEnvFile(previousRuntimeEnvPath);
+    return {
+      account: sanitizeAccount(account, { includeEvents: true }),
+      removedManagedRuntimeEnv,
+    };
+  }
+
+  getHealthSnapshot(options = {}) {
+    const accounts = this.listAccounts({ includeEvents: options.includeDetails });
+    return {
+      available: true,
+      storePath: options.includeDetails ? this.storePath : undefined,
+      accountCount: accounts.length,
+      activeAccounts: accounts.filter((account) => account.status !== 'disabled').length,
+      disabledAccounts: accounts.filter((account) => account.status === 'disabled').length,
+      accounts: options.includeDetails ? accounts : undefined,
+    };
+  }
+
+  _upsertAccount(nextAccount, runtimeEnvText, event, options = {}) {
+    const store = this.load();
+    const now = this.now();
+    const existing = store.accounts.find(
+      (account) => account.id === nextAccount.id || account.name === nextAccount.name,
+    );
+    if (existing && !options.replace) {
+      const error = new Error(`账号 ${existing.name} 已存在；如确认要重新绑定登录态，请显式使用 replace`);
+      error.statusCode = 409;
+      throw error;
+    }
+    const account = existing || {
+      id: nextAccount.id,
+      name: nextAccount.name,
+      createdAt: now,
+      events: [],
+    };
+    account.id = nextAccount.id;
+    account.name = nextAccount.name;
+    account.knowledgeBaseId = nextAccount.knowledgeBaseId;
+    account.modelId = nextAccount.modelId;
+    account.modelType = nextAccount.modelType;
+    account.runtimeEnvPath = nextAccount.runtimeEnvPath;
+    account.source = nextAccount.source;
+    account.runtime = {
+      ...defaultRuntimeState(),
+      ...(existing?.runtime || {}),
+      ...nextAccount.runtime,
+      updatedAt: now,
+    };
+    account.secret = this._encryptText(runtimeEnvText);
+    account.updatedAt = now;
+    addEvent(account, event, this.now);
+    if (!existing) {
+      store.accounts.push(account);
+    }
+    this._writeStore();
+  }
+
+  _requireAccount(accountId) {
+    const account = this.getAccount(accountId);
+    if (!account) {
+      const error = new Error('Account not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    return account;
+  }
+
+  _decryptRuntimeConfig(account) {
+    return parseRuntimeEnvText(this._decryptText(account.secret));
+  }
+
+  _encryptText(text) {
+    const key = this._key();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(String(text), 'utf8'), cipher.final()]);
+    return {
+      alg: 'aes-256-gcm',
+      iv: iv.toString('base64'),
+      tag: cipher.getAuthTag().toString('base64'),
+      ciphertext: ciphertext.toString('base64'),
+    };
+  }
+
+  _decryptText(secret) {
+    if (!secret?.ciphertext || !secret?.iv || !secret?.tag) {
+      throw new Error('Account secret is missing or malformed');
+    }
+    const decipher = crypto.createDecipheriv(
+      'aes-256-gcm',
+      this._key(),
+      Buffer.from(secret.iv, 'base64'),
+    );
+    decipher.setAuthTag(Buffer.from(secret.tag, 'base64'));
+    return Buffer.concat([
+      decipher.update(Buffer.from(secret.ciphertext, 'base64')),
+      decipher.final(),
+    ]).toString('utf8');
+  }
+
+  _key() {
+    const material = this.keyMaterial || ensureKeyFile(this.keyPath);
+    return crypto.createHash('sha256').update(String(material)).digest();
+  }
+
+  _writeStore() {
+    const store = this.load();
+    store.updatedAt = this.now();
+    const dir = path.dirname(this.storePath);
+    const tempPath = path.join(dir, `.${path.basename(this.storePath)}.${process.pid}.tmp`);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tempPath, JSON.stringify(store, null, 2), { mode: 0o600 });
+    fs.renameSync(tempPath, this.storePath);
+    try {
+      fs.chmodSync(this.storePath, 0o600);
+    } catch {
+      // Best effort only; write mode covers normal creation.
+    }
+  }
+
+  _removeManagedRuntimeEnvFile(runtimeEnvPath) {
+    const candidate = String(runtimeEnvPath || '').trim();
+    if (!candidate) {
+      return false;
+    }
+    const managedDirectory = path.resolve(path.dirname(this.storePath), 'web-agent-accounts');
+    const resolvedPath = path.resolve(candidate);
+    if (!resolvedPath.startsWith(`${managedDirectory}${path.sep}`)) {
+      return false;
+    }
+    fs.rmSync(resolvedPath, { force: true });
+    return true;
+  }
+}
+
+function createEmptyStore(now) {
+  const timestamp = now;
+  return {
+    version: STORE_VERSION,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    accounts: [],
+  };
+}
+
+function normalizeStoredAccount(account) {
+  return {
+    id: normalizeAccountId(account.id || account.name),
+    name: cleanAccountName(account.name || account.id || 'account'),
+    knowledgeBaseId: cleanText(account.knowledgeBaseId),
+    modelId: cleanText(account.modelId) || 'official_3',
+    modelType: Number(account.modelType || 3),
+    runtimeEnvPath: cleanText(account.runtimeEnvPath),
+    source: cleanText(account.source) || 'unknown',
+    createdAt: cleanText(account.createdAt),
+    updatedAt: cleanText(account.updatedAt),
+    runtime: { ...defaultRuntimeState(), ...(account.runtime || {}) },
+    events: Array.isArray(account.events) ? account.events.slice(-DEFAULT_EVENT_LIMIT) : [],
+    secret: account.secret || null,
+  };
+}
+
+function parseRuntimeEnvText(text) {
+  const parsed = dotenv.parse(String(text || ''));
+  const headers = parseHeaders(parsed.IMA_WEB_AGENT_HEADERS_JSON);
+  return {
+    accountId: cleanText(parsed.IMA_WEB_AGENT_ACCOUNT_ID),
+    accountName: cleanText(parsed.IMA_WEB_AGENT_ACCOUNT_NAME),
+    knowledgeBaseId: cleanRequired(parsed.IMA_WEB_KNOWLEDGE_BASE_ID, 'IMA_WEB_KNOWLEDGE_BASE_ID'),
+    headers,
+    modelId: cleanText(parsed.IMA_WEB_AGENT_MODEL_ID) || 'official_3',
+    modelType: Number(parsed.IMA_WEB_AGENT_MODEL_TYPE || 3),
+    runtimeEnvPath: cleanText(parsed.IMA_WEB_AGENT_RUNTIME_ENV_PATH),
+    tokenExpiresAt: nullableNumber(parsed.IMA_WEB_AGENT_TOKEN_EXPIRES_AT),
+    refreshTokenExpiresAt: nullableNumber(parsed.IMA_WEB_AGENT_REFRESH_TOKEN_EXPIRES_AT),
+    refreshSkewMs: nullableNumber(parsed.IMA_WEB_AGENT_REFRESH_SKEW_MS) || 10 * 60 * 1000,
+    refreshIntervalMs: nullableNumber(parsed.IMA_WEB_AGENT_REFRESH_INTERVAL_MS) || 60 * 1000,
+  };
+}
+
+function parseHeaders(value) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(value || '{}'));
+  } catch {
+    throw new Error('IMA_WEB_AGENT_HEADERS_JSON must be valid JSON');
+  }
+  return normalizeHeaders(parsed);
+}
+
+function normalizeHeaders(headers) {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
+    throw new Error('headers must be an object');
+  }
+  const cookie = cleanRequired(headers['x-ima-cookie'] || headers.cookie, 'x-ima-cookie');
+  return {
+    'x-ima-cookie': cookie,
+    'x-ima-bkn': cleanText(headers['x-ima-bkn']),
+  };
+}
+
+function sanitizeAccount(account, options = {}) {
+  const status = account.runtime?.disabled
+    ? 'disabled'
+    : Number(account.runtime?.activeRequests || 0) > 0
+      ? 'busy'
+      : Number(account.runtime?.cooldownUntil || 0) > Date.now()
+        ? 'cooling_down'
+        : 'available';
+  return {
+    id: account.id,
+    name: account.name,
+    knowledgeBaseId: account.knowledgeBaseId,
+    modelId: account.modelId,
+    modelType: account.modelType,
+    runtimeEnvPath: account.runtimeEnvPath,
+    source: account.source,
+    status,
+    disabledReason: account.runtime?.disabledReason || '',
+    activeRequests: Number(account.runtime?.activeRequests || 0),
+    cooldownSecondsRemaining: Math.max(0, Math.ceil((Number(account.runtime?.cooldownUntil || 0) - Date.now()) / 1000)),
+    consecutiveErrors: Number(account.runtime?.consecutiveErrors || 0),
+    totalRequests: Number(account.runtime?.totalRequests || 0),
+    lastUsedAt: account.runtime?.lastUsedAt ? new Date(account.runtime.lastUsedAt).toISOString() : null,
+    lastError: account.runtime?.lastError || null,
+    tokenExpiresAt: account.runtime?.tokenExpiresAt
+      ? new Date(Number(account.runtime.tokenExpiresAt)).toISOString()
+      : null,
+    refreshTokenExpiresAt: account.runtime?.refreshTokenExpiresAt
+      ? new Date(Number(account.runtime.refreshTokenExpiresAt)).toISOString()
+      : null,
+    hasCredentials: Boolean(account.secret),
+    createdAt: account.createdAt || null,
+    updatedAt: account.updatedAt || null,
+    events: options.includeEvents ? account.events || [] : undefined,
+  };
+}
+
+function defaultRuntimeState() {
+  return {
+    disabled: false,
+    disabledReason: '',
+    activeRequests: 0,
+    cooldownUntil: 0,
+    consecutiveErrors: 0,
+    totalRequests: 0,
+    lastUsedAt: 0,
+    lastError: '',
+    tokenExpiresAt: null,
+    refreshTokenExpiresAt: null,
+    refreshSkewMs: 10 * 60 * 1000,
+    refreshIntervalMs: 60 * 1000,
+    lastRefreshAt: null,
+    lastRefreshError: '',
+    updatedAt: null,
+  };
+}
+
+function addEvent(account, event = {}, now) {
+  account.events ||= [];
+  account.events.push({
+    at: now(),
+    type: cleanText(event.type || event.eventType || 'event'),
+    message: cleanText(event.message || ''),
+    meta: sanitizeMeta(event.meta || {}),
+  });
+  account.events = account.events.slice(-DEFAULT_EVENT_LIMIT);
+}
+
+function sanitizeMeta(value) {
+  const json = JSON.stringify(value || {});
+  if (/cookie|token|apikey|api_key|headers/i.test(json)) {
+    return { redacted: true };
+  }
+  try {
+    return JSON.parse(json);
+  } catch {
+    return {};
+  }
+}
+
+function ensureKeyFile(keyPath) {
+  if (fs.existsSync(keyPath)) {
+    return fs.readFileSync(keyPath, 'utf8').trim();
+  }
+  const dir = path.dirname(keyPath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const key = crypto.randomBytes(32).toString('base64');
+  fs.writeFileSync(keyPath, `${key}\n`, { mode: 0o600 });
+  return key;
+}
+
+function cleanRequired(value, name) {
+  const text = cleanText(value);
+  if (!text) {
+    throw new Error(`${name} is required`);
+  }
+  return text;
+}
+
+function cleanText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function cleanAccountName(value) {
+  return cleanText(value).slice(0, 80) || 'account';
+}
+
+function normalizeAccountId(value) {
+  const text = cleanText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return text || `account-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function nullableNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+module.exports = {
+  WebAgentAccountDirectory,
+  defaultAccountStoreKeyPath,
+  defaultAccountStorePath,
+  parseRuntimeEnvText,
+  normalizeAccountId,
+};

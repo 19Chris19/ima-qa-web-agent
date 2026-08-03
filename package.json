@@ -2,10 +2,17 @@
   "name": "ima-qa-web",
   "version": "0.1.0",
   "description": "Read-only IMA shared knowledge base QA web app with streaming IMA Web Agent answers.",
-  "main": "server.js",
+  "main": "provider-a-server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
+    "eval:dry-run": "node eval/run-eval.mjs --dry-run",
+    "eval:run": "node eval/run-eval.mjs",
+    "test:concurrency": "node scripts/test-concurrency.mjs",
+    "setup:provider-a": "node scripts/setup-provider-a.mjs",
+    "admin:enroll": "node scripts/enroll-web-agent-account.mjs",
+    "admin:seal-runtime": "node scripts/seal-legacy-runtime-exports.mjs",
+    "local-rag:index": "node scripts/build-local-rag-index.mjs",
+    "start": "node provider-a-server.js",
+    "dev": "node --watch provider-a-server.js",
     "test": "node --test"
   },
   "keywords": [
@@ -20,7 +27,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^2.4.5",
+    "playwright-core": "^1.62.1"
   },
   "engines": {
     "node": ">=18.18"

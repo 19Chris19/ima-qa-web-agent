@@ -15,7 +15,7 @@ class RequestAbortedError extends Error {
 }
 
 function createAskQueue(options = {}) {
-  const maxConcurrent = Math.max(1, Number(options.maxConcurrent || 1));
+  let maxConcurrent = normalizeMaxConcurrent(options.maxConcurrent);
   const queueLimit = Math.max(0, Number(options.queueLimit || 0));
   let activeRequests = 0;
   const queue = [];
@@ -87,6 +87,12 @@ function createAskQueue(options = {}) {
     }
   }
 
+  function setMaxConcurrent(nextMaxConcurrent) {
+    maxConcurrent = normalizeMaxConcurrent(nextMaxConcurrent);
+    drain();
+    return stats();
+  }
+
   function start(entry) {
     entry.started = true;
     cleanupQueuedEntry(entry);
@@ -103,8 +109,13 @@ function createAskQueue(options = {}) {
 
   return {
     run,
+    setMaxConcurrent,
     stats,
   };
+}
+
+function normalizeMaxConcurrent(value) {
+  return Math.max(1, Number(value || 1));
 }
 
 module.exports = {
