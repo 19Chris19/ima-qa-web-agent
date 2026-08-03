@@ -14,7 +14,18 @@ git remote add ima-qa-release git@github.com:YOUR_ORG/ima-qa-web-agent.git
 git push -u ima-qa-release release/ima-qa-web:main
 ```
 
-以后更新发布仓库时，重新执行 `git subtree split`，再推送新的提交。发布前必须确认以下私有内容未进入 Git：
+以后更新发布仓库时，重新执行 `git subtree split`，再推送新的提交。
+
+如果前面的 `release/ima-qa-web` 分支已经存在，不要再次使用同一个 `-b` 参数。先提交应用目录的改动，再从当前提交计算新的导出提交并推送到同一个发布仓库：
+
+```bash
+git subtree split --prefix=apps/ima-qa-web > /tmp/ima-qa-web-release-commit
+git push ima-qa-release "$(cat /tmp/ima-qa-web-release-commit):main"
+```
+
+这只更新独立仓库的 `main`，不会把主仓库里的其他目录推送出去。
+
+发布前必须确认以下私有内容未进入 Git：
 
 ```bash
 git status --short
