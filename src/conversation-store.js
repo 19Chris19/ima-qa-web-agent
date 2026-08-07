@@ -61,11 +61,19 @@ class ConversationStore {
     return this;
   }
 
-  create(ownerKey = '') {
+  create(ownerKey = '', options = {}) {
     this._removeExpired();
     const now = this.now();
+    const requestedId = cleanText(options.id);
+    if (requestedId) {
+      const existing = this.conversations.get(requestedId);
+      if (existing) {
+        if (existing.ownerKey === cleanText(ownerKey)) return this.publicState(existing);
+        throw new ConversationNotFoundError();
+      }
+    }
     const conversation = {
-      id: crypto.randomUUID(),
+      id: requestedId || crypto.randomUUID(),
       ownerKey: cleanText(ownerKey),
       createdAt: now,
       updatedAt: now,

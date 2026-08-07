@@ -47,11 +47,22 @@ docker compose logs -f ima-qa-web
 | --- | --- | --- |
 | `IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID` | 全部账号共同访问的 IMA Web 共享库 | IMA 网页 URL 中的 `knowledgeBaseId` 数字值 |
 | `IMA_QA_ADMIN_TOKEN` | 保护账号接入、刷新、停用和删除 | 初始化向导自动生成 |
+| `IMA_QA_INTERNAL_SERVICE_TOKEN` | 可选的 VoiceRAG 私有深查入口 | 单独随机生成；只写入 Provider A 服务端 `.env` |
 | `ALLOWED_ORIGINS` | 可嵌入 iframe 或跨域调用 API 的业务网页域名 | 可选；为空时只允许同源网页，多个精确 `https://` origin 用逗号分隔 |
 | `PORT` / `HOST_PORT` | 容器内端口和宿主机端口 | 默认 3000 / 3117 |
 | `HOST_BIND` | 宿主机监听地址 | 默认 `127.0.0.1`，由 Nginx 对外提供 HTTPS |
 
 共享库 ID 不等于 OpenAPI ID。所有接入账号都会由服务端强制校验为同一个 `IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID`；不匹配时返回 409，不能写入账号池。
+
+### VoiceRAG 私有深查（可选）
+
+实时语音服务需要低置信度补查时，可用专门的内部 token 调用 `POST /internal/provider-a/deep-ask`。它与公开 `/api/ask`、管理员接口和账号接入完全分开：
+
+```env
+IMA_QA_INTERNAL_SERVICE_TOKEN=replace_with_a_private_service_token
+```
+
+VoiceRAG 在自己的 `.env` 将同一个值设为 `VOICE_RAG_PROVIDER_A_TOKEN`，并只通过容器私网地址请求该入口。不要用 `IMA_QA_API_TOKEN` 或 `IMA_QA_ADMIN_TOKEN` 代替它。Nginx 必须对 `/internal/` 返回 404，不能将此路径暴露到互联网。
 
 ### 直接用 Node 运行
 

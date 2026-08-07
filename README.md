@@ -126,3 +126,15 @@ npm run test:concurrency -- \
 ```
 
 开源发布前，确认 Git 中不含 `.env`、`runtime/`、浏览器 profile、token、cookie、共享库原文或真实问题历史。
+
+## VoiceRAG 私有深查（可选）
+
+`apps/ima-voice-rag` 是独立的实时语音入口。它在本地检索证据不足时，才会调用本服务的私有 `POST /internal/provider-a/deep-ask`；普通网页用户仍只走公开的 `/api/ask`。
+
+启用前在本服务 `.env` 设置一个专用的随机值：
+
+```env
+IMA_QA_INTERNAL_SERVICE_TOKEN=replace_with_a_private_service_token
+```
+
+然后在 VoiceRAG 的 `.env` 用同一个值配置 `VOICE_RAG_PROVIDER_A_TOKEN`。这个 token 必须与管理员 token、公开 API token 不同，不能出现在浏览器、iframe、前端代码、访问日志或 Git 中。反向代理必须拒绝 `/internal/`；部署细节见 [VoiceRAG 部署指南](../ima-voice-rag/docs/DEPLOYMENT.md)。

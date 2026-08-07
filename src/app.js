@@ -106,7 +106,7 @@ function createApp({
     res.status(deleted ? 200 : 404).json({ success: deleted });
   });
 
-  app.post('/api/ask', requireApiToken(config.security?.apiToken), async (req, res) => {
+  const askHandler = async (req, res) => {
     const requestId = crypto.randomUUID();
     const isSse = wantsSse(req);
     const rateLimit = rateLimiter.consume(getClientIp(req));
@@ -133,7 +133,16 @@ function createApp({
       if (!conversationId) {
         conversationId = conversations.create(ownerKey).conversationId;
       }
-      conversations.beginRequest(conversationId, ownerKey);
+      try {
+        conversations.beginRequest(conversationId, ownerKey);
+      } catch (error) {
+        if (req.isInternalProviderADeepAsk && error instanceof ConversationNotFoundError) {
+          conversations.create(ownerKey, { id: conversationId });
+          conversations.beginRequest(conversationId, ownerKey);
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       return rejectAskRequest({
         req,
@@ -208,7 +217,15 @@ function createApp({
       conversations.endRequest(conversationId, ownerKey);
       cleanup();
     }
-  });
+  };
+
+  app.post('/api/ask', requireApiToken(config.security?.apiToken), askHandler);
+  app.post(
+    '/internal/provider-a/deep-ask',
+    requireInternalServiceToken(config.security?.internalServiceToken),
+    markInternalProviderADeepAsk,
+    askHandler,
+  );
 
   return app;
 }
@@ -300,6 +317,34 @@ function requireApiToken(expectedToken) {
 
     res.status(401).json({ success: false, error: '未授权的请求' });
   };
+}
+
+function requireInternalServiceToken(expectedToken) {
+  const token = String(expectedToken || '').trim();
+  return function internalServiceTokenMiddleware(req, res, next) {
+    if (!token) {
+      res.status(404).json({ success: false, error: '未找到接口' });
+      return;
+    }
+    const header = String(req.headers.authorization || '');
+    const supplied = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    if (safeTokenEqual(supplied, token)) {
+      next();
+      return;
+    }
+    res.status(401).json({ success: false, error: '未授权的内部请求' });
+  };
+}
+
+function markInternalProviderADeepAsk(req, _res, next) {
+  req.isInternalProviderADeepAsk = true;
+  next();
+}
+
+function safeTokenEqual(left, right) {
+  const a = Buffer.from(String(left || ''));
+  const b = Buffer.from(String(right || ''));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 async function handleJsonWebAgentAsk(context) {
@@ -981,6 +1026,7 @@ module.exports = {
   noReliableContentAnswer,
   rejectAskRequest,
   requireApiToken,
+  requireInternalServiceToken,
   retrieveProviderSources,
   sanitizeKnowledgeBoundAnswer,
   shouldUseLocalRagFallback,

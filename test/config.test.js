@@ -286,6 +286,7 @@ test('getConfig parses optional production security settings', () => {
     IMA_WEB_KNOWLEDGE_BASE_ID: 'web-kb-id',
     IMA_WEB_AGENT_HEADERS_JSON: '{"x-ima-cookie":"cookie","x-ima-bkn":"123"}',
     IMA_QA_API_TOKEN: 'server-token',
+    IMA_QA_INTERNAL_SERVICE_TOKEN: 'voice-rag-service-token',
     IMA_QA_ADMIN_TOKEN: 'admin-token',
     ALLOWED_ORIGINS: 'https://example.com, https://docs.example.com ',
     TRUST_PROXY: 'true',
@@ -306,6 +307,7 @@ test('getConfig parses optional production security settings', () => {
   });
 
   assert.equal(config.security.apiToken, 'server-token');
+  assert.equal(config.security.internalServiceToken, 'voice-rag-service-token');
   assert.equal(config.security.adminToken, 'admin-token');
   assert.deepEqual(config.security.allowedOrigins, [
     'https://example.com',

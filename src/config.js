@@ -343,6 +343,7 @@ function getConfig(env = process.env) {
     },
     security: {
       apiToken: readEnv(env, 'IMA_QA_API_TOKEN'),
+      internalServiceToken: readEnv(env, 'IMA_QA_INTERNAL_SERVICE_TOKEN'),
       adminToken: readEnv(env, 'IMA_QA_ADMIN_TOKEN'),
       allowedOrigins: parseAllowedOrigins(readEnv(env, 'ALLOWED_ORIGINS')),
       trustProxy: parseBoolean(readEnv(env, 'TRUST_PROXY')),

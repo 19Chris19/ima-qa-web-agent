@@ -9,6 +9,7 @@ const {
   isMechanicalNoReliableAnswer,
   noReliableContentAnswer,
   requireApiToken,
+  requireInternalServiceToken,
   sanitizeKnowledgeBoundAnswer,
   shouldUseLocalRagFallback,
 } = require('../src/app');
@@ -480,6 +481,33 @@ test('POST /api/ask can require a bearer token for server deployments', async ()
       body: JSON.stringify({ question: '怎么报销？' }),
     });
     assert.equal(authorized.status, 200);
+  });
+});
+
+test('POST /internal/provider-a/deep-ask is gated by a separate VoiceRAG service token', async () => {
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      security: { ...baseConfig.security, internalServiceToken: 'voice-rag-service-token' },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const denied = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '请深查' }),
+    });
+    assert.equal(denied.status, 401);
+
+    const accepted = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer voice-rag-service-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '请深查', conversationId: 'voice-deep-conversation-a' }),
+    });
+    const payload = await accepted.json();
+    assert.equal(accepted.status, 200);
+    assert.equal(payload.success, true);
   });
 });
 
