@@ -18,6 +18,7 @@
   let conversationSummaries = [];
   let lastQuestion = '';
   let isBusy = false;
+  let followStreamingAnswer = true;
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -34,6 +35,10 @@
       event.preventDefault();
       submitQuestion(input.value);
     }
+  });
+
+  chatLog.addEventListener('scroll', () => {
+    followStreamingAnswer = isNearChatBottom();
   });
 
   newConversationButton.addEventListener('click', createConversation);
@@ -202,6 +207,7 @@
     }
 
     isBusy = true;
+    followStreamingAnswer = true;
     lastQuestion = question;
     setStatus('busy', '回答中');
     sendButton.disabled = true;
@@ -256,6 +262,23 @@
     let answer = '';
     let sourceMeta = { count: 0, searchSummary: '' };
     let sourceList = [];
+    let renderScheduled = false;
+    let streamingFinished = false;
+    const renderStreamingAnswer = () => {
+      if (renderScheduled) {
+        return;
+      }
+      renderScheduled = true;
+      window.requestAnimationFrame(() => {
+        renderScheduled = false;
+        if (streamingFinished) {
+          return;
+        }
+        renderAnswer(assistantMessage.text, answer, { streaming: true });
+        updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
+        scrollToBottom({ force: followStreamingAnswer });
+      });
+    };
 
     while (true) {
       const { value, done } = await reader.read();
@@ -284,9 +307,7 @@
         if (event.event === 'delta') {
           const text = event.data.text || '';
           answer += text;
-          renderAnswer(assistantMessage.text, answer);
-          updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
-          scrollToBottom();
+          renderStreamingAnswer();
         }
 
         if (event.event === 'error') {
@@ -301,6 +322,11 @@
         answer,
       });
     }
+
+    streamingFinished = true;
+    renderAnswer(assistantMessage.text, answer);
+    updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
+    scrollToBottom({ force: followStreamingAnswer });
 
     return answer;
   }
@@ -423,12 +449,12 @@
     return { article, bubble, text: paragraph };
   }
 
-  function renderAnswer(target, markdown) {
-    target.innerHTML = formatAnswerHtml(markdown);
+  function renderAnswer(target, markdown, options = {}) {
+    target.innerHTML = formatAnswerHtml(markdown, options);
   }
 
-  function formatAnswerHtml(markdown) {
-    return window.ImaAnswerMarkdown.formatAnswerHtml(markdown);
+  function formatAnswerHtml(markdown, options = {}) {
+    return window.ImaAnswerMarkdown.formatAnswerHtml(markdown, options);
   }
 
   function escapeHtml(value) {
@@ -603,7 +629,13 @@
     return `${date.getMonth() + 1}/${date.getDate()}`;
   }
 
-  function scrollToBottom() {
-    chatLog.scrollTop = chatLog.scrollHeight;
+  function isNearChatBottom() {
+    return chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 72;
+  }
+
+  function scrollToBottom(options = {}) {
+    if (options.force || isNearChatBottom()) {
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
   }
 })();
