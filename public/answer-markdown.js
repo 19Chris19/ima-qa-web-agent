@@ -5,8 +5,11 @@
     root.ImaAnswerMarkdown = factory();
   }
 })(typeof globalThis === 'undefined' ? this : globalThis, function () {
+  const HTML_BREAK_MARKER = '\u0000ima-answer-break\u0000';
+  const MAX_HEADING_TEXT_LENGTH = 48;
+
   function formatAnswerHtml(markdown, options = {}) {
-    const text = String(markdown || '').replace(/\r\n?/g, '\n').trim();
+    const text = normalizeMarkdownInput(markdown).trim();
     if (!text) {
       return '<p></p>';
     }
@@ -21,7 +24,7 @@
       }
       const tag = list.type === 'ordered' ? 'ol' : 'ul';
       const start = tag === 'ol' && list.start !== 1 ? ` start="${list.start}"` : '';
-      blocks.push(`<${tag}${start}>${list.items.map((item) => `<li>${formatInline(item, options)}</li>`).join('')}</${tag}>`);
+      blocks.push(`<${tag}${start}>${list.items.map((item) => `<li>${formatInline(item, options).replace(/\n/g, '<br>')}</li>`).join('')}</${tag}>`);
       list = null;
     };
 
@@ -53,8 +56,14 @@
       const heading = /^(#{1,6})\s+(.+)$/.exec(line);
       if (heading) {
         flushList();
-        const level = Math.min(heading[1].length + 2, 4);
-        blocks.push(`<h${level}>${formatInline(heading[2], options)}</h${level}>`);
+        const content = formatInline(heading[2], options);
+        if (Array.from(heading[2].trim()).length <= MAX_HEADING_TEXT_LENGTH) {
+          const level = Math.min(heading[1].length + 2, 4);
+          blocks.push(`<h${level}>${content}</h${level}>`);
+        } else {
+          // IMA sometimes joins a heading and its following paragraph on one line.
+          blocks.push(`<p>${content}</p>`);
+        }
         index += 1;
         continue;
       }
@@ -85,6 +94,12 @@
         continue;
       }
 
+      if (list && /^\s+/.test(rawLine)) {
+        list.items[list.items.length - 1] += `\n${line}`;
+        index += 1;
+        continue;
+      }
+
       if (isStreamingPendingBlockMarker(line, options)) {
         flushList();
         index += 1;
@@ -110,6 +125,38 @@
     }
     flushList();
     return blocks.join('');
+  }
+
+  function normalizeMarkdownInput(markdown) {
+    let text = String(markdown || '').replace(/\r\n?/g, '\n');
+    text = text.replace(/<br\s*\/?>|&lt;br\s*\/?&gt;/gi, HTML_BREAK_MARKER);
+
+    // IMA sometimes uses HTML breaks between Markdown table rows, while keeping
+    // breaks inside a cell for readability. Preserve that distinction.
+    const markerPattern = escapeRegExp(HTML_BREAK_MARKER);
+    text = text
+      .replace(new RegExp(`${markerPattern}\\s*(?=\\|)`, 'g'), '\n')
+      .replace(new RegExp(`\\|\\s*${markerPattern}`, 'g'), '|\n')
+      .replace(/([。！？!?])\s*(#{1,6})(?=\S)/g, '$1\n$2')
+      .replace(/([^\s`])\s*```([a-z0-9+-]{0,32})\s*(?=\n|$)/gi, '$1\n```$2');
+    text = text
+      .split('\n')
+      .map((line) => {
+        if (line.includes('|')) {
+          return line;
+        }
+        let normalizedLine = line.replace(
+          new RegExp(`${markerPattern}\\s*(?=(?:#{1,6}(?=\\S)|>|[-*+]\\s|\\d+[.、]\\s|\`\`\`))`, 'g'),
+          '\n',
+        );
+        if (/^\s*#{1,6}(?=\S)/.test(normalizedLine)) {
+          normalizedLine = normalizedLine.replace(HTML_BREAK_MARKER, '\n');
+        }
+        return normalizedLine;
+      })
+      .join('\n')
+      .replace(/(^|\n)(#{1,6})(?=[^\s#])/g, '$1$2 ');
+    return text;
   }
 
   function canJoinParagraph(lines, index, options) {
@@ -164,11 +211,11 @@
   }
 
   function parseListItem(line) {
-    const unordered = /^[-*+]\s+(.+)$/.exec(line);
+    const unordered = /^[-*+](?:\s+|(?=\*\*))(.+)$/.exec(line);
     if (unordered) {
       return { type: 'unordered', start: 1, content: unordered[1] };
     }
-    const ordered = /^(\d+)[.、]\s+(.+)$/.exec(line);
+    const ordered = /^(\d+)[.、](?:\s+|(?=\*\*))(.+)$/.exec(line);
     if (ordered) {
       return { type: 'ordered', start: Number(ordered[1]), content: ordered[2] };
     }
@@ -335,7 +382,9 @@
       .replace(/~~(\S(?:[\s\S]*?\S)?)~~/g, '<del>$1</del>')
       .replace(/(^|[^\\w])\*([^*\n]+?)\*(?!\w)/g, '$1<em>$2</em>');
 
-    output = output.replace(/\u0000ima-answer-(\d+)\u0000/g, (_match, index) => tokens[Number(index)] || '');
+    output = output
+      .replace(/\u0000ima-answer-(\d+)\u0000/g, (_match, index) => tokens[Number(index)] || '')
+      .replace(new RegExp(escapeRegExp(HTML_BREAK_MARKER), 'g'), '<br>');
     return output;
   }
 
@@ -377,6 +426,10 @@
 
   function escapeAttribute(value) {
     return escapeHtml(value).replace(/`/g, '&#96;');
+  }
+
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   function escapeHtml(value) {
