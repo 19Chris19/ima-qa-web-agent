@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="286" viewBox="0 0 1200 286" role="img" aria-labelledby="title desc">
+  <title id="title">三类使用者的 Provider A 入口</title>
+  <desc id="desc">普通用户打开问答页，网站接入者使用嵌入页，服务维护者打开账号管理页。</desc>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#18212f" stroke-opacity=".045" stroke-width="1" />
+    </pattern>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+  </defs>
+  <rect width="1200" height="286" rx="12" fill="#fbfaf7" />
+  <rect width="1200" height="286" rx="12" fill="url(#grid)" />
+  <rect x=".5" y=".5" width="1199" height="285" rx="11.5" fill="none" stroke="#d9dfdf" />
+
+  <g class="ui">
+    <text x="48" y="48" fill="#18212f" font-size="28" font-weight="750">先找到自己的入口</text>
+    <text x="48" y="76" fill="#627083" font-size="16">服务已启动后，按你的角色打开对应页面；账号和内部凭证不会出现在普通用户界面。</text>
+
+    <g transform="translate(48 110)">
+      <rect width="346" height="132" rx="10" fill="#ffffff" stroke="#b8cac9" />
+      <rect x="18" y="18" width="42" height="42" rx="8" fill="#edf7f5" stroke="#b8cac9" />
+      <text x="39" y="45" fill="#0d6266" font-size="16" font-weight="750" text-anchor="middle">Q</text>
+      <text x="76" y="38" fill="#18212f" font-size="18" font-weight="750">我要提问</text>
+      <text class="mono" x="76" y="60" fill="#0d6266" font-size="14">/</text>
+      <text x="18" y="94" fill="#627083" font-size="14">新建、切换并持续追问自己的会话。</text>
+      <text x="18" y="116" fill="#627083" font-size="14">来源卡片随回答一同保留。</text>
+    </g>
+
+    <g transform="translate(427 110)">
+      <rect width="346" height="132" rx="10" fill="#ffffff" stroke="#c8d5e7" />
+      <rect x="18" y="18" width="42" height="42" rx="8" fill="#eef4fb" stroke="#c8d5e7" />
+      <text x="39" y="45" fill="#315f9f" font-size="16" font-weight="750" text-anchor="middle">E</text>
+      <text x="76" y="38" fill="#18212f" font-size="18" font-weight="750">我要嵌入网站</text>
+      <text class="mono" x="76" y="60" fill="#315f9f" font-size="14">/embed.html</text>
+      <text x="18" y="94" fill="#627083" font-size="14">同源 iframe 使用完整问答和会话界面。</text>
+      <text x="18" y="116" fill="#627083" font-size="14">外站嵌入需配置精确允许来源。</text>
+    </g>
+
+    <g transform="translate(806 110)">
+      <rect width="346" height="132" rx="10" fill="#ffffff" stroke="#ead0ad" />
+      <rect x="18" y="18" width="42" height="42" rx="8" fill="#fff7ed" stroke="#ead0ad" />
+      <text x="39" y="45" fill="#b66d18" font-size="16" font-weight="750" text-anchor="middle">A</text>
+      <text x="76" y="38" fill="#18212f" font-size="18" font-weight="750">我维护账号</text>
+      <text class="mono" x="76" y="60" fill="#b66d18" font-size="14">/admin.html</text>
+      <text x="18" y="94" fill="#627083" font-size="14">扫码接入、检查、刷新、启停和删除账号。</text>
+      <text x="18" y="116" fill="#627083" font-size="14">只显示脱敏状态，不显示登录态。</text>
+    </g>
+  </g>
+</svg>
