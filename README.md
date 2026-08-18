@@ -10,6 +10,8 @@
   <a href="#会话与账号池"><strong>理解会话与并发</strong></a>
   &nbsp;·&nbsp;
   <a href="./docs/DEPLOYMENT.md"><strong>部署文档</strong></a>
+  &nbsp;·&nbsp;
+  <a href="./CHANGELOG.md"><strong>更新日志</strong></a>
 </p>
 
 > 一个面向网站交付的 IMA 共享知识库问答服务。它通过**已授权账号**调用 IMA 网页端能力，提供流式回答、可持续追问的会话、来源卡片和可维护的账号池。

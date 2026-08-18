@@ -1,6 +1,6 @@
 {
   "name": "ima-qa-web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "IMA shared knowledge base QA gateway with streaming Web Agent answers, isolated conversations, and encrypted account-pool enrollment.",
   "repository": {
     "type": "git",
@@ -11,6 +11,25 @@
   },
   "homepage": "https://github.com/19Chris19/ima-qa-web-agent#readme",
   "main": "provider-a-server.js",
+  "files": [
+    "assets",
+    "docs",
+    "eval",
+    "public",
+    "scripts",
+    "src",
+    "test",
+    ".dockerignore",
+    ".env.example",
+    ".env.provider-a.example",
+    "CHANGELOG.md",
+    "compose.yaml",
+    "Dockerfile",
+    "LICENSE",
+    "provider-a-server.js",
+    "README.md",
+    "server.js"
+  ],
   "scripts": {
     "eval:dry-run": "node eval/run-eval.mjs --dry-run",
     "eval:run": "node eval/run-eval.mjs",
