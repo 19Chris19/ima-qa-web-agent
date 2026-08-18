@@ -15,44 +15,40 @@
 
 ## Configuration
 
-单账号继续支持：
+新部署不需要手写 cookie、`IMA_WEB_AGENT_HEADERS_JSON` 或账号池 JSON。先运行初始化，再让每个已获授权的账号各扫码一次：
 
-```env
-IMA_QA_PROVIDER=ima-web-agent
-IMA_WEB_KNOWLEDGE_BASE_ID=your_ima_web_numeric_kb_id
-IMA_WEB_AGENT_HEADERS_JSON={"x-ima-cookie":"...","x-ima-bkn":"..."}
-IMA_QA_MAX_CONCURRENT_ASK=1
+```bash
+npm run setup:provider-a
+docker compose up -d --build
+npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
 ```
 
-账号池使用：
+接入第二个账号时只改账号名。账号凭证会加密写入服务器私有的 `runtime/`，不会出现在浏览器、管理 API、公开文档或 Git 中。完整操作见 [DEPLOYMENT.md](DEPLOYMENT.md#逐账号接入)。
+
+账号池默认使用自动容量模式：每个启用账号贡献一条上游并发。接入、停用或删除账号后，容量立即重算，无需编辑 `.env` 或重启；单个账号仍固定同一时刻只处理一条 IMA 问答。
+
+如有明确的容量上限需求，才在私有 `.env` 中改为固定模式：
 
 ```env
-IMA_QA_PROVIDER=ima-web-agent
-IMA_WEB_AGENT_ACCOUNTS_JSON='[
-  {
-    "name": "account-a",
-    "knowledgeBaseId": "your_ima_web_numeric_kb_id",
-    "headers": {"x-ima-cookie":"...","x-ima-bkn":"..."},
-    "runtimeEnvPath": "/app/runtime/account-a.env"
-  },
-  {
-    "name": "account-b",
-    "knowledgeBaseId": "your_ima_web_numeric_kb_id",
-    "headers": {"x-ima-cookie":"...","x-ima-bkn":"..."},
-    "runtimeEnvPath": "/app/runtime/account-b.env"
-  }
-]'
+IMA_QA_ACCOUNT_POOL_CAPACITY_MODE=fixed
 IMA_QA_MAX_CONCURRENT_ASK=5
-IMA_WEB_AGENT_ACCOUNT_COOLDOWN_MS=120000
-IMA_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS=2
 ```
 
-如果配置多个账号但不写 `IMA_QA_MAX_CONCURRENT_ASK`，服务默认使用 `min(账号数, 5)`。超过 5 个账号仍建议先压测，再显式提高。
+### 旧版私有配置迁移
+
+以下变量仅用于已经存在的私有运行环境迁移，不是新部署入口，也不应把 cookie 或完整 JSON 粘贴到 Issue、日志或 Git。所有账号必须使用同一个 IMA Web 共享库数字 ID，例如文档中的虚构值 `123456789`：
+
+```env
+IMA_QA_PROVIDER=ima-web-agent
+IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID=123456789
+```
+
+若旧版本曾导出 `runtime/web-agent-accounts/*.env`，使用 `npm run admin:seal-runtime` 预览迁移内容；确认后再加 `-- --apply`。新版本的加密账号库才是运行期唯一真源。
 
 ## Runtime Behavior
 
-- 每个请求从账号池租一个空闲账号，并且每次都新建 IMA session。
-- 前端传来的 `history` 不参与 Web Agent 上游请求，避免上下文串号。
+- 新会话的首轮请求从账号池租用一个空闲账号并创建 IMA session；同一会话的追问固定复用该账号和 IMA session。
+- 客户端自由传入的 `history` 不直接参与 Web Agent 上游请求。服务端只使用已归属、已隔离的会话历史，避免伪造历史或不同用户串号。
 - 调度策略是 least-recently-used：优先使用最久没用过的空闲账号。
 - 账号触发“提问太快啦”、HTTP 429 或连续错误后进入冷却。
 - 账号出现登录失败、登录过期、未登录、鉴权失败后标记为 unavailable，直到维护者重新生成登录态并重启服务。

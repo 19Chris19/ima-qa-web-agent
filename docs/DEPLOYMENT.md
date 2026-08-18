@@ -33,8 +33,8 @@ Provider A 发布不需要：
 ### Docker 部署
 
 ```bash
-git clone <你的 GitHub 仓库地址>
-cd <仓库根目录>/apps/ima-qa-web
+git clone https://github.com/19Chris19/ima-qa-web-agent.git
+cd ima-qa-web-agent
 npm ci
 npm run setup:provider-a
 docker compose up -d --build
@@ -58,9 +58,7 @@ docker compose logs -f ima-qa-web
 
 实时语音服务需要低置信度补查时，可用专门的内部 token 调用 `POST /internal/provider-a/deep-ask`。它与公开 `/api/ask`、管理员接口和账号接入完全分开：
 
-```env
-IMA_QA_INTERNAL_SERVICE_TOKEN=replace_with_a_private_service_token
-```
+使用 `openssl rand -hex 32` 生成 token，并将输出仅写入 Provider A 私有 `.env` 的 `IMA_QA_INTERNAL_SERVICE_TOKEN`。
 
 VoiceRAG 在自己的 `.env` 将同一个值设为 `VOICE_RAG_PROVIDER_A_TOKEN`，并只通过容器私网地址请求该入口。不要用 `IMA_QA_API_TOKEN` 或 `IMA_QA_ADMIN_TOKEN` 代替它。Nginx 必须对 `/internal/` 返回 404，不能将此路径暴露到互联网。
 
@@ -106,23 +104,23 @@ npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
 
 ### 远程服务器 + 本机扫码
 
-服务器没有 GUI 时，先在服务器启动服务，再在维护机建立 SSH 隧道：
+服务器没有 GUI 时，先在服务器启动服务，再在维护机通过 SSH 主机别名 `ima-qa` 建立隧道：
 
 ```bash
-ssh -N -L 3117:127.0.0.1:3117 deploy@your-server
+ssh -N -L 3117:127.0.0.1:3117 ima-qa
 ```
 
 然后在维护机项目副本中运行：
 
 ```bash
-IMA_QA_ADMIN_TOKEN='服务器 .env 中的管理员 token' \
+read -rs IMA_QA_ADMIN_TOKEN
+export IMA_QA_ADMIN_TOKEN
 npm run admin:enroll -- \
   --name account-a \
-  --kb '共享库 Web 数字 ID' \
   --server-url http://127.0.0.1:3117
 ```
 
-这个方式不把管理 API 直接暴露给公网。维护机只需 Node、项目副本和一个可打开的 Chrome、Chromium 或 Ego Lite。
+`ima-qa` 是维护机 SSH 配置中的服务器别名；已有其他别名时直接替换命令中的名称。这个方式不把管理 API 直接暴露给公网。维护机只需 Node、项目副本和一个可打开的 Chrome、Chromium 或 Ego Lite。
 
 ## 账号状态、刷新与失效
 

@@ -6,6 +6,8 @@
 
 `npm start` 与 Docker 镜像都会校验 `IMA_QA_PROVIDER=ima-web-agent`，其他 Provider 配置会拒绝启动。这让交付给客户的标准路径只运行 Provider A。
 
+开源仓库：[19Chris19/ima-qa-web-agent](https://github.com/19Chris19/ima-qa-web-agent)。
+
 ## 准备事项
 
 部署者需要准备四样东西：
@@ -18,18 +20,22 @@
 ## 最短部署路径
 
 ```bash
-git clone <你的 GitHub 仓库地址>
-cd <GitHub 仓库目录>
+git clone https://github.com/19Chris19/ima-qa-web-agent.git
+cd ima-qa-web-agent
 npm ci
 npm run setup:provider-a
 docker compose up -d --build
 ```
 
-初始化向导只会询问共享知识库 ID 和可选的网页域名，自动创建私有 `.env`、管理员 token 与 `runtime/` 数据目录。启动后：
+初始化向导只会询问共享知识库 ID 和可选的网页域名，自动创建私有 `.env`、管理员 token 与 `runtime/` 数据目录。
 
-- 问答页：`http://服务器地址:3117/`
-- 嵌入页：`http://服务器地址:3117/embed.html`
-- 账号管理页：`http://服务器地址:3117/admin.html`
+本机或服务器本机验收时，使用以下地址：
+
+- 问答页：[http://127.0.0.1:3117/](http://127.0.0.1:3117/)
+- 嵌入页：[http://127.0.0.1:3117/embed.html](http://127.0.0.1:3117/embed.html)
+- 账号管理页：[http://127.0.0.1:3117/admin.html](http://127.0.0.1:3117/admin.html)
+
+默认端口只绑定服务器本机。公网访问应通过 Nginx 的 HTTPS 域名转发到 `127.0.0.1:3117`，不要直接公开 `:3117` 或服务器 IP。
 
 接入第一个账号：
 
@@ -60,21 +66,21 @@ npm run admin:enroll -- --name account-b --server-url http://127.0.0.1:3117
 
 ## 服务器没有图形界面时
 
-浏览器扫码必须在有 GUI 的维护机上完成，不能在纯 Linux 服务器里“弹出到你的电脑”。推荐用 SSH 隧道把服务器的管理接口只暴露到维护机：
+浏览器扫码必须在有 GUI 的维护机上完成，不能在纯 Linux 服务器里“弹出到你的电脑”。推荐为服务器设置 SSH 主机别名 `ima-qa`，再用隧道把管理接口只暴露到维护机：
 
 ```bash
 # 在维护机执行，保持该窗口开启
-ssh -N -L 3117:127.0.0.1:3117 deploy@your-server
+ssh -N -L 3117:127.0.0.1:3117 ima-qa
 
-# 在维护机的项目副本中执行。值从服务器私有 .env 获取，不要提交或发送。
-IMA_QA_ADMIN_TOKEN='你的管理员 token' \
+# 在维护机的项目副本中执行。安全输入服务器私有 .env 中的管理员 token。
+read -rs IMA_QA_ADMIN_TOKEN
+export IMA_QA_ADMIN_TOKEN
 npm run admin:enroll -- \
   --name account-a \
-  --kb '共享库 Web 数字 ID' \
   --server-url http://127.0.0.1:3117
 ```
 
-扫码脚本会在维护机本地打开浏览器，但捕获到的凭证通过隧道写入服务器的加密账号库。浏览器临时 profile 会在成功后自动删除。
+`ima-qa` 是你在维护机 SSH 配置中定义的服务器别名；如果已有其他 SSH 主机别名，直接使用它。扫码脚本会在维护机本地打开浏览器，但捕获到的凭证通过隧道写入服务器的加密账号库。浏览器临时 profile 会在成功后自动删除。
 
 ## 登录态与备份
 
@@ -95,11 +101,11 @@ npm run admin:seal-runtime -- --apply
 
 ## 嵌入与公网
 
-嵌入现成界面：
+同源网站嵌入现成界面：
 
 ```html
 <iframe
-  src="https://qa.example.com/embed.html"
+  src="/embed.html"
   style="width: 100%; height: 640px; border: 0"
   title="共享知识库问答"
 ></iframe>
@@ -131,10 +137,6 @@ npm run test:concurrency -- \
 
 `apps/ima-voice-rag` 是独立的实时语音入口。它在本地检索证据不足时，才会调用本服务的私有 `POST /internal/provider-a/deep-ask`；普通网页用户仍只走公开的 `/api/ask`。
 
-启用前在本服务 `.env` 设置一个专用的随机值：
+启用前使用 `openssl rand -hex 32` 生成专用随机值，并仅写入本服务私有 `.env` 的 `IMA_QA_INTERNAL_SERVICE_TOKEN`。
 
-```env
-IMA_QA_INTERNAL_SERVICE_TOKEN=replace_with_a_private_service_token
-```
-
-然后在 VoiceRAG 的 `.env` 用同一个值配置 `VOICE_RAG_PROVIDER_A_TOKEN`。这个 token 必须与管理员 token、公开 API token 不同，不能出现在浏览器、iframe、前端代码、访问日志或 Git 中。反向代理必须拒绝 `/internal/`；部署细节见 [VoiceRAG 部署指南](../ima-voice-rag/docs/DEPLOYMENT.md)。
+然后在 VoiceRAG 的 `.env` 用同一个值配置 `VOICE_RAG_PROVIDER_A_TOKEN`。这个 token 必须与管理员 token、公开 API token 不同，不能出现在浏览器、iframe、前端代码、访问日志或 Git 中。反向代理必须拒绝 `/internal/`。VoiceRAG 不包含在本 Provider A 独立发布仓库内，应在保留 VoiceRAG 源码的私有整合环境中配置这条链路。
