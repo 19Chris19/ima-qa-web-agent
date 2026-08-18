@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+  <title id="title">IMA QA Web Agent</title>
+  <desc id="desc">将已授权 IMA 共享知识库接成可嵌入、可管理的多会话问答服务。</desc>
+  <defs>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#18212f" stroke-opacity=".055" stroke-width="1" />
+    </pattern>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+  </defs>
+  <rect width="1200" height="400" rx="12" fill="#fbfaf7" />
+  <rect width="1200" height="400" rx="12" fill="url(#grid)" />
+  <rect x="0.5" y="0.5" width="1199" height="399" rx="11.5" fill="none" stroke="#d9dfdf" />
+
+  <g class="ui" transform="translate(64 60)">
+    <text x="0" y="0" fill="#167c80" font-size="16" font-weight="700">PROVIDER A · IMA WEB AGENT</text>
+    <text x="0" y="78" fill="#18212f" font-size="58" font-weight="750">IMA QA</text>
+    <text x="0" y="132" fill="#18212f" font-size="38" font-weight="650">Web Agent</text>
+    <text x="0" y="184" fill="#627083" font-size="22">把已授权 IMA 共享知识库接成</text>
+    <text x="0" y="216" fill="#627083" font-size="22">可嵌入、可管理的多会话问答服务。</text>
+
+    <g transform="translate(0 252)">
+      <rect width="112" height="36" rx="18" fill="#edf7f5" stroke="#b8cac9" />
+      <text x="56" y="24" fill="#0d6266" font-size="15" font-weight="650" text-anchor="middle">流式回答</text>
+      <rect x="126" width="112" height="36" rx="18" fill="#eef4fb" stroke="#c8d5e7" />
+      <text x="182" y="24" fill="#315f9f" font-size="15" font-weight="650" text-anchor="middle">会话隔离</text>
+      <rect x="252" width="96" height="36" rx="18" fill="#fff7ed" stroke="#ead0ad" />
+      <text x="300" y="24" fill="#b66d18" font-size="15" font-weight="650" text-anchor="middle">账号池</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(680 52)">
+    <rect x="0" y="0" width="456" height="296" rx="10" fill="#ffffff" stroke="#d9dfdf" />
+    <text x="26" y="34" fill="#627083" font-size="14" font-weight="700">一个问题的受控路径</text>
+    <line x1="26" y1="52" x2="430" y2="52" stroke="#edf0ef" />
+
+    <g transform="translate(26 78)">
+      <rect width="102" height="62" rx="8" fill="#f7f9f8" stroke="#d9dfdf" />
+      <text x="51" y="25" fill="#18212f" font-size="14" font-weight="700" text-anchor="middle">网站用户</text>
+      <text x="51" y="45" fill="#627083" font-size="12" text-anchor="middle">问答 / iframe</text>
+
+      <path d="M 118 31 H 148" fill="none" stroke="#167c80" stroke-width="2" />
+      <path d="M 143 26 L 148 31 143 36" fill="none" stroke="#167c80" stroke-width="2" />
+
+      <rect x="158" width="112" height="62" rx="8" fill="#edf7f5" stroke="#b8cac9" />
+      <text x="214" y="25" fill="#0d6266" font-size="14" font-weight="700" text-anchor="middle">会话控制</text>
+      <text x="214" y="45" fill="#0d6266" font-size="12" text-anchor="middle">客户归属 + 历史</text>
+
+      <path d="M 260 31 H 290" fill="none" stroke="#167c80" stroke-width="2" />
+      <path d="M 285 26 L 290 31 285 36" fill="none" stroke="#167c80" stroke-width="2" />
+
+      <rect x="300" width="104" height="62" rx="8" fill="#fff7ed" stroke="#ead0ad" />
+      <text x="352" y="25" fill="#b66d18" font-size="14" font-weight="700" text-anchor="middle">账号池</text>
+      <text x="352" y="45" fill="#b66d18" font-size="12" text-anchor="middle">一号一条 active ask</text>
+    </g>
+
+    <g transform="translate(26 174)">
+      <rect width="404" height="86" rx="8" fill="#f7f9f8" stroke="#d9dfdf" />
+      <circle cx="34" cy="43" r="17" fill="#eef7f5" stroke="#b8cac9" />
+      <path d="M27 43h14M34 36v14" fill="none" stroke="#0d6266" stroke-width="2" stroke-linecap="round" />
+      <text x="68" y="36" fill="#18212f" font-size="16" font-weight="700">IMA 共享知识库问答</text>
+      <text x="68" y="59" fill="#627083" font-size="13">原生网页问答 · 流式返回 · 来源卡片</text>
+      <text x="68" y="78" fill="#627083" font-size="13">登录态加密保存，普通用户不可见</text>
+    </g>
+  </g>
+  <text class="mono" x="1136" y="378" fill="#627083" font-size="12" text-anchor="end">self-hosted · Provider A</text>
+</svg>

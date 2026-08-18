@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="348" viewBox="0 0 1200 348" role="img" aria-labelledby="title desc">
+  <title id="title">Provider A 首次部署与使用流程</title>
+  <desc id="desc">维护者初始化共享库后逐账号扫码接入，账号池为网站问答页和嵌入页提供受控的 IMA 知识库问答能力。</desc>
+  <defs>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+  </defs>
+  <rect width="1200" height="348" rx="12" fill="#ffffff" />
+  <rect x="0.5" y="0.5" width="1199" height="347" rx="11.5" fill="none" stroke="#d9dfdf" />
+  <g class="ui">
+    <text x="50" y="52" fill="#18212f" font-size="28" font-weight="750">从共享知识库到网站问答</text>
+    <text x="50" y="80" fill="#627083" font-size="16">部署者只做初始化与逐账号扫码；用户只需打开问答页或嵌入页。</text>
+
+    <path d="M184 184 H1016" fill="none" stroke="#c4d9d6" stroke-width="3" stroke-linecap="round" />
+    <path d="M1007 177 L1016 184 1007 191" fill="none" stroke="#167c80" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+
+    <g transform="translate(66 132)">
+      <circle cx="46" cy="52" r="46" fill="#edf7f5" stroke="#b8cac9" stroke-width="2" />
+      <text x="46" y="59" fill="#0d6266" font-size="25" font-weight="750" text-anchor="middle">01</text>
+      <text x="46" y="122" fill="#18212f" font-size="17" font-weight="700" text-anchor="middle">初始化服务</text>
+      <text x="46" y="146" fill="#627083" font-size="14" text-anchor="middle">填写共享库数字 ID</text>
+    </g>
+
+    <g transform="translate(298 132)">
+      <circle cx="46" cy="52" r="46" fill="#eef4fb" stroke="#c8d5e7" stroke-width="2" />
+      <text x="46" y="59" fill="#315f9f" font-size="25" font-weight="750" text-anchor="middle">02</text>
+      <text x="46" y="122" fill="#18212f" font-size="17" font-weight="700" text-anchor="middle">扫码接入账号</text>
+      <text x="46" y="146" fill="#627083" font-size="14" text-anchor="middle">逐账号独立验证</text>
+    </g>
+
+    <g transform="translate(530 132)">
+      <circle cx="46" cy="52" r="46" fill="#fff7ed" stroke="#ead0ad" stroke-width="2" />
+      <text x="46" y="59" fill="#b66d18" font-size="25" font-weight="750" text-anchor="middle">03</text>
+      <text x="46" y="122" fill="#18212f" font-size="17" font-weight="700" text-anchor="middle">账号池调度</text>
+      <text x="46" y="146" fill="#627083" font-size="14" text-anchor="middle">每账号一条 active ask</text>
+    </g>
+
+    <g transform="translate(762 132)">
+      <circle cx="46" cy="52" r="46" fill="#edf7f5" stroke="#b8cac9" stroke-width="2" />
+      <text x="46" y="59" fill="#0d6266" font-size="25" font-weight="750" text-anchor="middle">04</text>
+      <text x="46" y="122" fill="#18212f" font-size="17" font-weight="700" text-anchor="middle">会话持续追问</text>
+      <text x="46" y="146" fill="#627083" font-size="14" text-anchor="middle">账号与 session 固定</text>
+    </g>
+
+    <g transform="translate(994 132)">
+      <circle cx="46" cy="52" r="46" fill="#eef4fb" stroke="#c8d5e7" stroke-width="2" />
+      <text x="46" y="59" fill="#315f9f" font-size="25" font-weight="750" text-anchor="middle">05</text>
+      <text x="46" y="122" fill="#18212f" font-size="17" font-weight="700" text-anchor="middle">网站交付</text>
+      <text x="46" y="146" fill="#627083" font-size="14" text-anchor="middle">问答页 / iframe</text>
+    </g>
+  </g>
+  <text class="mono" x="1148" y="314" fill="#627083" font-size="13" text-anchor="end">一号一条上游并发 · 多会话排队复用</text>
+</svg>
