@@ -17,7 +17,12 @@ const {
   DEFAULT_WEB_AGENT_ACCOUNT_STORE_KEY_PATH,
   DEFAULT_WEB_AGENT_ACCOUNT_STORE_PATH,
   DEFAULT_WEB_AGENT_BROWSER_PATH,
+  DEFAULT_WEB_AGENT_ENROLLMENT_BROWSER_LAUNCH_TIMEOUT_MS,
+  DEFAULT_WEB_AGENT_ENROLLMENT_BROWSER_MODE,
+  DEFAULT_WEB_AGENT_ENROLLMENT_TIMEOUT_MS,
+  DEFAULT_WEB_AGENT_ENROLLMENT_SCREENSHOT_INTERVAL_MS,
   DEFAULT_CONVERSATION_TTL_MS,
+  DEFAULT_ACCOUNT_POOL_EXERCISE_REPORT_TTL_MS,
   DEFAULT_IMA_OPENAPI_ENRICH_SNIPPET_THRESHOLD,
   DEFAULT_IMA_OPENAPI_MAX_ENRICHED_SOURCES,
   DEFAULT_IMA_OPENAPI_MAX_RETRIES,
@@ -142,8 +147,54 @@ test('getConfig allows Web Agent control plane startup without pre-seeded accoun
   assert.equal(config.webAgent.accountStorePath, DEFAULT_WEB_AGENT_ACCOUNT_STORE_PATH);
   assert.equal(config.webAgent.accountStoreKeyPath, DEFAULT_WEB_AGENT_ACCOUNT_STORE_KEY_PATH);
   assert.equal(config.webAgent.browserPath, DEFAULT_WEB_AGENT_BROWSER_PATH);
+  assert.equal(config.webAgent.enrollmentBrowserMode, DEFAULT_WEB_AGENT_ENROLLMENT_BROWSER_MODE);
+  assert.equal(config.webAgent.enrollmentTimeoutMs, DEFAULT_WEB_AGENT_ENROLLMENT_TIMEOUT_MS);
+  assert.equal(
+    config.webAgent.enrollmentBrowserLaunchTimeoutMs,
+    DEFAULT_WEB_AGENT_ENROLLMENT_BROWSER_LAUNCH_TIMEOUT_MS,
+  );
+  assert.equal(
+    config.webAgent.enrollmentScreenshotIntervalMs,
+    DEFAULT_WEB_AGENT_ENROLLMENT_SCREENSHOT_INTERVAL_MS,
+  );
   assert.equal(config.concurrency.maxConcurrentAsk, DEFAULT_MAX_CONCURRENT_ASK);
   assert.equal(config.concurrency.autoScaleWithAccounts, true);
+});
+
+test('getConfig accepts a bounded browser launch timeout for QR enrollment', () => {
+  const config = getConfig({
+    IMA_QA_PROVIDER: 'ima-web-agent',
+    IMA_WEB_AGENT_ENROLLMENT_BROWSER_LAUNCH_TIMEOUT_MS: '12000',
+  });
+
+  assert.equal(config.webAgent.enrollmentBrowserLaunchTimeoutMs, 12000);
+  assert.throws(
+    () => getConfig({
+      IMA_QA_PROVIDER: 'ima-web-agent',
+      IMA_WEB_AGENT_ENROLLMENT_BROWSER_LAUNCH_TIMEOUT_MS: '999',
+    }),
+    /IMA_WEB_AGENT_ENROLLMENT_BROWSER_LAUNCH_TIMEOUT_MS/,
+  );
+});
+
+test('getConfig accepts background and visible QR enrollment browser modes', () => {
+  const background = getConfig({
+    IMA_QA_PROVIDER: 'ima-web-agent',
+    IMA_WEB_AGENT_ENROLLMENT_BROWSER_MODE: 'background',
+  });
+  const visible = getConfig({
+    IMA_QA_PROVIDER: 'ima-web-agent',
+    IMA_WEB_AGENT_ENROLLMENT_BROWSER_MODE: 'visible',
+  });
+  assert.equal(background.webAgent.enrollmentBrowserMode, 'background');
+  assert.equal(visible.webAgent.enrollmentBrowserMode, 'visible');
+  assert.throws(
+    () => getConfig({
+      IMA_QA_PROVIDER: 'ima-web-agent',
+      IMA_WEB_AGENT_ENROLLMENT_BROWSER_MODE: 'silent',
+    }),
+    /silent is not a supported value/,
+  );
 });
 
 test('getConfig keeps the configured Web Agent shared knowledge base before accounts enroll', () => {
@@ -366,6 +417,20 @@ test('getConfig parses persistent conversation settings', () => {
   assert.equal(config.conversations.ttlMs, 3600000);
   assert.equal(config.conversations.maxTurns, 8);
   assert.equal(config.conversations.maxCount, 99);
+});
+
+test('getConfig parses private account pool exercise report settings', () => {
+  const config = getConfig({
+    IMA_QA_PROVIDER: 'ima-web-agent',
+    IMA_QA_EXERCISE_REPORT_STORE_PATH: '/tmp/ima-exercises.json',
+    IMA_QA_EXERCISE_REPORT_TTL_MS: '3600000',
+    IMA_QA_EXERCISE_REPORT_MAX_COUNT: '12',
+  });
+
+  assert.equal(config.exercises.reportStorePath, '/tmp/ima-exercises.json');
+  assert.equal(config.exercises.reportTtlMs, 3600000);
+  assert.equal(config.exercises.reportMaxCount, 12);
+  assert.equal(DEFAULT_ACCOUNT_POOL_EXERCISE_REPORT_TTL_MS, 604800000);
 });
 
 test('getConfig validates Web Agent mode requirements', () => {

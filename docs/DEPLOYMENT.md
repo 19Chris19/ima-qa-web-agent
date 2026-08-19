@@ -7,12 +7,12 @@ flowchart LR
   User[网站用户] --> QA[IMA QA Web]
   QA --> Pool[账号池]
   Pool --> IMA[IMA Web 共享知识库问答]
-  Maintainer[维护机扫码] --> Enroll[接入脚本]
+  Maintainer[维护机扫码] --> Enroll[管理页二维码或接入脚本]
   Enroll --> Store[加密账号库]
   Store --> Pool
 ```
 
-服务运行时不控制浏览器。浏览器只在逐账号接入时短暂打开，用来完成 IMA 官方登录；成功后脚本提取必要登录态、验证共享库访问、关闭浏览器，并删除临时浏览器 profile。运行期使用加密账号库和 refresh token 维持登录态。
+服务运行时不控制浏览器。浏览器只在逐账号接入时短暂打开，用来完成 IMA 官方登录；成功后服务提取必要登录态、验证共享库访问、关闭浏览器，并删除临时浏览器 profile。运行期使用加密账号库和 refresh token 维持登录态。
 
 ## 发布内容与排除内容
 
@@ -74,6 +74,27 @@ npm start
 
 ## 逐账号接入
 
+### 管理页二维码接入（推荐）
+
+在服务所在的有图形界面的维护机打开 `/admin.html`，输入 `IMA_QA_ADMIN_TOKEN` 后点击“接入账号”。输入内部账号名称后，服务默认在后台创建独立 IMA 浏览器资料，并在管理页显示一次性二维码；手机扫码后，服务端会自动完成共享库校验、加密入库和账号池同步。默认后台模式不显示额外浏览器窗口。
+
+若 IMA 页面、登录入口或微信二维码框架加载较慢，管理页会展示脱敏的具体阶段、累计等待时间和重试建议。页面内二维码未能及时读取时，任务不会直接失败；点击“打开受控登录窗口”后才会切换为可见窗口，可在该窗口继续扫码，登录态仍会被自动验证、保存并在完成后关闭窗口。
+
+这条路径不会把二维码原文、cookie、refresh token 或浏览器 profile 发送到前端。每次任务使用全新临时浏览器 profile，服务会拦截 IMA 页面中的“快捷登录”，且只有确认已进入二维码模式后才接受登录态，避免误用维护机已登录的微信账号。页面只短期获取受管理员 token 保护的登录截图和脱敏状态；任务默认 5 分钟超时，支持取消。配置浏览器可执行文件时使用：
+
+```env
+IMA_WEB_AGENT_BROWSER_PATH=/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+IMA_WEB_AGENT_ENROLLMENT_TIMEOUT_MS=300000
+IMA_WEB_AGENT_ENROLLMENT_BROWSER_LAUNCH_TIMEOUT_MS=75000
+IMA_WEB_AGENT_ENROLLMENT_BROWSER_MODE=background
+```
+
+页面二维码接入要求 Node 进程本机可启动浏览器。默认 Docker 镜像没有桌面浏览器，纯 Linux 服务器继续使用下方“远程服务器 + 本机扫码”的 CLI 路径，不要把 `/api/admin/` 暴露到公网。
+
+服务不以维护者填写的名称识别 IMA 账号。它会由 `IMA-UID` 派生仅服务端可用的不可逆指纹，阻止同一 IMA 账号被重复接入为多个并发槽。旧账号库在首次加载时也会检查重复身份；重复条目会被自动停用而不删除，确认后可从管理页删除。
+
+### CLI 接入（兼容兜底）
+
 本机或有桌面环境的维护机：
 
 ```bash
@@ -95,7 +116,7 @@ npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
 接入顺序：
 
 1. 给账号命名并运行命令。脚本先验证管理员 token、同一共享库和账号名称。
-2. 在弹出的独立浏览器窗口里完成 IMA 登录或扫码。
+2. 在弹出的独立浏览器窗口里只使用待接入账号扫描 IMA 二维码；不要选择“快捷登录”。
 3. 确认账号已经加入目标共享知识库。
 4. 脚本捕获登录态后调用 `init_session` 验证权限。
 5. 验证成功：凭证加密写入服务端，浏览器自动关闭；验证失败：不写入账号池。
@@ -124,7 +145,7 @@ npm run admin:enroll -- \
 
 ## 账号状态、刷新与失效
 
-管理页：`/admin.html`。输入 `IMA_QA_ADMIN_TOKEN` 后可检查、刷新、启用、停用和删除账号；token 只存在浏览器会话内，不会写入本地存储。
+管理页：`/admin.html`。输入 `IMA_QA_ADMIN_TOKEN` 后可扫码接入、检查、刷新、启用、停用和删除账号；token 只存在浏览器会话内，不会写入本地存储。
 
 自动行为：
 
@@ -159,6 +180,29 @@ npm run admin:seal-runtime -- --apply
 IMA_QA_ACCOUNT_POOL_CAPACITY_MODE=fixed
 IMA_QA_MAX_CONCURRENT_ASK=5
 ```
+
+## 账号池并发演练
+
+`/admin.html` 提供仅管理员可用的真实 IMA 演练。它不是本地 mock：演练脚本会经过当前的账号池、全局队列、IMA session 粘滞和共享知识库问答链路，用于验证新增账号是否带来独立稳定并发、排队是否正常，以及追问是否仍回到原账号和原上游 session。
+
+启动前，普通问答队列必须为空。启动后服务进入短时维护演练状态，公开 `/api/ask` 返回 `503` 和 `maintenance_exercise`，不进入普通队列；内部 VoiceRAG 深查入口不受此锁影响。完成、取消或进程重启都会释放维护状态。演练不会触发管理页“刷新”、不会重试失败请求、不会自动停用账号，也不会读取、导出或覆盖凭证。
+
+建议每次新增账号后按以下顺序验收：
+
+1. 在账号池对新账号执行“检查”，确认身份独立且有目标共享库权限。
+2. 执行“基线并发”，客户数等于可用独立账号数；确认账号覆盖、会话隔离和追问连续性均通过。
+3. 执行“排队压力”，客户数等于可用账号数两倍；确认出现预期排队、最终清空且失败分类可解释。
+4. 在报告里按相关性、完整性、来源可信度和追问连贯性各评 `0-2` 分；不要将系统指标当作质量评分。
+
+报告位于 `IMA_QA_EXERCISE_REPORT_STORE_PATH`，默认 `runtime/ima-qa-account-pool-exercises.json`，原子写入并尝试设置为 `0600`；默认保留 7 天，最多保留 30 份。可通过以下私有配置调整：
+
+```env
+IMA_QA_EXERCISE_REPORT_STORE_PATH=./runtime/ima-qa-account-pool-exercises.json
+IMA_QA_EXERCISE_REPORT_TTL_MS=604800000
+IMA_QA_EXERCISE_REPORT_MAX_COUNT=30
+```
+
+报告只保存模拟用户脚本、回答、最多 10 条精选来源、性能指标、脱敏错误文本和人工评分；不会保存内部账号 ID、IMA session、cookie、token、二维码或真实客户身份。`runtime/` 必须保持 Git 忽略。
 
 ## Nginx
 

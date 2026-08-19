@@ -16,7 +16,9 @@ docker compose up -d --build
 
 初始化只询问 IMA 网页共享知识库的数字 ID 和可选的允许来源域名。它会生成私有 `.env` 与管理员 token；没有任何 IMA 账号或登录态会随仓库下载。
 
-接入首个账号：
+接入首个账号时，优先打开 `http://127.0.0.1:3117/admin.html`，输入初始化生成的管理员 token，点击“接入账号”并扫描页面二维码。该方式要求运行 Node 的维护机本身能启动 Chrome、Chromium 或 Ego Lite。
+
+无法让服务进程启动本机浏览器时，使用 CLI 兜底：
 
 ```bash
 npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117

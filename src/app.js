@@ -28,6 +28,7 @@ function createApp({
   localRagClient,
   accountDirectory,
   conversationStore,
+  accountPoolExerciseManager,
 }) {
   const app = express();
   const conversations = conversationStore || new ConversationStore({ persist: false });
@@ -36,6 +37,7 @@ function createApp({
     queueLimit: config.concurrency?.queueLimit,
   });
   app.locals.imaQaAskQueue = askQueue;
+  app.locals.accountPoolExerciseManager = accountPoolExerciseManager || null;
   const rateLimiter = createRateLimiter(config.rateLimit);
 
   app.disable('x-powered-by');
@@ -109,6 +111,16 @@ function createApp({
   const askHandler = async (req, res) => {
     const requestId = crypto.randomUUID();
     const isSse = wantsSse(req);
+    if (!req.isInternalProviderADeepAsk && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) {
+      return rejectAskRequest({
+        req,
+        res,
+        requestId,
+        statusCode: 503,
+        message: '管理员正在进行账号池容量演练，请稍后重试',
+        failureReason: 'maintenance_exercise',
+      });
+    }
     const rateLimit = rateLimiter.consume(getClientIp(req));
     if (!rateLimit.ok) {
       res.setHeader('Retry-After', String(rateLimit.retryAfterSeconds));
@@ -279,7 +291,7 @@ function createSecurityHeadersMiddleware(allowedOrigins = []) {
         "form-action 'self'",
         "script-src 'self'",
         "style-src 'self'",
-        "img-src 'self' data:",
+        "img-src 'self' data: blob:",
         "connect-src 'self'",
         `frame-ancestors ${frameAncestors}`,
       ].join('; '),

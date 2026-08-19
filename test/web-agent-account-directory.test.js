@@ -155,6 +155,73 @@ test('WebAgentAccountDirectory rejects duplicate normalized account IDs unless r
   }));
 });
 
+test('WebAgentAccountDirectory rejects the same IMA identity under a new account name', () => {
+  const tempDir = makeTempDirectory();
+  const directory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  const headers = {
+    'x-ima-cookie': 'IMA-UID=same-ima-user; IMA-TOKEN=token-a; IMA-REFRESH-TOKEN=refresh-a',
+    'x-ima-bkn': '123',
+  };
+
+  directory.upsertCapturedAccount({
+    id: 'account-primary',
+    name: 'Account Primary',
+    knowledgeBaseId: 'web-kb-id',
+    headers,
+  });
+
+  assert.throws(
+    () => directory.upsertCapturedAccount({
+      id: 'account-renamed',
+      name: 'Account Renamed',
+      knowledgeBaseId: 'web-kb-id',
+      headers: {
+        ...headers,
+        'x-ima-cookie': 'IMA-UID=same-ima-user; IMA-TOKEN=token-b; IMA-REFRESH-TOKEN=refresh-b',
+      },
+    }),
+    (error) => error.code === 'duplicate_ima_identity' && error.statusCode === 409,
+  );
+  assert.equal(directory.listAccounts().length, 1);
+});
+
+test('WebAgentAccountDirectory disables duplicate legacy identities during migration', () => {
+  const tempDir = makeTempDirectory();
+  const storePath = path.join(tempDir, 'accounts.json');
+  const keyPath = path.join(tempDir, 'accounts.key');
+  const directory = new WebAgentAccountDirectory({ storePath, keyPath });
+  directory.upsertCapturedAccount({
+    id: 'account-original',
+    name: 'Account Original',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=legacy-same-user; IMA-TOKEN=token-a; IMA-REFRESH-TOKEN=refresh-a',
+      'x-ima-bkn': '123',
+    },
+  });
+
+  const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+  const duplicate = JSON.parse(JSON.stringify(parsed.accounts[0]));
+  duplicate.id = 'account-duplicate';
+  duplicate.name = 'Account Duplicate';
+  duplicate.principalFingerprint = '';
+  duplicate.runtime.disabled = false;
+  duplicate.runtime.disabledReason = '';
+  parsed.accounts.push(duplicate);
+  fs.writeFileSync(storePath, JSON.stringify(parsed), { mode: 0o600 });
+
+  const migrated = new WebAgentAccountDirectory({ storePath, keyPath });
+  const accounts = migrated.listAccounts();
+  assert.equal(accounts.find((account) => account.id === 'account-original').status, 'available');
+  assert.equal(accounts.find((account) => account.id === 'account-duplicate').status, 'disabled');
+  assert.equal(accounts.find((account) => account.id === 'account-duplicate').identityDuplicate, true);
+  assert.equal(migrated.getPoolAccounts().find((account) => account.id === 'account-duplicate').disabled, true);
+  assert.throws(() => migrated.setDisabled('account-duplicate', false), /同一个 IMA 账号/);
+});
+
 test('WebAgentAccountDirectory removes managed legacy runtime exports with an account', () => {
   const tempDir = makeTempDirectory();
   const runtimeEnvPath = path.join(tempDir, 'web-agent-accounts', 'account-d.env');
