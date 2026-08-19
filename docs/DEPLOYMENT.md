@@ -30,7 +30,16 @@ Provider A 发布不需要：
 
 ## 初始化
 
-### Docker 部署
+### 先选择部署与扫码路径
+
+Provider A 有两种支持的首次接入方式。它们使用同一套加密账号库和账号池，区别只在于“谁负责启动扫码浏览器”：
+
+1. **桌面维护机原生运行**：Node 服务和 Chrome、Chromium 或 Ego Lite 在同一台有图形界面的维护机上运行。完成 `setup:provider-a` 后打开 `/admin.html`，管理页直接展示二维码。这是本地试用和小规模维护最省步骤的路径。
+2. **Docker 或纯 Linux 服务器**：服务运行在服务器，服务器只负责问答和存储，不包含桌面浏览器。维护者在自己的图形界面电脑上建立 SSH 隧道，再运行 CLI 接入；二维码和临时浏览器只在维护机上出现，凭证最终写入服务器账号库。见 [远程服务器 + 本机扫码](#远程服务器--本机扫码)。
+
+不要在无 GUI 的 Docker/纯 Linux 服务端期待自动弹出浏览器窗口，也不要为了扫码把管理 API 暴露到公网。
+
+### Docker 部署（服务器端）
 
 ```bash
 git clone https://github.com/19Chris19/ima-qa-web-agent.git
@@ -62,7 +71,7 @@ docker compose logs -f ima-qa-web
 
 VoiceRAG 在自己的 `.env` 将同一个值设为 `VOICE_RAG_PROVIDER_A_TOKEN`，并只通过容器私网地址请求该入口。不要用 `IMA_QA_API_TOKEN` 或 `IMA_QA_ADMIN_TOKEN` 代替它。Nginx 必须对 `/internal/` 返回 404，不能将此路径暴露到互联网。
 
-### 直接用 Node 运行
+### 直接用 Node 运行（桌面维护机）
 
 ```bash
 npm ci
@@ -71,6 +80,8 @@ npm start
 ```
 
 生产环境仍建议 Docker、systemd 或 PM2 托管进程，避免终端关闭导致服务停止。
+
+如果这台机器同时承担扫码维护，确认它能启动 Chrome、Chromium 或 Ego Lite；否则使用上面的 Docker 服务端部署，再按远程扫码步骤操作。
 
 ## 逐账号接入
 
