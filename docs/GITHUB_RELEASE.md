@@ -16,7 +16,9 @@ docker compose up -d --build
 
 初始化只询问 IMA 网页共享知识库的数字 ID 和可选的允许来源域名。它会生成私有 `.env` 与管理员 token；没有任何 IMA 账号或登录态会随仓库下载。
 
-接入首个账号：
+接入首个账号时，优先打开 `http://127.0.0.1:3117/admin.html`，输入初始化生成的管理员 token，点击“接入账号”并扫描页面二维码。该方式要求运行 Node 的维护机本身能启动 Chrome、Chromium 或 Ego Lite。
+
+无法让服务进程启动本机浏览器时，使用 CLI 兜底：
 
 ```bash
 npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
@@ -28,14 +30,28 @@ npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
 
 ## 给发布维护者
 
-当前应用的源代码维护在主仓库 `apps/ima-qa-web` 子目录；公开仓库 `main` 从该子目录同步。只有维护者需要在主仓库根目录运行：
+当前应用的源代码维护在主仓库 `apps/ima-qa-web` 子目录；公开仓库只接收这个子目录的 subtree。发布时先在主仓库创建公开候选分支，再推送到公开仓库的同名分支并开 PR；不要从根仓库直接推送公开仓库 `main`，也不要把主仓库其他目录带过去。
+
+在主仓库根目录运行：
 
 ```bash
-git subtree split --prefix=apps/ima-qa-web > /tmp/ima-qa-web-release-commit
-git push github-ima-qa "$(cat /tmp/ima-qa-web-release-commit):main"
+git subtree split \
+  --prefix=apps/ima-qa-web \
+  --branch=codex/provider-a-v0.2.0-public
+git push --set-upstream github-ima-qa codex/provider-a-v0.2.0-public
 ```
 
-这只更新独立仓库的 `main`，不会把主仓库里的其他目录推送出去。推送前必须先确认 `github-ima-qa` 指向上述公开仓库，且暂存区不含私有运行数据。
+推送前先确认 remote、目标分支和 subtree 内容：
+
+```bash
+git remote -v
+git diff main..codex/provider-a-v0.2.0-release -- apps/ima-qa-web
+git ls-tree --name-only codex/provider-a-v0.2.0-public
+```
+
+然后在 GitHub 上创建 `codex/provider-a-v0.2.0-public` 到公开仓库 `main` 的 Draft PR。审查和 CI 通过后再合并。公开 `main` 合并完成后，在公开仓库的干净 clone 中创建并推送 `v0.2.0` 标签，再按 GitHub Release 页面发布该标签。这样部署者默认仍然克隆公开仓库的 `main`，不会误拿主仓库的 VoiceRAG 或 Python pipeline。
+
+如果 subtree 分支已经存在，先比较其提交和文件边界，不要强制覆盖远端分支；需要重新生成候选时创建新的带版本后缀分支。推送前必须确认 `github-ima-qa` 指向上述公开仓库，且暂存区不含私有运行数据。
 
 发布前必须确认以下私有内容未进入 Git：
 

@@ -16,6 +16,7 @@ const {
 const { registerAdminRoutes } = require('../src/admin-routes');
 const { IMAOpenAPIQuotaExceededError } = require('../src/ima-client');
 const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
+const { AccountPoolExerciseManager, AccountPoolExerciseReportStore } = require('../src/account-pool-exercise');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
 const { ConversationStore } = require('../src/conversation-store');
 
@@ -112,15 +113,153 @@ function makeApp(overrides = {}) {
     accountDirectory: overrides.accountDirectory,
     conversationStore: overrides.conversationStore,
   });
+  if (typeof overrides.createExerciseManager === 'function') {
+    app.locals.accountPoolExerciseManager = overrides.createExerciseManager({
+      askQueue: app.locals.imaQaAskQueue,
+    });
+  }
   if (overrides.accountDirectory) {
     registerAdminRoutes(app, {
       config: overrides.config || baseConfig,
       accountDirectory: overrides.accountDirectory,
       imaWebAgentClient: overrides.imaWebAgentClient,
+      enrollmentManager: overrides.enrollmentManager,
+      accountPoolExerciseManager: app.locals.accountPoolExerciseManager,
     });
   }
   return app;
 }
+
+test('account pool exercise routes lock ordinary asks and expose only sanitized reports to administrators', async () => {
+  const tempDir = await fsMkdtemp();
+  const accountDirectory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  for (const [id, name] of [['account-a', '账号 A'], ['account-b', '账号 B']]) {
+    accountDirectory.upsertCapturedAccount({
+      id,
+      name,
+      knowledgeBaseId: 'web-kb-id',
+      headers: { 'x-ima-cookie': `IMA-UID=${id}; IMA-TOKEN=t; IMA-REFRESH-TOKEN=r`, 'x-ima-bkn': '123' },
+    });
+  }
+  let accountIndex = 0;
+  let sessionIndex = 0;
+  let initialStartedCount = 0;
+  let resolveInitialStarted;
+  let releaseInitialTurns;
+  const initialStarted = new Promise((resolve) => {
+    resolveInitialStarted = resolve;
+  });
+  const initialTurnsReleased = new Promise((resolve) => {
+    releaseInitialTurns = resolve;
+  });
+  const imaWebAgentClient = {
+    syncAccounts() {},
+    stats() {
+      return { totalAccounts: 2, availableAccounts: 2, unavailableAccounts: 0, busyAccounts: 0, coolingDownAccounts: 0 };
+    },
+    async *streamAsk(options) {
+      const accountId = options.accountId || ['account-a', 'account-b'][accountIndex++ % 2];
+      const sessionId = options.sessionId || `internal-session-${++sessionIndex}`;
+      yield { type: 'route', accountId };
+      yield { type: 'session', sessionId };
+      if (!options.sessionId) {
+        initialStartedCount += 1;
+        if (initialStartedCount === 2) {
+          resolveInitialStarted();
+        }
+      }
+      if (!options.sessionId) {
+        await initialTurnsReleased;
+      }
+      yield { type: 'sources', sources: [{ index: 1, title: '知识库资料', snippet: '群聊摘录' }], searchSummary: '找到 1 篇资料' };
+      yield { type: 'delta', text: '真实演练回答' };
+    },
+  };
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, adminToken: 'admin-token' },
+      webAgent: { sharedKnowledgeBaseId: 'web-kb-id' },
+    },
+    accountDirectory,
+    imaWebAgentClient,
+    createExerciseManager({ askQueue }) {
+      return new AccountPoolExerciseManager({
+        askQueue,
+        accountDirectory,
+        pool: imaWebAgentClient,
+        reportStore: new AccountPoolExerciseReportStore({ persist: false }),
+      });
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const headers = { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' };
+    const started = await fetch(`${baseUrl}/api/admin/exercises`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        profile: 'baseline',
+        confirm: true,
+        clients: [
+          { label: '模拟用户 1', question: '无人机航拍重叠率怎么设置？', followUp: '补充一个注意事项。' },
+          { label: '模拟用户 2', question: '显存不足怎么排查？', followUp: '补充一个设置建议。' },
+        ],
+      }),
+    });
+    assert.equal(started.status, 201);
+    const startData = await started.json();
+    await initialStarted;
+
+    const blocked = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '普通用户问题' }),
+    });
+    assert.equal(blocked.status, 503);
+    assert.match((await blocked.json()).error, /容量演练/);
+    releaseInitialTurns();
+
+    await waitFor(async () => {
+      const reports = await fetch(`${baseUrl}/api/admin/exercises/reports`, { headers });
+      return (await reports.json()).reports?.length === 1;
+    }, { timeoutMs: 3000 });
+    const reportResponse = await fetch(`${baseUrl}/api/admin/exercises/reports/${startData.run.runId}`, { headers });
+    const report = await reportResponse.json();
+    assert.equal(reportResponse.status, 200);
+    assert.equal(report.report.summary.initial.ok, 2);
+    assert.equal(report.report.summary.followUp.ok, 2);
+    assert.equal(JSON.stringify(report).includes('account-a'), false);
+    assert.equal(JSON.stringify(report).includes('internal-session-'), false);
+
+    const scored = await fetch(
+      `${baseUrl}/api/admin/exercises/reports/${startData.run.runId}/reviews/0`,
+      {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ relevance: 2, completeness: 2, sourceTrust: 1, followUpContinuity: 2, note: '可复核' }),
+      },
+    );
+    assert.equal(scored.status, 200);
+    assert.equal((await scored.json()).report.reviewSummary.reviewedClients, 1);
+
+    const exported = await fetch(`${baseUrl}/api/admin/exercises/reports/${startData.run.runId}/export`, { headers });
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get('content-disposition'), /ima-account-pool-exercise-[0-9a-f-]+\.json/);
+    assert.equal(JSON.stringify(await exported.json()).includes('account-a'), false);
+
+    const deleted = await fetch(`${baseUrl}/api/admin/exercises/reports/${startData.run.runId}`, {
+      method: 'DELETE',
+      headers,
+    });
+    assert.equal(deleted.status, 200);
+    assert.equal((await deleted.json()).success, true);
+  });
+});
 
 test('POST /api/ask rejects request-provided knowledge base IDs', async () => {
   let imaCalled = false;
@@ -977,6 +1116,131 @@ test('admin routes can inspect and manage Web Agent accounts with token auth', a
     assert.ok(calls.some((call) => call.type === 'sync'));
     assert.ok(calls.some((call) => call.type === 'disable' && call.disabled === true));
     assert.ok(calls.some((call) => call.type === 'disable' && call.disabled === false));
+  });
+});
+
+test('admin enrollment routes require a token and keep QR screenshots private', async () => {
+  const tempDir = await fsMkdtemp();
+  const accountDirectory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  const calls = [];
+  const enrollmentManager = {
+    async start(input) {
+      calls.push({ type: 'start', input });
+      return {
+        taskId: 'enrollment-1',
+        name: input.name,
+        state: 'waiting_for_scan',
+        createdAt: '2026-08-19T00:00:00.000Z',
+        expiresAt: '2026-08-19T00:05:00.000Z',
+        qrAvailable: true,
+        error: null,
+        account: null,
+      };
+    },
+    get(taskId) {
+      calls.push({ type: 'get', taskId });
+      return {
+        taskId,
+        name: 'account-c',
+        state: 'completed',
+        createdAt: '2026-08-19T00:00:00.000Z',
+        expiresAt: '2026-08-19T00:05:00.000Z',
+        qrAvailable: false,
+        error: null,
+        account: { id: 'account-c', name: 'account-c', status: 'available' },
+      };
+    },
+    getQr(taskId) {
+      calls.push({ type: 'qr', taskId });
+      return Buffer.from('synthetic-qr-image');
+    },
+    getQrContentType(taskId) {
+      calls.push({ type: 'qr-content-type', taskId });
+      return 'image/jpeg';
+    },
+    async focusWindow(taskId) {
+      calls.push({ type: 'focus-window', taskId });
+      return {
+        taskId,
+        name: 'account-c',
+        state: 'browser_fallback',
+        qrAvailable: false,
+        diagnostics: {
+          browserFallbackAvailable: true,
+          lastFailure: {
+            code: 'qr_frame_timeout',
+            stage: 'waiting_for_qr',
+            message: '二维码框架未就绪',
+            retryable: true,
+            fallbackAvailable: true,
+          },
+        },
+      };
+    },
+    async cancel(taskId) {
+      calls.push({ type: 'cancel', taskId });
+      return { taskId, name: 'account-c', state: 'cancelled', qrAvailable: false, error: '已取消账号接入' };
+    },
+  };
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, adminToken: 'admin-token' },
+      webAgent: { sharedKnowledgeBaseId: 'web-kb-id', enrollmentTimeoutMs: 300000 },
+    },
+    accountDirectory,
+    imaWebAgentClient: { syncAccounts() {}, stats() { return {}; } },
+    enrollmentManager,
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const unauthorized = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1/qr`);
+    assert.equal(unauthorized.status, 401);
+    assert.equal(calls.length, 0);
+
+    const headers = { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' };
+    const created = await fetch(`${baseUrl}/api/admin/enrollments`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name: 'account-c', replace: false, knowledgeBaseId: 'attacker-kb' }),
+    });
+    const createdPayload = await created.json();
+    assert.equal(created.status, 201);
+    assert.equal(createdPayload.enrollment.taskId, 'enrollment-1');
+    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false });
+
+    const qr = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1/qr`, {
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    assert.equal(qr.status, 200);
+    assert.equal(qr.headers.get('content-type'), 'image/jpeg');
+    assert.equal(qr.headers.get('cache-control'), 'no-store, private');
+    assert.equal(await qr.text(), 'synthetic-qr-image');
+
+    const state = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1`, {
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    assert.equal(state.status, 200);
+    assert.equal((await state.json()).enrollment.account.name, 'account-c');
+
+    const focused = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1/focus-window`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    assert.equal(focused.status, 200);
+    assert.equal((await focused.json()).enrollment.state, 'browser_fallback');
+    assert.ok(calls.some((call) => call.type === 'focus-window' && call.taskId === 'enrollment-1'));
+
+    const cancelled = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer admin-token' },
+    });
+    assert.equal(cancelled.status, 200);
+    assert.ok(calls.some((call) => call.type === 'cancel'));
   });
 });
 

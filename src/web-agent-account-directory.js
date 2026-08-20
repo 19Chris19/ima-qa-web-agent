@@ -42,6 +42,8 @@ class WebAgentAccountDirectory {
       updatedAt: parsed.updatedAt || this.now(),
       accounts: Array.isArray(parsed.accounts) ? parsed.accounts.map(normalizeStoredAccount) : [],
     };
+    this._backfillIdentityFingerprints();
+    this._disableDuplicateIdentities();
     return this.store;
   }
 
@@ -99,6 +101,7 @@ class WebAgentAccountDirectory {
       modelType: runtimeConfig.modelType,
       runtimeEnvPath,
       source: options.source || 'runtime-env',
+      principalFingerprint: this._identityFingerprint(runtimeConfig.headers),
       runtime: {
         ...defaultRuntimeState(),
         tokenExpiresAt: runtimeConfig.tokenExpiresAt,
@@ -141,6 +144,7 @@ class WebAgentAccountDirectory {
     const name = cleanAccountName(options.name || options.id || 'account');
     const id = normalizeAccountId(options.id || name);
     const runtimeEnvPath = options.runtimeEnvPath || '';
+    const headers = normalizeHeaders(options.headers);
     const account = {
       id,
       name,
@@ -149,6 +153,7 @@ class WebAgentAccountDirectory {
       modelType: Number(options.modelType || 3),
       runtimeEnvPath,
       source: options.source || 'browser-capture',
+      principalFingerprint: this._identityFingerprint(headers),
       runtime: {
         ...defaultRuntimeState(),
         tokenExpiresAt: nullableNumber(options.tokenExpiresAt),
@@ -162,7 +167,7 @@ class WebAgentAccountDirectory {
       accountId: id,
       accountName: name,
       knowledgeBaseId: account.knowledgeBaseId,
-      headers: normalizeHeaders(options.headers),
+      headers,
       modelId: account.modelId,
       modelType: account.modelType,
       runtimeEnvPath,
@@ -189,6 +194,12 @@ class WebAgentAccountDirectory {
 
   setDisabled(accountId, disabled, reason = '') {
     const account = this._requireAccount(accountId);
+    if (!disabled && account.runtime.disabledReason === 'duplicate_ima_identity') {
+      const error = new Error('该条目与账号池中另一条记录属于同一个 IMA 账号，不能启用为额外并发。请保留其中一条并删除另一条。');
+      error.statusCode = 409;
+      error.code = 'duplicate_ima_identity';
+      throw error;
+    }
     account.runtime.disabled = Boolean(disabled);
     account.runtime.disabledReason = disabled ? cleanText(reason || 'disabled_by_admin') : '';
     account.runtime.updatedAt = this.now();
@@ -239,6 +250,17 @@ class WebAgentAccountDirectory {
 
   updateCredentialsFromClient(accountId, clientSnapshot = {}) {
     const account = this._requireAccount(accountId);
+    const nextIdentityFingerprint = this._identityFingerprint(clientSnapshot.headers);
+    if (
+      account.principalFingerprint &&
+      nextIdentityFingerprint &&
+      account.principalFingerprint !== nextIdentityFingerprint
+    ) {
+      const error = new Error('刷新后的登录态属于另一个 IMA 账号，已拒绝覆盖当前账号');
+      error.statusCode = 409;
+      error.code = 'ima_identity_mismatch';
+      throw error;
+    }
     const runtimeEnvText = buildRuntimeEnvText({
       accountId: account.id,
       accountName: account.name,
@@ -261,6 +283,7 @@ class WebAgentAccountDirectory {
     account.runtime.refreshSkewMs = nullableNumber(clientSnapshot.refreshSkewMs) || account.runtime.refreshSkewMs;
     account.runtime.refreshIntervalMs =
       nullableNumber(clientSnapshot.refreshIntervalMs) || account.runtime.refreshIntervalMs;
+    account.principalFingerprint = nextIdentityFingerprint || account.principalFingerprint || '';
     account.runtime.lastRefreshAt = this.now();
     account.runtime.lastRefreshError = '';
     account.secret = this._encryptText(runtimeEnvText);
@@ -353,6 +376,17 @@ class WebAgentAccountDirectory {
       error.statusCode = 409;
       throw error;
     }
+    const duplicateIdentity = nextAccount.principalFingerprint
+      ? store.accounts.find((account) =>
+        account.principalFingerprint === nextAccount.principalFingerprint && account.id !== nextAccount.id,
+      )
+      : null;
+    if (duplicateIdentity) {
+      const error = new Error(`扫码的 IMA 账号已作为“${duplicateIdentity.name}”在账号池中。未新增重复账号；如需重新绑定，请使用原账号名称。`);
+      error.statusCode = 409;
+      error.code = 'duplicate_ima_identity';
+      throw error;
+    }
     const account = existing || {
       id: nextAccount.id,
       name: nextAccount.name,
@@ -366,6 +400,7 @@ class WebAgentAccountDirectory {
     account.modelType = nextAccount.modelType;
     account.runtimeEnvPath = nextAccount.runtimeEnvPath;
     account.source = nextAccount.source;
+    account.principalFingerprint = nextAccount.principalFingerprint || account.principalFingerprint || '';
     account.runtime = {
       ...defaultRuntimeState(),
       ...(existing?.runtime || {}),
@@ -379,6 +414,65 @@ class WebAgentAccountDirectory {
       store.accounts.push(account);
     }
     this._writeStore();
+  }
+
+  _backfillIdentityFingerprints() {
+    let changed = false;
+    for (const account of this.store.accounts) {
+      if (account.principalFingerprint) {
+        continue;
+      }
+      try {
+        const fingerprint = this._identityFingerprint(this._decryptRuntimeConfig(account).headers);
+        if (fingerprint) {
+          account.principalFingerprint = fingerprint;
+          changed = true;
+        }
+      } catch {
+        // An unreadable legacy record is left untouched and remains subject to normal auth checks.
+      }
+    }
+    if (changed) {
+      this._writeStore();
+    }
+  }
+
+  _disableDuplicateIdentities() {
+    const seen = new Map();
+    let changed = false;
+    for (const account of this.store.accounts) {
+      if (!account.principalFingerprint) {
+        continue;
+      }
+      const canonical = seen.get(account.principalFingerprint);
+      if (!canonical) {
+        seen.set(account.principalFingerprint, account);
+        continue;
+      }
+      if (!account.runtime.disabled || account.runtime.disabledReason !== 'duplicate_ima_identity') {
+        account.runtime.disabled = true;
+        account.runtime.disabledReason = 'duplicate_ima_identity';
+        account.runtime.updatedAt = this.now();
+        addEvent(account, {
+          type: 'duplicate_ima_identity_disabled',
+          message: `Disabled because it duplicates IMA identity already assigned to ${canonical.name}`,
+        }, this.now);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this._writeStore();
+    }
+  }
+
+  _identityFingerprint(headers) {
+    const principalId = getImaPrincipalId(headers);
+    if (!principalId) {
+      return '';
+    }
+    return crypto.createHmac('sha256', this._key())
+      .update(`ima-principal:${principalId}`)
+      .digest('base64url');
   }
 
   _requireAccount(accountId) {
@@ -478,6 +572,7 @@ function normalizeStoredAccount(account) {
     modelType: Number(account.modelType || 3),
     runtimeEnvPath: cleanText(account.runtimeEnvPath),
     source: cleanText(account.source) || 'unknown',
+    principalFingerprint: cleanText(account.principalFingerprint),
     createdAt: cleanText(account.createdAt),
     updatedAt: cleanText(account.updatedAt),
     runtime: { ...defaultRuntimeState(), ...(account.runtime || {}) },
@@ -525,6 +620,12 @@ function normalizeHeaders(headers) {
   };
 }
 
+function getImaPrincipalId(headers) {
+  const cookie = String(headers?.['x-ima-cookie'] || headers?.cookie || '');
+  const match = cookie.match(/(?:^|;\s*)IMA-UID=([^;\s]+)/i);
+  return match ? String(match[1] || '').trim() : '';
+}
+
 function sanitizeAccount(account, options = {}) {
   const status = account.runtime?.disabled
     ? 'disabled'
@@ -541,6 +642,8 @@ function sanitizeAccount(account, options = {}) {
     modelType: account.modelType,
     runtimeEnvPath: account.runtimeEnvPath,
     source: account.source,
+    identityVerified: Boolean(account.principalFingerprint),
+    identityDuplicate: account.runtime?.disabledReason === 'duplicate_ima_identity',
     status,
     disabledReason: account.runtime?.disabledReason || '',
     activeRequests: Number(account.runtime?.activeRequests || 0),
@@ -650,6 +753,7 @@ module.exports = {
   WebAgentAccountDirectory,
   defaultAccountStoreKeyPath,
   defaultAccountStorePath,
+  getImaPrincipalId,
   parseRuntimeEnvText,
   normalizeAccountId,
 };

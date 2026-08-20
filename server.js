@@ -3,7 +3,9 @@ const { registerAdminRoutes } = require('./src/admin-routes');
 const { getConfig } = require('./src/config');
 const { IMAClient } = require('./src/ima-client');
 const { IMAWebAgentPool } = require('./src/ima-web-agent-pool');
+const { WebAgentEnrollmentManager } = require('./src/web-agent-enrollment');
 const { WebAgentAccountDirectory } = require('./src/web-agent-account-directory');
+const { AccountPoolExerciseManager, AccountPoolExerciseReportStore } = require('./src/account-pool-exercise');
 const { ConversationStore } = require('./src/conversation-store');
 const { LocalRAGClient } = require('./src/local-rag-client');
 const { MIMOClient } = require('./src/mimo-client');
@@ -77,12 +79,36 @@ async function main() {
       pool: imaWebAgentClient,
     });
   synchronizeQueueCapacity();
+  const accountPoolExerciseManager = accountDirectory && imaWebAgentClient
+    ? new AccountPoolExerciseManager({
+      askQueue: app.locals.imaQaAskQueue,
+      accountDirectory,
+      pool: imaWebAgentClient,
+      requestTimeoutMs: config.concurrency.requestTimeoutMs,
+      reportStore: new AccountPoolExerciseReportStore({
+        storePath: config.exercises.reportStorePath,
+        ttlMs: config.exercises.reportTtlMs,
+        maxCount: config.exercises.reportMaxCount,
+      }),
+    })
+    : null;
+  app.locals.accountPoolExerciseManager = accountPoolExerciseManager;
+  const enrollmentManager = accountDirectory && imaWebAgentClient
+    ? new WebAgentEnrollmentManager({
+      config,
+      accountDirectory,
+      pool: imaWebAgentClient,
+      onAccountsSynced: synchronizeQueueCapacity,
+    })
+    : null;
   registerAdminRoutes(app, {
     config,
     accountDirectory,
     imaWebAgentClient,
     askQueue: app.locals.imaQaAskQueue,
     onAccountsSynced: synchronizeQueueCapacity,
+    enrollmentManager,
+    accountPoolExerciseManager,
   });
 
   app.listen(config.port, () => {

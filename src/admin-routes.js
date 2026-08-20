@@ -2,6 +2,8 @@ const { normalizeAccountId } = require('./web-agent-account-directory');
 
 function registerAdminRoutes(app, options = {}) {
   const accountDirectory = options.accountDirectory;
+  const enrollmentManager = options.enrollmentManager;
+  const accountPoolExerciseManager = options.accountPoolExerciseManager;
   if (!accountDirectory) {
     return;
   }
@@ -33,9 +35,150 @@ function registerAdminRoutes(app, options = {}) {
       enrollment: {
         requiresGuiMaintenanceMachine: true,
         accountStoreManagedByServer: true,
+        supportsAdminPageQr: Boolean(enrollmentManager?.isAvailable?.()),
+        timeoutSeconds: Math.round(Number(options.config?.webAgent?.enrollmentTimeoutMs || 0) / 1000) || 300,
+        activeEnrollment: enrollmentManager?.getActive?.() || null,
       },
+      exercise: accountPoolExerciseManager?.getBootstrap?.() || null,
     });
   });
+
+  if (accountPoolExerciseManager) {
+    app.get('/api/admin/exercises/templates', auth, (req, res) => {
+      try {
+        res.json({
+          success: true,
+          clients: accountPoolExerciseManager.getTemplates(req.query.count),
+          exercise: accountPoolExerciseManager.getBootstrap(),
+        });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.get('/api/admin/exercises/active', auth, (_req, res) => {
+      res.json({ success: true, run: accountPoolExerciseManager.getActive() });
+    });
+
+    app.post('/api/admin/exercises', auth, async (req, res) => {
+      try {
+        const run = await accountPoolExerciseManager.start(req.body || {});
+        res.status(201).json({ success: true, run });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.post('/api/admin/exercises/:runId/cancel', auth, (req, res) => {
+      try {
+        res.json({ success: true, run: accountPoolExerciseManager.cancel(req.params.runId) });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.get('/api/admin/exercises/reports', auth, (_req, res) => {
+      res.json({ success: true, reports: accountPoolExerciseManager.listReports() });
+    });
+
+    app.get('/api/admin/exercises/reports/:reportId', auth, (req, res) => {
+      try {
+        res.json({ success: true, report: accountPoolExerciseManager.getReport(req.params.reportId) });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.get('/api/admin/exercises/reports/:reportId/export', auth, (req, res) => {
+      try {
+        const report = accountPoolExerciseManager.getReport(req.params.reportId);
+        res.set({
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="ima-account-pool-exercise-${report.id}.json"`,
+          'Cache-Control': 'no-store, private',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        res.json(report);
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.put('/api/admin/exercises/reports/:reportId/reviews/:clientIndex', auth, (req, res) => {
+      try {
+        res.json({
+          success: true,
+          report: accountPoolExerciseManager.score(req.params.reportId, req.params.clientIndex, req.body || {}),
+        });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.delete('/api/admin/exercises/reports/:reportId', auth, (req, res) => {
+      try {
+        accountPoolExerciseManager.deleteReport(req.params.reportId);
+        res.json({ success: true });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+  }
+
+  if (enrollmentManager) {
+    app.post('/api/admin/enrollments', auth, async (req, res) => {
+      try {
+        const enrollment = await enrollmentManager.start({
+          name: req.body?.name,
+          id: req.body?.id,
+          replace: Boolean(req.body?.replace),
+        });
+        res.status(201).json({ success: true, enrollment });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.get('/api/admin/enrollments/:enrollmentId/qr', auth, (req, res) => {
+      try {
+        const screenshot = enrollmentManager.getQr(req.params.enrollmentId);
+        res.set({
+          'Content-Type': enrollmentManager.getQrContentType?.(req.params.enrollmentId) || 'image/png',
+          'Cache-Control': 'no-store, private',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        res.send(screenshot);
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.get('/api/admin/enrollments/:enrollmentId', auth, (req, res) => {
+      try {
+        res.json({ success: true, enrollment: enrollmentManager.get(req.params.enrollmentId) });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.post('/api/admin/enrollments/:enrollmentId/focus-window', auth, async (req, res) => {
+      try {
+        const enrollment = await enrollmentManager.focusWindow(req.params.enrollmentId);
+        res.json({ success: true, enrollment });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+
+    app.delete('/api/admin/enrollments/:enrollmentId', auth, async (req, res) => {
+      try {
+        const enrollment = await enrollmentManager.cancel(req.params.enrollmentId);
+        res.json({ success: true, enrollment });
+      } catch (error) {
+        sendAdminError(res, error);
+      }
+    });
+  }
 
   app.post('/api/admin/accounts', auth, (req, res) => {
     try {

@@ -40,16 +40,51 @@
           <div class="admin-section-heading">
             <div>
               <h2>接入账号</h2>
-              <p>在有图形界面的维护机运行</p>
+              <p>仅允许待接入账号扫码登录，不使用本机微信快捷登录</p>
+            </div>
+            <button id="startEnrollmentButton" type="button">接入账号</button>
+          </div>
+          <p class="admin-enroll-note">每次接入使用全新的临时浏览器资料。服务会拦截快捷登录；只在确认二维码模式后保存登录态。二维码、临时浏览器资料和未成功的登录状态不会保留。</p>
+          <p class="admin-feedback" id="enrollFeedback" role="status"></p>
+        </section>
+
+        <section class="admin-exercise" id="exercisePanel" aria-label="账号池并发演练" hidden>
+          <div class="admin-section-heading">
+            <div>
+              <h2>并发演练</h2>
+              <p id="exerciseCapacityLabel">使用真实 IMA 共享知识库，验证账号池容量、排队、会话隔离与回答质量</p>
             </div>
           </div>
-          <label for="enrollName">账号名称</label>
-          <div class="admin-command-row">
-            <input id="enrollName" maxlength="80" autocomplete="off" placeholder="account-a" />
-            <button id="copyEnrollCommand" type="button">复制命令</button>
+          <div class="admin-exercise-controls">
+            <label for="exerciseProfile">演练档位</label>
+            <select id="exerciseProfile">
+              <option value="baseline">基线并发</option>
+              <option value="queue">排队压力</option>
+              <option value="custom">自定义</option>
+            </select>
+            <label for="exerciseClientCount">模拟客户</label>
+            <input id="exerciseClientCount" type="number" min="1" max="30" inputmode="numeric" />
+            <button id="loadExerciseTemplatesButton" type="button">生成题目</button>
           </div>
-          <pre class="admin-command" id="enrollCommand"></pre>
-          <p class="admin-feedback" id="enrollFeedback" role="status"></p>
+          <p class="admin-exercise-note">默认题目来自 3DGS 共享知识库评测集。每道题在单次生成中只会分配一次；题库不足时，剩余首问留空等待手写。每位模拟客户使用独立会话；首问同批发起，首问成功后再追问一次。演练期间普通问答将暂时暂停。</p>
+          <div class="admin-disclosure-actions" aria-label="模拟客户脚本展开控制">
+            <button id="expandExerciseScriptButton" type="button">全部展开</button>
+            <button id="collapseExerciseScriptButton" type="button">全部收起</button>
+          </div>
+          <div class="admin-exercise-script" id="exerciseScript"></div>
+          <div class="admin-exercise-actions">
+            <button id="startExerciseButton" type="button">开始真实演练</button>
+            <button id="cancelExerciseButton" type="button" hidden>取消演练</button>
+          </div>
+          <section class="admin-exercise-live" id="exerciseLive" hidden aria-live="polite">
+            <div class="admin-exercise-live-heading">
+              <strong id="exerciseLiveState">正在准备演练</strong>
+              <span id="exerciseLiveElapsed"></span>
+            </div>
+            <p id="exerciseLiveDetail"></p>
+            <div class="admin-exercise-live-metrics" id="exerciseLiveMetrics"></div>
+          </section>
+          <p class="admin-feedback" id="exerciseFeedback" role="status"></p>
         </section>
 
         <section class="admin-accounts" aria-label="账号列表">
@@ -61,8 +96,62 @@
           </div>
           <div class="admin-account-list" id="accountList"></div>
         </section>
+
+        <section class="admin-exercise-reports" id="exerciseReportsPanel" aria-label="演练报告" hidden>
+          <div class="admin-section-heading">
+            <div>
+              <h2>演练报告</h2>
+              <p>报告默认保留 7 天，可逐题人工复核或下载脱敏 JSON</p>
+            </div>
+          </div>
+          <div class="admin-exercise-report-list" id="exerciseReportList"></div>
+          <div class="admin-exercise-report-detail" id="exerciseReportDetail"></div>
+        </section>
       </section>
+
+      <dialog class="admin-enrollment-dialog" id="enrollmentDialog" aria-labelledby="enrollmentDialogTitle">
+        <section class="admin-dialog-shell">
+          <header class="admin-dialog-header">
+            <div>
+              <h2 id="enrollmentDialogTitle">接入 IMA 账号</h2>
+              <p id="enrollmentDialogDescription">为待接入账号创建一次性二维码，不使用本机微信快捷登录</p>
+            </div>
+            <button class="admin-icon-button" id="closeEnrollmentButton" type="button" title="关闭" aria-label="关闭">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
+            </button>
+          </header>
+
+          <form class="admin-enrollment-form" id="enrollmentForm">
+            <label for="enrollmentName">账号名称</label>
+            <input id="enrollmentName" maxlength="80" autocomplete="off" placeholder="account-c" required />
+            <label class="admin-check-row" for="replaceEnrollment">
+              <input id="replaceEnrollment" type="checkbox" />
+              <span>替换同名账号的登录态</span>
+            </label>
+            <button id="createEnrollmentButton" type="submit">生成登录二维码</button>
+          </form>
+
+          <section class="admin-enrollment-progress" id="enrollmentProgress" hidden aria-live="polite">
+            <div class="admin-enrollment-state">
+              <span class="admin-enrollment-dot" aria-hidden="true"></span>
+              <strong id="enrollmentState">正在生成二维码</strong>
+            </div>
+            <p id="enrollmentStatusText"></p>
+            <img class="admin-enrollment-qr" id="enrollmentQr" alt="IMA 登录二维码" hidden />
+            <p class="admin-enrollment-qr-note" id="enrollmentQrNote" hidden>请只使用待接入账号扫描此二维码。IMA 页面中的“快捷登录”不会被本服务使用。</p>
+            <section class="admin-enrollment-diagnostic" id="enrollmentDiagnostic" hidden aria-live="polite">
+              <strong id="enrollmentDiagnosticTitle"></strong>
+              <p id="enrollmentDiagnosticText"></p>
+            </section>
+            <div class="admin-enrollment-result" id="enrollmentResult" hidden></div>
+            <button id="focusEnrollmentWindowButton" type="button" hidden>打开受控登录窗口</button>
+            <button id="cancelEnrollmentButton" type="button">取消接入</button>
+          </section>
+          <p class="admin-feedback" id="enrollmentDialogFeedback" role="status"></p>
+        </section>
+      </dialog>
     </main>
+    <script src="/answer-markdown.js" defer></script>
     <script src="/admin.js" defer></script>
   </body>
 </html>
