@@ -818,6 +818,61 @@ body[data-mode="admin"] {
   background: rgba(18, 34, 34, 0.38);
 }
 
+.admin-exercise-confirm-dialog {
+  width: min(480px, calc(100vw - 28px));
+  padding: 0;
+  border: 1px solid #cfdad7;
+  border-radius: 8px;
+  color: var(--ink);
+  background: #ffffff;
+  box-shadow: 0 18px 56px rgba(24, 48, 47, 0.2);
+}
+
+.admin-exercise-confirm-dialog::backdrop {
+  background: rgba(18, 34, 34, 0.38);
+}
+
+.admin-exercise-confirm-copy,
+.admin-exercise-confirm-note {
+  margin: 18px 0 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.admin-exercise-confirm-note {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-exercise-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.admin-exercise-confirm-actions button {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid #c9d5d2;
+  border-radius: 6px;
+  color: var(--ink);
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.admin-exercise-confirm-actions button:last-child {
+  border-color: #1a7774;
+  color: #ffffff;
+  background: #1a7774;
+}
+
+.admin-exercise-confirm-actions button:last-child:hover {
+  background: #12625f;
+}
+
 .admin-dialog-shell {
   padding: 20px;
 }

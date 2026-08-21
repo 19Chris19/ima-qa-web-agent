@@ -1,6 +1,6 @@
 {
   "name": "ima-qa-web",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "IMA shared knowledge base QA gateway with streaming Web Agent answers, isolated conversations, and encrypted account-pool enrollment.",
   "repository": {
     "type": "git",

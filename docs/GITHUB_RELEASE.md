@@ -37,19 +37,19 @@ npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117
 ```bash
 git subtree split \
   --prefix=apps/ima-qa-web \
-  --branch=codex/provider-a-v0.2.0-public
-git push --set-upstream github-ima-qa codex/provider-a-v0.2.0-public
+  --branch=codex/provider-a-v0.2.1-public
+git push --set-upstream github-ima-qa codex/provider-a-v0.2.1-public
 ```
 
 推送前先确认 remote、目标分支和 subtree 内容：
 
 ```bash
 git remote -v
-git diff main..codex/provider-a-v0.2.0-release -- apps/ima-qa-web
-git ls-tree --name-only codex/provider-a-v0.2.0-public
+git diff main..codex/provider-a-v0.2.1-release -- apps/ima-qa-web
+git ls-tree --name-only codex/provider-a-v0.2.1-public
 ```
 
-然后在 GitHub 上创建 `codex/provider-a-v0.2.0-public` 到公开仓库 `main` 的 Draft PR。审查和 CI 通过后再合并。公开 `main` 合并完成后，在公开仓库的干净 clone 中创建并推送 `v0.2.0` 标签，再按 GitHub Release 页面发布该标签。这样部署者默认仍然克隆公开仓库的 `main`，不会误拿主仓库的 VoiceRAG 或 Python pipeline。
+然后在 GitHub 上创建 `codex/provider-a-v0.2.1-public` 到公开仓库 `main` 的 Draft PR。审查和 CI 通过后再合并。公开 `main` 合并完成后，在公开仓库的干净 clone 中创建并推送 `v0.2.1` 标签，再按 GitHub Release 页面发布该标签。这样部署者默认仍然克隆公开仓库的 `main`，不会误拿主仓库的 VoiceRAG 或 Python pipeline。
 
 如果 subtree 分支已经存在，先比较其提交和文件边界，不要强制覆盖远端分支；需要重新生成候选时创建新的带版本后缀分支。推送前必须确认 `github-ima-qa` 指向上述公开仓库，且暂存区不含私有运行数据。
 

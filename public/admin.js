@@ -38,6 +38,10 @@
   const exerciseScript = document.querySelector('#exerciseScript');
   const startExerciseButton = document.querySelector('#startExerciseButton');
   const cancelExerciseButton = document.querySelector('#cancelExerciseButton');
+  const exerciseConfirmDialog = document.querySelector('#exerciseConfirmDialog');
+  const exerciseConfirmText = document.querySelector('#exerciseConfirmText');
+  const confirmExerciseButton = document.querySelector('#confirmExerciseButton');
+  const cancelExerciseConfirmButton = document.querySelector('#cancelExerciseConfirmButton');
   const exerciseLive = document.querySelector('#exerciseLive');
   const exerciseLiveState = document.querySelector('#exerciseLiveState');
   const exerciseLiveElapsed = document.querySelector('#exerciseLiveElapsed');
@@ -55,6 +59,7 @@
   let enrollment = null;
   let enrollmentPollTimer = null;
   let enrollmentQrUrl = '';
+  let completedEnrollmentTaskId = '';
   let exercise = null;
   let activeExercise = null;
   let exerciseReports = [];
@@ -68,7 +73,7 @@
   });
   reloadButton.addEventListener('click', () => loadAdminState());
   startEnrollmentButton.addEventListener('click', openEnrollmentDialog);
-  closeEnrollmentButton.addEventListener('click', closeEnrollmentDialog);
+  closeEnrollmentButton.addEventListener('click', () => void closeEnrollmentDialog());
   enrollmentForm.addEventListener('submit', startEnrollment);
   focusEnrollmentWindowButton.addEventListener('click', focusEnrollmentWindow);
   cancelEnrollmentButton.addEventListener('click', cancelEnrollment);
@@ -78,13 +83,15 @@
   collapseExerciseScriptButton.addEventListener('click', () => setDisclosureState(exerciseScript, false));
   startExerciseButton.addEventListener('click', () => void startExercise());
   cancelExerciseButton.addEventListener('click', () => void cancelExercise());
+  confirmExerciseButton.addEventListener('click', () => void confirmExerciseStart());
+  cancelExerciseConfirmButton.addEventListener('click', () => dismissExerciseConfirmation());
   enrollmentDialog.addEventListener('cancel', (event) => {
     event.preventDefault();
     if (isActiveEnrollment()) {
       void cancelEnrollment();
       return;
     }
-    closeEnrollmentDialog();
+    void closeEnrollmentDialog();
   });
 
   void loadAdminState();
@@ -196,13 +203,12 @@
     }
   }
 
-  function closeEnrollmentDialog() {
+  async function closeEnrollmentDialog() {
     if (isActiveEnrollment()) {
+      await cancelEnrollment({ closeDialog: true });
       return;
     }
-    stopEnrollmentPolling();
-    revokeEnrollmentQr();
-    enrollmentDialog.close();
+    dismissEnrollmentDialog();
   }
 
   async function startEnrollment(event) {
@@ -218,6 +224,7 @@
         }),
       });
       enrollment = payload.enrollment;
+      completedEnrollmentTaskId = '';
       enrollmentForm.hidden = true;
       enrollmentProgress.hidden = false;
       renderEnrollment();
@@ -243,12 +250,25 @@
       if (isActiveEnrollment()) {
         enrollmentPollTimer = window.setTimeout(() => void refreshEnrollment(), 1200);
       } else if (enrollment.state === 'completed') {
-        await loadAdminState();
+        await finishCompletedEnrollment(enrollment);
       }
     } catch (error) {
       setFeedback(enrollmentDialogFeedback, error.message || '无法读取接入状态', true);
       stopEnrollmentPolling();
     }
+  }
+
+  async function finishCompletedEnrollment(completedEnrollment) {
+    const taskId = String(completedEnrollment?.taskId || '');
+    if (!taskId || completedEnrollmentTaskId === taskId) {
+      return;
+    }
+    completedEnrollmentTaskId = taskId;
+    stopEnrollmentPolling();
+    const accountName = String(completedEnrollment?.account?.name || '新账号');
+    dismissEnrollmentDialog();
+    setFeedback(enrollFeedback, `账号 ${accountName} 已验证并加入账号池。`);
+    await loadAdminState();
   }
 
   async function refreshEnrollmentQr() {
@@ -271,14 +291,17 @@
       return;
     }
     const active = isActiveEnrollment();
+    const browserWindowAvailable = Boolean(enrollment.diagnostics?.browserWindowAvailable);
+    const useVisibleBrowser = active && browserWindowAvailable;
     enrollmentState.textContent = enrollmentStateLabel(enrollment.state);
     enrollmentStatusText.textContent = enrollmentStatus(enrollment);
     cancelEnrollmentButton.hidden = !active;
-    enrollmentQr.hidden = !enrollment.qrAvailable;
-    enrollmentQrNote.hidden = !enrollment.qrAvailable;
+    enrollmentQr.hidden = !enrollment.qrAvailable || useVisibleBrowser;
+    enrollmentQrNote.hidden = !enrollment.qrAvailable || useVisibleBrowser;
     enrollmentResult.hidden = !enrollment.account;
     renderEnrollmentDiagnostic(enrollment.diagnostics);
-    focusEnrollmentWindowButton.hidden = !active || !enrollment.diagnostics?.browserFallbackAvailable;
+    focusEnrollmentWindowButton.hidden = !active || (!browserWindowAvailable && !enrollment.diagnostics?.browserFallbackAvailable);
+    focusEnrollmentWindowButton.textContent = browserWindowAvailable ? '定位受控登录窗口' : '打开受控登录窗口';
     enrollmentResult.textContent = enrollment.account
       ? `账号 ${enrollment.account.name} 已接入，当前状态：${statusLabel(enrollment.account.status)}。`
       : '';
@@ -336,24 +359,47 @@
     }
   }
 
-  async function cancelEnrollment() {
+  async function cancelEnrollment(options = {}) {
     if (!enrollment?.taskId || !isActiveEnrollment()) {
-      closeEnrollmentDialog();
+      dismissEnrollmentDialog();
       return;
     }
+    const taskId = enrollment.taskId;
+    const closeDialog = Boolean(options.closeDialog);
     cancelEnrollmentButton.disabled = true;
+    if (closeDialog) {
+      dismissEnrollmentDialog();
+      setFeedback(enrollFeedback, '正在取消未完成的账号接入任务。');
+    }
     try {
-      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}`, {
+      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(taskId)}`, {
         method: 'DELETE',
       });
       enrollment = payload.enrollment;
-      renderEnrollment();
-      stopEnrollmentPolling();
-      revokeEnrollmentQr();
+      if (closeDialog) {
+        setFeedback(enrollFeedback, '未完成的账号接入已取消。');
+        await loadAdminState();
+      } else {
+        renderEnrollment();
+        stopEnrollmentPolling();
+        revokeEnrollmentQr();
+        dismissEnrollmentDialog();
+      }
     } catch (error) {
-      setFeedback(enrollmentDialogFeedback, error.message || '无法取消接入', true);
+      setFeedback(closeDialog ? enrollFeedback : enrollmentDialogFeedback, error.message || '无法取消接入', true);
+      if (closeDialog) {
+        await loadAdminState();
+      }
     } finally {
       cancelEnrollmentButton.disabled = false;
+    }
+  }
+
+  function dismissEnrollmentDialog() {
+    stopEnrollmentPolling();
+    revokeEnrollmentQr();
+    if (enrollmentDialog.open) {
+      enrollmentDialog.close();
     }
   }
 
@@ -361,6 +407,7 @@
     stopEnrollmentPolling();
     revokeEnrollmentQr();
     enrollment = null;
+    completedEnrollmentTaskId = '';
     enrollmentForm.reset();
     enrollmentForm.hidden = false;
     enrollmentProgress.hidden = true;
@@ -415,7 +462,11 @@
   function enrollmentStatus(current) {
     if (current.state === 'waiting_for_scan') {
       const expiry = new Date(current.expiresAt);
-      const prefix = current.detail || '二维码已就绪，请使用微信扫描下方二维码。';
+      const prefix = current.diagnostics?.scanDetected
+        ? '已收到微信扫码确认，正在等待 IMA 网页登录态同步；完成前不会新增账号。'
+        : current.diagnostics?.browserWindowAvailable
+          ? '受控 IMA 登录窗口已打开，请在该窗口内扫码并完成手机确认。'
+        : current.detail || '二维码已就绪，请使用微信扫描下方二维码。';
       return Number.isNaN(expiry.getTime())
         ? prefix
         : `${prefix} 二维码将在 ${expiry.toLocaleTimeString('zh-CN', { hour12: false })} 前失效。`;
@@ -695,11 +746,28 @@
       setFeedback(exerciseFeedback, '每位模拟用户都需要填写首问。', true);
       return;
     }
-    const profile = exerciseProfile.value;
-    const confirmation = `将使用 ${clients.length} 位模拟用户向真实 IMA 共享知识库发起首问与追问。\n\n演练期间普通问答会暂时暂停，且不会自动刷新账号登录态。现在开始吗？`;
-    if (!window.confirm(confirmation)) {
+    exerciseConfirmText.textContent = `将使用 ${clients.length} 位模拟用户，向真实 IMA 共享知识库发起首问与追问。请确认脚本无误后开始。`;
+    if (exerciseConfirmDialog.open) {
       return;
     }
+    exerciseConfirmDialog.showModal();
+  }
+
+  async function confirmExerciseStart() {
+    if (!exercise || activeExercise) {
+      dismissExerciseConfirmation();
+      return;
+    }
+    const clients = collectExerciseClients();
+    if (!clients.length || clients.some((client) => !client.question)) {
+      dismissExerciseConfirmation();
+      setFeedback(exerciseFeedback, '每位模拟用户都需要填写首问。', true);
+      return;
+    }
+    const profile = exerciseProfile.value;
+    confirmExerciseButton.disabled = true;
+    cancelExerciseConfirmButton.disabled = true;
+    dismissExerciseConfirmation();
     startExerciseButton.disabled = true;
     setFeedback(exerciseFeedback, '正在启动真实 IMA 账号池演练…');
     try {
@@ -714,9 +782,17 @@
     } catch (error) {
       setFeedback(exerciseFeedback, error.message || '无法启动演练', true);
     } finally {
+      confirmExerciseButton.disabled = false;
+      cancelExerciseConfirmButton.disabled = false;
       if (!activeExercise) {
         startExerciseButton.disabled = false;
       }
+    }
+  }
+
+  function dismissExerciseConfirmation() {
+    if (exerciseConfirmDialog.open) {
+      exerciseConfirmDialog.close();
     }
   }
 

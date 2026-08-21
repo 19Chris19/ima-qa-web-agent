@@ -6,8 +6,10 @@ const test = require('node:test');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
 const {
   WebAgentEnrollmentManager,
+  captureAuthFromContext,
   captureLoginScreenshot,
   classifyImaLoginMode,
+  classifyImaScanState,
   isQrLoginActionText,
   publicEnrollmentError,
   readDevToolsDebuggerUrl,
@@ -125,6 +127,75 @@ test('QR enrollment keeps screenshot in memory and stores credentials only after
   assert.throws(() => manager.getQr(started.taskId), /没有可展示/);
 });
 
+test('captureAuthFromContext recognizes a compatible IMA account record outside the legacy storage key', async () => {
+  const context = {
+    async cookies() {
+      return [];
+    },
+    pages() {
+      return [{
+        async evaluate() {
+          return [{
+            key: 'ima-auth-session-v2',
+            value: {
+              data: {
+                accessToken: 'access-c',
+                refresh_token: 'refresh-c',
+                user_id: 'user-c',
+                tokenType: 0,
+                idType: 1,
+              },
+            },
+          }];
+        },
+      }];
+    },
+  };
+
+  const auth = await captureAuthFromContext(context);
+
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-UID=user-c'), true);
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-TOKEN=access-c'), true);
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-REFRESH-TOKEN=refresh-c'), true);
+  assert.equal(auth.headers['x-ima-bkn'].length > 0, true);
+});
+
+test('captureAuthFromContext accepts a compatible IMA account record from session storage', async () => {
+  const context = {
+    async cookies() {
+      return [];
+    },
+    pages() {
+      return [{
+        async evaluate() {
+          return [{
+            scope: 'session',
+            key: 'ima-login-session',
+            value: {
+              accountInfo: {
+                token: 'access-session',
+                refreshToken: 'refresh-session',
+                uid: 'user-session',
+              },
+            },
+          }];
+        },
+      }];
+    },
+  };
+
+  const auth = await captureAuthFromContext(context);
+
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-UID=user-session'), true);
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-TOKEN=access-session'), true);
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-REFRESH-TOKEN=refresh-session'), true);
+});
+
+test('classifyImaScanState distinguishes a confirmed scan from the initial QR prompt', () => {
+  assert.equal(classifyImaScanState('请使用微信扫码登录'), 'waiting');
+  assert.equal(classifyImaScanState('扫码成功，请在手机上确认登录'), 'scan_confirmed');
+});
+
 test('QR enrollment returns a live task before a slow IMA navigation completes', async () => {
   let releaseBrowser;
   const browserReady = new Promise((resolve) => {
@@ -147,7 +218,7 @@ test('QR enrollment returns a live task before a slow IMA navigation completes',
   await manager.cancel(started.taskId);
 });
 
-test('QR enrollment uses a background browser by default and keeps the visible window as fallback', async () => {
+test('QR enrollment honors an explicit background mode and keeps the visible window as fallback', async () => {
   let launchOptions;
   const { manager, fakeBrowser, state } = makeManager({
     browserLauncher: async (_profile, options, hooks) => {
