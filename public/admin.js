@@ -55,6 +55,7 @@
   let enrollment = null;
   let enrollmentPollTimer = null;
   let enrollmentQrUrl = '';
+  let completedEnrollmentTaskId = '';
   let exercise = null;
   let activeExercise = null;
   let exerciseReports = [];
@@ -217,6 +218,7 @@
         }),
       });
       enrollment = payload.enrollment;
+      completedEnrollmentTaskId = '';
       enrollmentForm.hidden = true;
       enrollmentProgress.hidden = false;
       renderEnrollment();
@@ -242,12 +244,25 @@
       if (isActiveEnrollment()) {
         enrollmentPollTimer = window.setTimeout(() => void refreshEnrollment(), 1200);
       } else if (enrollment.state === 'completed') {
-        await loadAdminState();
+        await finishCompletedEnrollment(enrollment);
       }
     } catch (error) {
       setFeedback(enrollmentDialogFeedback, error.message || '无法读取接入状态', true);
       stopEnrollmentPolling();
     }
+  }
+
+  async function finishCompletedEnrollment(completedEnrollment) {
+    const taskId = String(completedEnrollment?.taskId || '');
+    if (!taskId || completedEnrollmentTaskId === taskId) {
+      return;
+    }
+    completedEnrollmentTaskId = taskId;
+    stopEnrollmentPolling();
+    const accountName = String(completedEnrollment?.account?.name || '新账号');
+    dismissEnrollmentDialog();
+    setFeedback(enrollFeedback, `账号 ${accountName} 已验证并加入账号池。`);
+    await loadAdminState();
   }
 
   async function refreshEnrollmentQr() {
@@ -383,6 +398,7 @@
     stopEnrollmentPolling();
     revokeEnrollmentQr();
     enrollment = null;
+    completedEnrollmentTaskId = '';
     enrollmentForm.reset();
     enrollmentForm.hidden = false;
     enrollmentProgress.hidden = true;

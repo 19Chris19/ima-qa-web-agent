@@ -870,7 +870,7 @@ async function captureAuthFromContext(context) {
     };
   }
   for (const page of context.pages()) {
-    const accountInfos = await readLocalStorageAccountInfo(page);
+    const accountInfos = await readWebStorageAccountInfo(page);
     for (const accountInfo of accountInfos) {
       const auth = authFromAccountInfo(accountInfo);
       if (auth) {
@@ -881,32 +881,41 @@ async function captureAuthFromContext(context) {
   return null;
 }
 
-async function readLocalStorageAccountInfo(page) {
+async function readWebStorageAccountInfo(page) {
   try {
     return await page.evaluate(() => {
       const preferredKey = 'ima-universal-local-storage-accountInfo';
-      const keys = [preferredKey];
-      for (let index = 0; index < window.localStorage.length; index += 1) {
-        const key = window.localStorage.key(index);
-        if (!key || key === preferredKey) {
-          continue;
+      const collect = (storage, scope) => {
+        const keys = [preferredKey];
+        for (let index = 0; index < storage.length; index += 1) {
+          const key = storage.key(index);
+          if (!key || key === preferredKey) {
+            continue;
+          }
+          const normalized = key.toLowerCase();
+          const isImaCredentialKey = normalized.includes('ima') &&
+            /(?:account|auth|session|user|token|login)/.test(normalized);
+          const isCommonAccountKey = /^(?:accountinfo|userinfo|logininfo)$/.test(normalized);
+          if (isImaCredentialKey || isCommonAccountKey) {
+            keys.push(key);
+          }
         }
-        const normalized = key.toLowerCase();
-        if (normalized.includes('ima') && /(?:account|auth|session|user)/.test(normalized)) {
-          keys.push(key);
-        }
-      }
-      return keys.slice(0, 12).flatMap((key) => {
-        const raw = window.localStorage.getItem(key);
-        if (!raw || raw.length > 64 * 1024) {
-          return [];
-        }
-        try {
-          return [{ key, value: JSON.parse(raw) }];
-        } catch {
-          return [];
-        }
-      });
+        return keys.slice(0, 12).flatMap((key) => {
+          const raw = storage.getItem(key);
+          if (!raw || raw.length > 64 * 1024) {
+            return [];
+          }
+          try {
+            return [{ scope, key, value: JSON.parse(raw) }];
+          } catch {
+            return [];
+          }
+        });
+      };
+      return [
+        ...collect(window.localStorage, 'local'),
+        ...collect(window.sessionStorage, 'session'),
+      ];
     });
   } catch {
     return [];
