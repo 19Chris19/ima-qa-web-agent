@@ -6,8 +6,10 @@ const test = require('node:test');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
 const {
   WebAgentEnrollmentManager,
+  captureAuthFromContext,
   captureLoginScreenshot,
   classifyImaLoginMode,
+  classifyImaScanState,
   isQrLoginActionText,
   publicEnrollmentError,
   readDevToolsDebuggerUrl,
@@ -123,6 +125,44 @@ test('QR enrollment keeps screenshot in memory and stores credentials only after
   assert.equal(poolCalls.length, 1);
   assert.equal(fakeBrowser.context.closed, true);
   assert.throws(() => manager.getQr(started.taskId), /没有可展示/);
+});
+
+test('captureAuthFromContext recognizes a compatible IMA account record outside the legacy storage key', async () => {
+  const context = {
+    async cookies() {
+      return [];
+    },
+    pages() {
+      return [{
+        async evaluate() {
+          return [{
+            key: 'ima-auth-session-v2',
+            value: {
+              data: {
+                accessToken: 'access-c',
+                refresh_token: 'refresh-c',
+                user_id: 'user-c',
+                tokenType: 0,
+                idType: 1,
+              },
+            },
+          }];
+        },
+      }];
+    },
+  };
+
+  const auth = await captureAuthFromContext(context);
+
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-UID=user-c'), true);
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-TOKEN=access-c'), true);
+  assert.equal(auth.headers['x-ima-cookie'].includes('IMA-REFRESH-TOKEN=refresh-c'), true);
+  assert.equal(auth.headers['x-ima-bkn'].length > 0, true);
+});
+
+test('classifyImaScanState distinguishes a confirmed scan from the initial QR prompt', () => {
+  assert.equal(classifyImaScanState('请使用微信扫码登录'), 'waiting');
+  assert.equal(classifyImaScanState('扫码成功，请在手机上确认登录'), 'scan_confirmed');
 });
 
 test('QR enrollment returns a live task before a slow IMA navigation completes', async () => {

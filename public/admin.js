@@ -68,7 +68,7 @@
   });
   reloadButton.addEventListener('click', () => loadAdminState());
   startEnrollmentButton.addEventListener('click', openEnrollmentDialog);
-  closeEnrollmentButton.addEventListener('click', closeEnrollmentDialog);
+  closeEnrollmentButton.addEventListener('click', () => void closeEnrollmentDialog());
   enrollmentForm.addEventListener('submit', startEnrollment);
   focusEnrollmentWindowButton.addEventListener('click', focusEnrollmentWindow);
   cancelEnrollmentButton.addEventListener('click', cancelEnrollment);
@@ -84,7 +84,7 @@
       void cancelEnrollment();
       return;
     }
-    closeEnrollmentDialog();
+    void closeEnrollmentDialog();
   });
 
   void loadAdminState();
@@ -196,13 +196,12 @@
     }
   }
 
-  function closeEnrollmentDialog() {
+  async function closeEnrollmentDialog() {
     if (isActiveEnrollment()) {
+      await cancelEnrollment({ closeDialog: true });
       return;
     }
-    stopEnrollmentPolling();
-    revokeEnrollmentQr();
-    enrollmentDialog.close();
+    dismissEnrollmentDialog();
   }
 
   async function startEnrollment(event) {
@@ -336,24 +335,47 @@
     }
   }
 
-  async function cancelEnrollment() {
+  async function cancelEnrollment(options = {}) {
     if (!enrollment?.taskId || !isActiveEnrollment()) {
-      closeEnrollmentDialog();
+      dismissEnrollmentDialog();
       return;
     }
+    const taskId = enrollment.taskId;
+    const closeDialog = Boolean(options.closeDialog);
     cancelEnrollmentButton.disabled = true;
+    if (closeDialog) {
+      dismissEnrollmentDialog();
+      setFeedback(enrollFeedback, '正在取消未完成的账号接入任务。');
+    }
     try {
-      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}`, {
+      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(taskId)}`, {
         method: 'DELETE',
       });
       enrollment = payload.enrollment;
-      renderEnrollment();
-      stopEnrollmentPolling();
-      revokeEnrollmentQr();
+      if (closeDialog) {
+        setFeedback(enrollFeedback, '未完成的账号接入已取消。');
+        await loadAdminState();
+      } else {
+        renderEnrollment();
+        stopEnrollmentPolling();
+        revokeEnrollmentQr();
+        dismissEnrollmentDialog();
+      }
     } catch (error) {
-      setFeedback(enrollmentDialogFeedback, error.message || '无法取消接入', true);
+      setFeedback(closeDialog ? enrollFeedback : enrollmentDialogFeedback, error.message || '无法取消接入', true);
+      if (closeDialog) {
+        await loadAdminState();
+      }
     } finally {
       cancelEnrollmentButton.disabled = false;
+    }
+  }
+
+  function dismissEnrollmentDialog() {
+    stopEnrollmentPolling();
+    revokeEnrollmentQr();
+    if (enrollmentDialog.open) {
+      enrollmentDialog.close();
     }
   }
 
@@ -415,7 +437,9 @@
   function enrollmentStatus(current) {
     if (current.state === 'waiting_for_scan') {
       const expiry = new Date(current.expiresAt);
-      const prefix = current.detail || '二维码已就绪，请使用微信扫描下方二维码。';
+      const prefix = current.diagnostics?.scanDetected
+        ? '已收到微信扫码确认，正在等待 IMA 网页登录态同步；完成前不会新增账号。'
+        : current.detail || '二维码已就绪，请使用微信扫描下方二维码。';
       return Number.isNaN(expiry.getTime())
         ? prefix
         : `${prefix} 二维码将在 ${expiry.toLocaleTimeString('zh-CN', { hour12: false })} 前失效。`;

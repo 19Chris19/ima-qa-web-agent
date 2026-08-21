@@ -423,6 +423,12 @@ class WebAgentEnrollmentManager {
           throw enrollmentError('二维码登录已超时，请重新发起接入', 408);
         }
         await this._enforceQrOnlyMode(job);
+        const scanState = await detectImaScanState(job.page);
+        if (scanState === 'scan_confirmed' && !job.diagnostics.scanDetected) {
+          job.diagnostics.scanDetected = true;
+          job.detail = '已收到微信扫码确认，正在等待 IMA 网页授权回调';
+          this._touch(job);
+        }
         const auth = await this.captureAuth(job.context);
         if (!isPending(job)) {
           return;
@@ -468,6 +474,10 @@ class WebAgentEnrollmentManager {
           this._releaseActive(job);
           this._scheduleRemoval(job);
           return;
+        }
+        if (job.diagnostics.scanDetected) {
+          job.detail = '已收到微信扫码确认，正在等待 IMA 网页登录态同步；完成前不会新增账号';
+          this._touch(job);
         }
         const screenshot = job.qrModeConfirmed || typeof job.page?.frames !== 'function'
           ? await this._captureScreenshot(job)
@@ -860,23 +870,12 @@ async function captureAuthFromContext(context) {
     };
   }
   for (const page of context.pages()) {
-    const accountInfo = await readLocalStorageAccountInfo(page);
-    if (accountInfo?.token && accountInfo.refreshToken && (accountInfo.userId || accountInfo.uid)) {
-      const cookieValues = {
-        'IMA-UID': accountInfo.userId || accountInfo.uid,
-        'IMA-TOKEN': accountInfo.token,
-        'IMA-REFRESH-TOKEN': accountInfo.refreshToken,
-        'TOKEN-TYPE': String(accountInfo.tokenType || 0),
-        'UID-TYPE': String(accountInfo.idType || '1'),
-      };
-      return {
-        headers: {
-          'x-ima-cookie': stringifyCookie(cookieValues),
-          'x-ima-bkn': String(getBkn(accountInfo.token)),
-        },
-        tokenExpiresAt: positiveNumber(accountInfo.tokenExpiredTime),
-        refreshTokenExpiresAt: positiveNumber(accountInfo.refreshTokenExpiredTime),
-      };
+    const accountInfos = await readLocalStorageAccountInfo(page);
+    for (const accountInfo of accountInfos) {
+      const auth = authFromAccountInfo(accountInfo);
+      if (auth) {
+        return auth;
+      }
     }
   }
   return null;
@@ -885,12 +884,82 @@ async function captureAuthFromContext(context) {
 async function readLocalStorageAccountInfo(page) {
   try {
     return await page.evaluate(() => {
-      const raw = window.localStorage.getItem('ima-universal-local-storage-accountInfo');
-      return raw ? JSON.parse(raw) : null;
+      const preferredKey = 'ima-universal-local-storage-accountInfo';
+      const keys = [preferredKey];
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        if (!key || key === preferredKey) {
+          continue;
+        }
+        const normalized = key.toLowerCase();
+        if (normalized.includes('ima') && /(?:account|auth|session|user)/.test(normalized)) {
+          keys.push(key);
+        }
+      }
+      return keys.slice(0, 12).flatMap((key) => {
+        const raw = window.localStorage.getItem(key);
+        if (!raw || raw.length > 64 * 1024) {
+          return [];
+        }
+        try {
+          return [{ key, value: JSON.parse(raw) }];
+        } catch {
+          return [];
+        }
+      });
     });
   } catch {
-    return null;
+    return [];
   }
+}
+
+function authFromAccountInfo(candidate) {
+  const records = accountInfoRecords(candidate?.value ?? candidate);
+  for (const accountInfo of records) {
+    const token = firstText(accountInfo.token, accountInfo.accessToken, accountInfo.access_token);
+    const refreshToken = firstText(accountInfo.refreshToken, accountInfo.refresh_token);
+    const userId = firstText(
+      accountInfo.userId,
+      accountInfo.uid,
+      accountInfo.user_id,
+      accountInfo.user?.id,
+      accountInfo.user?.userId,
+    );
+    if (!token || !refreshToken || !userId) {
+      continue;
+    }
+    const cookieValues = {
+      'IMA-UID': userId,
+      'IMA-TOKEN': token,
+      'IMA-REFRESH-TOKEN': refreshToken,
+      'TOKEN-TYPE': String(firstText(accountInfo.tokenType, accountInfo.token_type) || 0),
+      'UID-TYPE': String(firstText(accountInfo.idType, accountInfo.id_type) || '1'),
+    };
+    return {
+      headers: {
+        'x-ima-cookie': stringifyCookie(cookieValues),
+        'x-ima-bkn': String(getBkn(token)),
+      },
+      tokenExpiresAt: positiveNumber(firstText(accountInfo.tokenExpiredTime, accountInfo.token_expires_at)),
+      refreshTokenExpiresAt: positiveNumber(firstText(
+        accountInfo.refreshTokenExpiredTime,
+        accountInfo.refresh_token_expires_at,
+      )),
+    };
+  }
+  return null;
+}
+
+function accountInfoRecords(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 2) {
+    return [];
+  }
+  return [value, ...['data', 'account', 'accountInfo', 'payload', 'result']
+    .flatMap((key) => accountInfoRecords(value[key], depth + 1))];
+}
+
+function firstText(...values) {
+  return values.map((value) => String(value || '').trim()).find(Boolean) || '';
 }
 
 async function captureLoginScreenshot(page, options = {}) {
@@ -1075,6 +1144,30 @@ async function currentImaLoginMode(page) {
   return classifyImaLoginMode(snippets.join('\n'));
 }
 
+async function detectImaScanState(page) {
+  const scopes = typeof page?.frames === 'function' ? page.frames() : [page];
+  const snippets = [];
+  for (const scope of scopes) {
+    try {
+      const text = await scope.evaluate(() => String(document.body?.innerText || '').slice(0, 1600));
+      if (typeof text === 'string') {
+        snippets.push(text);
+      }
+    } catch {
+      // A cross-origin login frame may be in the middle of navigation.
+    }
+  }
+  return classifyImaScanState(snippets.join('\n'));
+}
+
+function classifyImaScanState(value) {
+  const text = String(value || '').replace(/\s+/g, ' ');
+  if (/(?:扫码成功|扫描成功|已扫码|已扫描|确认登录|正在登录|授权成功)/.test(text)) {
+    return 'scan_confirmed';
+  }
+  return 'waiting';
+}
+
 function classifyImaLoginMode(value) {
   const text = String(value || '').replace(/\s+/g, ' ');
   if (/微信扫码登录|扫码登录|二维码登录|使用二维码登录/.test(text)) {
@@ -1187,6 +1280,7 @@ function publicJob(job, now = Date.now()) {
       loginMode: 'qr_only',
       qrModeConfirmed: Boolean(diagnostics.qrModeConfirmed),
       quickLoginGuardInstalled: Boolean(diagnostics.quickLoginGuardInstalled),
+      scanDetected: Boolean(diagnostics.scanDetected),
       currentStage: safeEnrollmentStage(diagnostics.currentStage || job.state),
       elapsedMs: Math.max(0, now - Number(job.createdAt || now)),
       stageDurationsMs: publicStageDurations(stageDurationsMs),
@@ -1230,6 +1324,7 @@ function createEnrollmentDiagnostics(now) {
     browserFallbackAvailable: false,
     qrModeConfirmed: false,
     quickLoginGuardInstalled: false,
+    scanDetected: false,
     lastFailure: null,
   };
 }
@@ -1447,6 +1542,7 @@ module.exports = {
   captureLoginScreenshot,
   captureAuthFromContext,
   classifyImaLoginMode,
+  classifyImaScanState,
   isQrLoginActionText,
   publicEnrollmentError,
   readDevToolsDebuggerUrl,
