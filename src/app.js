@@ -305,7 +305,7 @@ function createSecurityHeadersMiddleware(allowedOrigins = []) {
     } else {
       res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     }
-    if (req.path === '/admin.html') {
+    if (['/admin.html', '/admin.js', '/admin.css'].includes(req.path)) {
       res.setHeader('Cache-Control', 'no-store');
     }
     next();

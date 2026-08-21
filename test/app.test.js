@@ -714,6 +714,18 @@ test('security headers keep admin and main pages same-origin while allowing conf
     const admin = await fetch(`${baseUrl}/admin.html`);
     assert.equal(admin.headers.get('cache-control'), 'no-store');
     assert.equal(admin.headers.get('x-frame-options'), 'SAMEORIGIN');
+    assert.match(await admin.text(), /id="exerciseConfirmDialog"/);
+
+    const adminScript = await fetch(`${baseUrl}/admin.js`);
+    assert.equal(adminScript.status, 200);
+    assert.equal(adminScript.headers.get('cache-control'), 'no-store');
+    const adminScriptText = await adminScript.text();
+    const startExerciseSource = adminScriptText.slice(
+      adminScriptText.indexOf('async function startExercise()'),
+      adminScriptText.indexOf('async function cancelExercise()'),
+    );
+    assert.match(startExerciseSource, /function confirmExerciseStart\(/);
+    assert.doesNotMatch(startExerciseSource, /window\.confirm\(/);
   });
 });
 

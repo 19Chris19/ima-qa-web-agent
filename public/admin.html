@@ -87,6 +87,23 @@
           <p class="admin-feedback" id="exerciseFeedback" role="status"></p>
         </section>
 
+        <dialog class="admin-exercise-confirm-dialog" id="exerciseConfirmDialog" aria-labelledby="exerciseConfirmTitle">
+          <section class="admin-dialog-shell">
+            <header class="admin-dialog-header">
+              <div>
+                <h2 id="exerciseConfirmTitle">确认启动真实演练</h2>
+                <p>本次请求会调用真实 IMA 共享知识库。</p>
+              </div>
+            </header>
+            <p class="admin-exercise-confirm-copy" id="exerciseConfirmText"></p>
+            <p class="admin-exercise-confirm-note">演练期间，普通问答会暂时暂停；账号登录态不会被自动刷新或覆盖。</p>
+            <div class="admin-exercise-confirm-actions">
+              <button id="cancelExerciseConfirmButton" type="button">返回修改</button>
+              <button id="confirmExerciseButton" type="button">确认并开始</button>
+            </div>
+          </section>
+        </dialog>
+
         <section class="admin-accounts" aria-label="账号列表">
           <div class="admin-section-heading">
             <div>

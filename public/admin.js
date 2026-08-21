@@ -38,6 +38,10 @@
   const exerciseScript = document.querySelector('#exerciseScript');
   const startExerciseButton = document.querySelector('#startExerciseButton');
   const cancelExerciseButton = document.querySelector('#cancelExerciseButton');
+  const exerciseConfirmDialog = document.querySelector('#exerciseConfirmDialog');
+  const exerciseConfirmText = document.querySelector('#exerciseConfirmText');
+  const confirmExerciseButton = document.querySelector('#confirmExerciseButton');
+  const cancelExerciseConfirmButton = document.querySelector('#cancelExerciseConfirmButton');
   const exerciseLive = document.querySelector('#exerciseLive');
   const exerciseLiveState = document.querySelector('#exerciseLiveState');
   const exerciseLiveElapsed = document.querySelector('#exerciseLiveElapsed');
@@ -79,6 +83,8 @@
   collapseExerciseScriptButton.addEventListener('click', () => setDisclosureState(exerciseScript, false));
   startExerciseButton.addEventListener('click', () => void startExercise());
   cancelExerciseButton.addEventListener('click', () => void cancelExercise());
+  confirmExerciseButton.addEventListener('click', () => void confirmExerciseStart());
+  cancelExerciseConfirmButton.addEventListener('click', () => dismissExerciseConfirmation());
   enrollmentDialog.addEventListener('cancel', (event) => {
     event.preventDefault();
     if (isActiveEnrollment()) {
@@ -740,11 +746,28 @@
       setFeedback(exerciseFeedback, '每位模拟用户都需要填写首问。', true);
       return;
     }
-    const profile = exerciseProfile.value;
-    const confirmation = `将使用 ${clients.length} 位模拟用户向真实 IMA 共享知识库发起首问与追问。\n\n演练期间普通问答会暂时暂停，且不会自动刷新账号登录态。现在开始吗？`;
-    if (!window.confirm(confirmation)) {
+    exerciseConfirmText.textContent = `将使用 ${clients.length} 位模拟用户，向真实 IMA 共享知识库发起首问与追问。请确认脚本无误后开始。`;
+    if (exerciseConfirmDialog.open) {
       return;
     }
+    exerciseConfirmDialog.showModal();
+  }
+
+  async function confirmExerciseStart() {
+    if (!exercise || activeExercise) {
+      dismissExerciseConfirmation();
+      return;
+    }
+    const clients = collectExerciseClients();
+    if (!clients.length || clients.some((client) => !client.question)) {
+      dismissExerciseConfirmation();
+      setFeedback(exerciseFeedback, '每位模拟用户都需要填写首问。', true);
+      return;
+    }
+    const profile = exerciseProfile.value;
+    confirmExerciseButton.disabled = true;
+    cancelExerciseConfirmButton.disabled = true;
+    dismissExerciseConfirmation();
     startExerciseButton.disabled = true;
     setFeedback(exerciseFeedback, '正在启动真实 IMA 账号池演练…');
     try {
@@ -759,9 +782,17 @@
     } catch (error) {
       setFeedback(exerciseFeedback, error.message || '无法启动演练', true);
     } finally {
+      confirmExerciseButton.disabled = false;
+      cancelExerciseConfirmButton.disabled = false;
       if (!activeExercise) {
         startExerciseButton.disabled = false;
       }
+    }
+  }
+
+  function dismissExerciseConfirmation() {
+    if (exerciseConfirmDialog.open) {
+      exerciseConfirmDialog.close();
     }
   }
 
