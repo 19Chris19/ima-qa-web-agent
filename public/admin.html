@@ -40,11 +40,11 @@
           <div class="admin-section-heading">
             <div>
               <h2>接入账号</h2>
-              <p>仅允许待接入账号扫码登录，不使用本机微信快捷登录</p>
+              <p>每次接入打开独立 IMA 浏览器，只允许待接入账号扫码登录</p>
             </div>
             <button id="startEnrollmentButton" type="button">接入账号</button>
           </div>
-          <p class="admin-enroll-note">每次接入使用全新的临时浏览器资料。服务会拦截快捷登录；只在确认二维码模式后保存登录态。二维码、临时浏览器资料和未成功的登录状态不会保留。</p>
+          <p class="admin-enroll-note">每次接入使用全新的临时浏览器资料。请在弹出的 IMA 窗口内扫码并完成手机确认；服务会拦截快捷登录，只在共享知识库验证成功后保存登录态并关闭窗口。</p>
           <p class="admin-feedback" id="enrollFeedback" role="status"></p>
         </section>
 
@@ -114,7 +114,7 @@
           <header class="admin-dialog-header">
             <div>
               <h2 id="enrollmentDialogTitle">接入 IMA 账号</h2>
-              <p id="enrollmentDialogDescription">为待接入账号创建一次性二维码，不使用本机微信快捷登录</p>
+              <p id="enrollmentDialogDescription">将打开独立 IMA 登录窗口，不使用本机微信快捷登录</p>
             </div>
             <button class="admin-icon-button" id="closeEnrollmentButton" type="button" title="取消并关闭" aria-label="取消并关闭">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
@@ -128,17 +128,17 @@
               <input id="replaceEnrollment" type="checkbox" />
               <span>替换同名账号的登录态</span>
             </label>
-            <button id="createEnrollmentButton" type="submit">生成登录二维码</button>
+            <button id="createEnrollmentButton" type="submit">打开 IMA 登录窗口</button>
           </form>
 
           <section class="admin-enrollment-progress" id="enrollmentProgress" hidden aria-live="polite">
             <div class="admin-enrollment-state">
               <span class="admin-enrollment-dot" aria-hidden="true"></span>
-              <strong id="enrollmentState">正在生成二维码</strong>
+              <strong id="enrollmentState">正在启动登录窗口</strong>
             </div>
             <p id="enrollmentStatusText"></p>
             <img class="admin-enrollment-qr" id="enrollmentQr" alt="IMA 登录二维码" hidden />
-            <p class="admin-enrollment-qr-note" id="enrollmentQrNote" hidden>请只使用待接入账号扫描此二维码。IMA 页面中的“快捷登录”不会被本服务使用。</p>
+            <p class="admin-enrollment-qr-note" id="enrollmentQrNote" hidden>请只使用待接入账号扫描此二维码。若已弹出 IMA 登录窗口，请以窗口内的二维码为准。</p>
             <section class="admin-enrollment-diagnostic" id="enrollmentDiagnostic" hidden aria-live="polite">
               <strong id="enrollmentDiagnosticTitle"></strong>
               <p id="enrollmentDiagnosticText"></p>

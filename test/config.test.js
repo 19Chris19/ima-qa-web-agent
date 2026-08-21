@@ -188,6 +188,7 @@ test('getConfig accepts background and visible QR enrollment browser modes', () 
   });
   assert.equal(background.webAgent.enrollmentBrowserMode, 'background');
   assert.equal(visible.webAgent.enrollmentBrowserMode, 'visible');
+  assert.equal(DEFAULT_WEB_AGENT_ENROLLMENT_BROWSER_MODE, 'visible');
   assert.throws(
     () => getConfig({
       IMA_QA_PROVIDER: 'ima-web-agent',

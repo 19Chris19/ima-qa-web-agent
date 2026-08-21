@@ -218,7 +218,7 @@ test('QR enrollment returns a live task before a slow IMA navigation completes',
   await manager.cancel(started.taskId);
 });
 
-test('QR enrollment uses a background browser by default and keeps the visible window as fallback', async () => {
+test('QR enrollment honors an explicit background mode and keeps the visible window as fallback', async () => {
   let launchOptions;
   const { manager, fakeBrowser, state } = makeManager({
     browserLauncher: async (_profile, options, hooks) => {

@@ -285,14 +285,17 @@
       return;
     }
     const active = isActiveEnrollment();
+    const browserWindowAvailable = Boolean(enrollment.diagnostics?.browserWindowAvailable);
+    const useVisibleBrowser = active && browserWindowAvailable;
     enrollmentState.textContent = enrollmentStateLabel(enrollment.state);
     enrollmentStatusText.textContent = enrollmentStatus(enrollment);
     cancelEnrollmentButton.hidden = !active;
-    enrollmentQr.hidden = !enrollment.qrAvailable;
-    enrollmentQrNote.hidden = !enrollment.qrAvailable;
+    enrollmentQr.hidden = !enrollment.qrAvailable || useVisibleBrowser;
+    enrollmentQrNote.hidden = !enrollment.qrAvailable || useVisibleBrowser;
     enrollmentResult.hidden = !enrollment.account;
     renderEnrollmentDiagnostic(enrollment.diagnostics);
-    focusEnrollmentWindowButton.hidden = !active || !enrollment.diagnostics?.browserFallbackAvailable;
+    focusEnrollmentWindowButton.hidden = !active || (!browserWindowAvailable && !enrollment.diagnostics?.browserFallbackAvailable);
+    focusEnrollmentWindowButton.textContent = browserWindowAvailable ? '定位受控登录窗口' : '打开受控登录窗口';
     enrollmentResult.textContent = enrollment.account
       ? `账号 ${enrollment.account.name} 已接入，当前状态：${statusLabel(enrollment.account.status)}。`
       : '';
@@ -455,6 +458,8 @@
       const expiry = new Date(current.expiresAt);
       const prefix = current.diagnostics?.scanDetected
         ? '已收到微信扫码确认，正在等待 IMA 网页登录态同步；完成前不会新增账号。'
+        : current.diagnostics?.browserWindowAvailable
+          ? '受控 IMA 登录窗口已打开，请在该窗口内扫码并完成手机确认。'
         : current.detail || '二维码已就绪，请使用微信扫描下方二维码。';
       return Number.isNaN(expiry.getTime())
         ? prefix
