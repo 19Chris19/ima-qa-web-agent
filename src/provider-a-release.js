@@ -52,6 +52,8 @@ function buildProviderAEnv(options = {}) {
     'IMA_QA_RATE_LIMIT_MAX=20',
     '',
     '# IMA refreshes web auth with the saved refresh token before it expires.',
+    '# Admin refresh and check use a bounded init_session probe only; no knowledge-base question is sent.',
+    'IMA_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS=15000',
     'IMA_WEB_AGENT_REFRESH_SKEW_MS=600000',
     'IMA_WEB_AGENT_REFRESH_INTERVAL_MS=60000',
   ];

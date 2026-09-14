@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
 const { buildRuntimeEnvText } = require('./ima-web-agent-client');
+const { healthMessage } = require('./account-health');
 
 const STORE_VERSION = 1;
 const DEFAULT_EVENT_LIMIT = 80;
@@ -43,6 +44,7 @@ class WebAgentAccountDirectory {
       accounts: Array.isArray(parsed.accounts) ? parsed.accounts.map(normalizeStoredAccount) : [],
     };
     this._backfillIdentityFingerprints();
+    this._backfillRefreshCapability();
     this._disableDuplicateIdentities();
     return this.store;
   }
@@ -79,6 +81,7 @@ class WebAgentAccountDirectory {
         totalRequests: account.runtime.totalRequests,
         lastError: account.runtime.lastError,
         lastUsedAt: account.runtime.lastUsedAt,
+        hasRefreshCredentials: account.runtime.hasRefreshCredentials,
       };
     });
   }
@@ -104,6 +107,7 @@ class WebAgentAccountDirectory {
       principalFingerprint: this._identityFingerprint(runtimeConfig.headers),
       runtime: {
         ...defaultRuntimeState(),
+        hasRefreshCredentials: hasRefreshCredentials(runtimeConfig.headers),
         tokenExpiresAt: runtimeConfig.tokenExpiresAt,
         refreshTokenExpiresAt: runtimeConfig.refreshTokenExpiresAt,
         refreshSkewMs: runtimeConfig.refreshSkewMs,
@@ -156,6 +160,7 @@ class WebAgentAccountDirectory {
       principalFingerprint: this._identityFingerprint(headers),
       runtime: {
         ...defaultRuntimeState(),
+        hasRefreshCredentials: hasRefreshCredentials(headers),
         tokenExpiresAt: nullableNumber(options.tokenExpiresAt),
         refreshTokenExpiresAt: nullableNumber(options.refreshTokenExpiresAt),
         refreshSkewMs: nullableNumber(options.refreshSkewMs) || 10 * 60 * 1000,
@@ -190,6 +195,40 @@ class WebAgentAccountDirectory {
       this.writeRuntimeEnvFile(id);
     }
     return sanitizeAccount(this.getAccount(id), { includeEvents: true });
+  }
+
+  replaceCapturedAccount(accountId, options = {}) {
+    const existing = this._requireAccount(accountId);
+    const headers = normalizeHeaders(options.headers);
+    const nextFingerprint = this._identityFingerprint(headers);
+    if (!existing.principalFingerprint || !nextFingerprint) {
+      const error = new Error('无法证明扫码登录与原 IMA 身份一致，已保留原登录态');
+      error.statusCode = 409;
+      error.code = 'ima_identity_unverified';
+      throw error;
+    }
+    if (existing.principalFingerprint !== nextFingerprint) {
+      const error = new Error('扫码登录的 IMA 身份不是原账号，已保留原登录态');
+      error.statusCode = 409;
+      error.code = 'ima_identity_mismatch';
+      throw error;
+    }
+    return this.upsertCapturedAccount({
+      id: existing.id,
+      name: existing.name,
+      routingLane: existing.routingLane,
+      knowledgeBaseId: options.knowledgeBaseId || existing.knowledgeBaseId,
+      headers,
+      modelId: options.modelId || existing.modelId,
+      modelType: options.modelType || existing.modelType,
+      runtimeEnvPath: existing.runtimeEnvPath,
+      tokenExpiresAt: options.tokenExpiresAt,
+      refreshTokenExpiresAt: options.refreshTokenExpiresAt,
+      refreshSkewMs: options.refreshSkewMs,
+      refreshIntervalMs: options.refreshIntervalMs,
+      source: options.source || 'admin-qr-reauth',
+      replace: true,
+    });
   }
 
   setDisabled(accountId, disabled, reason = '') {
@@ -248,6 +287,39 @@ class WebAgentAccountDirectory {
     return sanitizeAccount(account, { includeEvents: true });
   }
 
+  recordAccountHealth(accountId, outcome = {}) {
+    const account = this._requireAccount(accountId);
+    const operation = outcome.operation === 'refresh' ? 'refresh' : 'check';
+    const code = cleanText(outcome.code) || 'upstream_temporary';
+    const now = this.now();
+    const checkedAt = cleanText(outcome.checkedAt) || now;
+    account.runtime.lastCheckAt = checkedAt;
+    account.runtime.lastCheckCode = code;
+    account.runtime.lastCheckMessage = healthMessage(code);
+    if (typeof outcome.sessionValid === 'boolean') {
+      account.runtime.sessionValid = outcome.sessionValid;
+    }
+    if (typeof outcome.knowledgeReady === 'boolean') {
+      account.runtime.knowledgeReady = outcome.knowledgeReady;
+    }
+    if (typeof outcome.webReady === 'boolean') {
+      account.runtime.webReady = outcome.webReady;
+    }
+    if (operation === 'refresh') {
+      account.runtime.lastRefreshAt = now;
+      account.runtime.lastRefreshCode = code;
+      account.runtime.lastRefreshError = code === 'ok' ? '' : healthMessage(code);
+    }
+    account.runtime.updatedAt = now;
+    addEvent(account, {
+      type: code === 'ok' ? `account_${operation}ed` : `account_${operation}_failed`,
+      message: code === 'ok' ? `Account ${operation} completed` : `Account ${operation} failed`,
+      meta: { code },
+    }, this.now);
+    this._writeStore();
+    return sanitizeAccount(account, { includeEvents: true });
+  }
+
   updateCredentialsFromClient(accountId, clientSnapshot = {}) {
     const account = this._requireAccount(accountId);
     const nextIdentityFingerprint = this._identityFingerprint(clientSnapshot.headers);
@@ -283,6 +355,7 @@ class WebAgentAccountDirectory {
     account.runtime.refreshSkewMs = nullableNumber(clientSnapshot.refreshSkewMs) || account.runtime.refreshSkewMs;
     account.runtime.refreshIntervalMs =
       nullableNumber(clientSnapshot.refreshIntervalMs) || account.runtime.refreshIntervalMs;
+    account.runtime.hasRefreshCredentials = hasRefreshCredentials(clientSnapshot.headers);
     account.principalFingerprint = nextIdentityFingerprint || account.principalFingerprint || '';
     account.runtime.lastRefreshAt = this.now();
     account.runtime.lastRefreshError = '';
@@ -458,6 +531,26 @@ class WebAgentAccountDirectory {
           message: `Disabled because it duplicates IMA identity already assigned to ${canonical.name}`,
         }, this.now);
         changed = true;
+      }
+    }
+    if (changed) {
+      this._writeStore();
+    }
+  }
+
+  _backfillRefreshCapability() {
+    let changed = false;
+    for (const account of this.store.accounts) {
+      if (account.runtime.hasRefreshCredentials) {
+        continue;
+      }
+      try {
+        if (hasRefreshCredentials(this._decryptRuntimeConfig(account).headers)) {
+          account.runtime.hasRefreshCredentials = true;
+          changed = true;
+        }
+      } catch {
+        // A legacy unreadable record remains non-refreshable until it is re-enrolled.
       }
     }
     if (changed) {
@@ -658,6 +751,7 @@ function sanitizeAccount(account, options = {}) {
     refreshTokenExpiresAt: account.runtime?.refreshTokenExpiresAt
       ? new Date(Number(account.runtime.refreshTokenExpiresAt)).toISOString()
       : null,
+    health: buildSanitizedHealth(account),
     hasCredentials: Boolean(account.secret),
     createdAt: account.createdAt || null,
     updatedAt: account.updatedAt || null,
@@ -681,8 +775,50 @@ function defaultRuntimeState() {
     refreshIntervalMs: 60 * 1000,
     lastRefreshAt: null,
     lastRefreshError: '',
+    lastRefreshCode: '',
+    lastCheckAt: null,
+    lastCheckCode: 'account_not_checked',
+    lastCheckMessage: healthMessage('account_not_checked'),
+    sessionValid: null,
+    knowledgeReady: null,
+    webReady: null,
+    hasRefreshCredentials: false,
     updatedAt: null,
   };
+}
+
+function buildSanitizedHealth(account) {
+  const runtime = account.runtime || {};
+  const now = Date.now();
+  const localSchedulable = !runtime.disabled &&
+    Number(runtime.activeRequests || 0) === 0 &&
+    Number(runtime.cooldownUntil || 0) <= now;
+  const refreshable = Boolean(runtime.hasRefreshCredentials) &&
+    (!runtime.refreshTokenExpiresAt || Number(runtime.refreshTokenExpiresAt) > now);
+  const sessionValid = typeof runtime.sessionValid === 'boolean' ? runtime.sessionValid : null;
+  const knowledgeReady = typeof runtime.knowledgeReady === 'boolean' ? runtime.knowledgeReady : null;
+  const webReady = typeof runtime.webReady === 'boolean' ? runtime.webReady : null;
+  const ready = localSchedulable && runtime.lastCheckCode === 'ok' && sessionValid === true && knowledgeReady === true && webReady === true;
+  const unavailable = runtime.disabled || sessionValid === false || knowledgeReady === false || webReady === false;
+  return {
+    local_schedulable: localSchedulable,
+    session_valid: sessionValid,
+    refreshable,
+    knowledge_ready: knowledgeReady,
+    web_ready: webReady,
+    status: ready ? 'ready' : unavailable ? 'unavailable' : 'needs_check',
+    last_check_at: runtime.lastCheckAt || null,
+    last_check_code: runtime.lastCheckCode || 'account_not_checked',
+    last_check_message: runtime.lastCheckMessage || healthMessage('account_not_checked'),
+    last_refresh_at: runtime.lastRefreshAt || null,
+    last_refresh_code: runtime.lastRefreshCode || null,
+  };
+}
+
+function hasRefreshCredentials(headers) {
+  const cookie = String(headers?.['x-ima-cookie'] || headers?.cookie || '');
+  return /(?:^|;\s*)IMA-UID=[^;\s]+/i.test(cookie) &&
+    /(?:^|;\s*)IMA-REFRESH-TOKEN=[^;\s]+/i.test(cookie);
 }
 
 function addEvent(account, event = {}, now) {

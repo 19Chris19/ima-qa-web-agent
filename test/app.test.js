@@ -1131,6 +1131,205 @@ test('admin routes can inspect and manage Web Agent accounts with token auth', a
   });
 });
 
+test('admin account operations use a first-party session context and return one consistent health projection', async () => {
+  const tempDir = await fsMkdtemp();
+  const accountDirectory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  accountDirectory.upsertCapturedAccount({
+    id: 'account-health',
+    name: 'Account Health',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=synthetic-user; IMA-TOKEN=synthetic-token; IMA-REFRESH-TOKEN=synthetic-refresh',
+      'x-ima-bkn': '123',
+    },
+  });
+  const initCalls = [];
+  const pool = new IMAWebAgentPool(
+    { accounts: accountDirectory.getPoolAccounts(), healthCheckTimeoutMs: 100 },
+    {
+      onAccountStateChange(snapshot) {
+        accountDirectory.recordRuntimeState(snapshot);
+      },
+      onAccountCredentialsChange(accountId, snapshot) {
+        accountDirectory.updateCredentialsFromClient(accountId, snapshot);
+      },
+      clientFactory(account) {
+        return {
+          applyConfig() {},
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context', owner: 'server' };
+          },
+          async initSession(options) {
+            initCalls.push(options);
+            return 'synthetic-session';
+          },
+          async refreshAuth() {},
+          persistRuntimeEnv() {
+            return true;
+          },
+          getConfigSnapshot() {
+            return {
+              id: account.id,
+              name: account.name,
+              knowledgeBaseId: account.knowledgeBaseId,
+              headers: account.headers,
+              modelId: account.modelId,
+              modelType: account.modelType,
+            };
+          },
+        };
+      },
+    },
+  );
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, adminToken: 'admin-token' },
+      webAgent: { sharedKnowledgeBaseId: 'web-kb-id' },
+    },
+    accountDirectory,
+    imaWebAgentClient: pool,
+  });
+  const headers = { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' };
+
+  await withServer(app, async (baseUrl) => {
+    const before = await (await fetch(`${baseUrl}/api/admin/accounts?details=1`, { headers })).json();
+    assert.equal(before.summary.availableAccounts, 0);
+    assert.equal(before.accounts[0].availabilityStatus, 'needs_check');
+    assert.equal(before.accounts[0].health.local_schedulable, true);
+
+    const check = await fetch(`${baseUrl}/api/admin/accounts/account-health/check`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const checked = await check.json();
+    assert.equal(check.status, 200);
+    assert.equal(checked.account.availabilityStatus, 'ready');
+    assert.equal(checked.summary.availableAccounts, 1);
+    assert.equal(checked.consistency.consistent, true);
+    assert.equal(initCalls.length, 1);
+    assert.equal(initCalls[0].clientContext.owner, 'server');
+    assert.equal(initCalls[0].question, undefined);
+    assert.equal(JSON.stringify(checked).includes('synthetic-token'), false);
+    assert.equal(JSON.stringify(checked).includes('synthetic-refresh'), false);
+
+    const refresh = await fetch(`${baseUrl}/api/admin/accounts/account-health/refresh`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const refreshed = await refresh.json();
+    assert.equal(refresh.status, 200);
+    assert.equal(refreshed.account.health.last_refresh_code, 'ok');
+    assert.equal(initCalls.length, 2);
+
+    const disabled = await (await fetch(`${baseUrl}/api/admin/accounts/account-health/disable`, {
+      method: 'POST', headers, body: '{}',
+    })).json();
+    assert.equal(disabled.consistency.consistent, true);
+    assert.equal(disabled.account.status, 'disabled');
+
+    const enabled = await (await fetch(`${baseUrl}/api/admin/accounts/account-health/enable`, {
+      method: 'POST', headers, body: '{}',
+    })).json();
+    assert.equal(enabled.consistency.consistent, true);
+    assert.equal(enabled.account.status, 'available');
+
+    const deleted = await (await fetch(`${baseUrl}/api/admin/accounts/account-health`, {
+      method: 'DELETE', headers,
+    })).json();
+    assert.equal(deleted.account, null);
+    assert.equal(deleted.consistency.consistent, true);
+  });
+});
+
+test('admin health APIs persist fixed failure categories without leaking upstream details', async () => {
+  const tempDir = await fsMkdtemp();
+  const accountDirectory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  for (const id of ['account-expired', 'account-temporary', 'account-context']) {
+    accountDirectory.upsertCapturedAccount({
+      id,
+      name: id,
+      knowledgeBaseId: 'web-kb-id',
+      headers: {
+        'x-ima-cookie': `IMA-UID=${id}; IMA-TOKEN=synthetic-token; IMA-REFRESH-TOKEN=synthetic-refresh`,
+        'x-ima-bkn': '123',
+      },
+    });
+  }
+  const pool = new IMAWebAgentPool(
+    { accounts: accountDirectory.getPoolAccounts(), healthCheckTimeoutMs: 100 },
+    {
+      onAccountStateChange(snapshot) {
+        accountDirectory.recordRuntimeState(snapshot);
+      },
+      clientFactory(account) {
+        if (account.id === 'account-context') {
+          return { async initSession() { return 'should-not-run'; } };
+        }
+        return {
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context' };
+          },
+          async initSession() {
+            if (account.id === 'account-temporary') {
+              throw new Error('fetch failed: synthetic network detail');
+            }
+            return 'synthetic-session';
+          },
+          async refreshAuth() {
+            if (account.id === 'account-expired') {
+              throw new Error('IMA Web login expired and refresh credentials are unavailable');
+            }
+          },
+        };
+      },
+    },
+  );
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, adminToken: 'admin-token' },
+      webAgent: { sharedKnowledgeBaseId: 'web-kb-id' },
+    },
+    accountDirectory,
+    imaWebAgentClient: pool,
+  });
+  const headers = { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' };
+
+  await withServer(app, async (baseUrl) => {
+    const expired = await fetch(`${baseUrl}/api/admin/accounts/account-expired/refresh`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const expiredBody = await expired.json();
+    assert.equal(expired.status, 422);
+    assert.equal(expiredBody.code, 'auth_expired');
+    assert.match(expiredBody.error, /重新扫码登录/);
+
+    const temporary = await fetch(`${baseUrl}/api/admin/accounts/account-temporary/check`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const temporaryBody = await temporary.json();
+    assert.equal(temporary.status, 502);
+    assert.equal(temporaryBody.code, 'upstream_temporary');
+    assert.equal(JSON.stringify(temporaryBody).includes('synthetic network detail'), false);
+
+    const context = await fetch(`${baseUrl}/api/admin/accounts/account-context/check`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const contextBody = await context.json();
+    assert.equal(context.status, 500);
+    assert.equal(contextBody.code, 'web_context_missing');
+    assert.equal(accountDirectory.listAccounts().find((account) => account.id === 'account-expired').health.session_valid, false);
+    assert.equal(accountDirectory.listAccounts().find((account) => account.id === 'account-context').health.web_ready, false);
+  });
+});
+
 test('admin enrollment routes require a token and keep QR screenshots private', async () => {
   const tempDir = await fsMkdtemp();
   const accountDirectory = new WebAgentAccountDirectory({
@@ -1223,7 +1422,7 @@ test('admin enrollment routes require a token and keep QR screenshots private', 
     const createdPayload = await created.json();
     assert.equal(created.status, 201);
     assert.equal(createdPayload.enrollment.taskId, 'enrollment-1');
-    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false });
+    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false, reauthAccountId: undefined });
 
     const qr = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1/qr`, {
       headers: { Authorization: 'Bearer admin-token' },

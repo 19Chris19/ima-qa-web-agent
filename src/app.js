@@ -985,6 +985,7 @@ function findLastBoundary(text) {
 function sanitizeKnowledgeBoundAnswer(answer) {
   const original = String(answer || '');
   const sanitized = original
+    .replace(/\s*[(（]@context-ref\?id=\d{1,6}[)）]\s*$/iu, '')
     .replace(/[^。！？\n]*(?:建议|可以|请|需要)?(?:您|你)?(?:咨询|联系|询问)[^。！？\n]*(?:财务|行政|人力资源|HR|客服|官网|供应商|外部|部门)[^。！？\n]*[。！？]?/giu, '')
     .replace(/[^。！？\n]*(?:建议|可以|请)?(?:您|你)?(?:查阅|查看|参考)[^。！？\n]*(?:外部|官网|网页|公司|内部)[^。！？\n]*(?:制度|文件|资料)[^。！？\n]*[。！？]?/giu, '')
     .replace(/[^。！？\n]*(?:通常|一般|属于)[^。！？\n]*(?:财务|行政|人力资源|HR|客服|官网|供应商|外部|部门)[^。！？\n]*[。！？]?/giu, '')

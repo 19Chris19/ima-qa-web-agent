@@ -773,6 +773,24 @@ body[data-mode="admin"] {
   background: #fff7ed;
 }
 
+.admin-account-status.ready {
+  color: #176b4c;
+  border-color: #b9dccb;
+  background: #eef8f1;
+}
+
+.admin-account-status.needs_check {
+  color: #725118;
+  border-color: #ebd5a0;
+  background: #fff8e8;
+}
+
+.admin-account-status.unavailable {
+  color: var(--danger);
+  border-color: #e8c8c2;
+  background: #fff5f3;
+}
+
 .admin-account-status.disabled,
 .admin-account-status.unknown {
   border-color: #efc7c0;

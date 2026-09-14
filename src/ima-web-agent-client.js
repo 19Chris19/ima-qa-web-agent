@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { parseIMAWebAgentStream, parseIMAWebAgentEvent, mapIMAWebAgentEvent, extractSources } = require('./ima-upstream-protocol');
 
 const IMA_WEB_BASE_URL = 'https://ima.qq.com';
 const INIT_SESSION_PATH = '/cgi-bin/session_logic/init_session';
@@ -94,12 +95,20 @@ class IMAWebAgentClient {
   }
 
   async initSession(options = {}) {
-    let payload = await this._initSessionOnce(options);
+    const clientContext = options.clientContext || this.createFirstPartyClientContext();
+    const sessionOptions = { ...options, clientContext };
+    let payload = await this._initSessionOnce(sessionOptions);
     let sessionId = payload.session_id || payload.session_info?.id;
 
+    if (!sessionId && shouldRefreshAuth(payload) && options.allowAuthRefresh === false) {
+      const error = new Error(payload.msg || 'IMA Web login expired');
+      error.code = 'auth_expired';
+      throw error;
+    }
+
     if (!sessionId && shouldRefreshAuth(payload)) {
-      await this.refreshAuth(options);
-      payload = await this._initSessionOnce(options);
+      await this.refreshAuth(sessionOptions);
+      payload = await this._initSessionOnce(sessionOptions);
       sessionId = payload.session_id || payload.session_info?.id;
     }
 
@@ -107,6 +116,18 @@ class IMAWebAgentClient {
       throw new Error(payload.msg || 'IMA Web Agent init_session failed');
     }
     return sessionId;
+  }
+
+  createFirstPartyClientContext() {
+    return Object.freeze({
+      type: 'ima_web_first_party',
+      origin: IMA_WEB_BASE_URL,
+      referer: `${IMA_WEB_BASE_URL}/wikis?knowledgeBaseId=${encodeURIComponent(
+        this.knowledgeBaseId,
+      )}&isUseKnowledgeBaseQa=1`,
+      fromBrowserIma: '1',
+      userAgent: DEFAULT_USER_AGENT,
+    });
   }
 
   async ensureFreshAuth(options = {}) {
@@ -124,7 +145,7 @@ class IMAWebAgentClient {
   async _initSessionOnce(options = {}) {
     const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${INIT_SESSION_PATH}`, {
       method: 'POST',
-      headers: this._headers(),
+      headers: this._headers(options.clientContext),
       body: JSON.stringify({
         envInfo: { robotType: ROBOT_TYPE_KNOWLEDGE, interactType: 0 },
         relatedUrl: this.knowledgeBaseId,
@@ -225,16 +246,8 @@ class IMAWebAgentClient {
     let activeSessionId = requestedSessionId || await this.initSession({ signal });
     onSession?.(activeSessionId);
 
-    try {
-      yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId });
-    } catch (error) {
-      if (!requestedSessionId || !isSessionExpiredError(error) || signal?.aborted) {
-        throw error;
-      }
-      activeSessionId = await this.initSession({ signal });
-      onSession?.(activeSessionId);
-      yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId });
-    }
+    // Once dispatched, an interrupted question must not be asked again implicitly.
+    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId });
   }
 
   async *_streamAskOnce({ question, signal, sessionId }) {
@@ -274,18 +287,17 @@ class IMAWebAgentClient {
     yield* parseIMAWebAgentStream(response);
   }
 
-  _headers() {
+  _headers(clientContext) {
+    const context = normalizeFirstPartyClientContext(clientContext, this.createFirstPartyClientContext());
     return {
       accept: '*/*',
       'content-type': 'application/json',
       'cache-control': 'no-cache',
-      origin: IMA_WEB_BASE_URL,
-      referer: `${IMA_WEB_BASE_URL}/wikis?knowledgeBaseId=${encodeURIComponent(
-        this.knowledgeBaseId,
-      )}&isUseKnowledgeBaseQa=1`,
-      from_browser_ima: '1',
+      origin: context.origin,
+      referer: context.referer,
+      from_browser_ima: context.fromBrowserIma,
       extension_version: WEB_VERSION,
-      'user-agent': DEFAULT_USER_AGENT,
+      'user-agent': context.userAgent,
       ...this.headers,
     };
   }
@@ -388,6 +400,25 @@ function normalizeAuthHeaders(headers) {
   return headers;
 }
 
+function normalizeFirstPartyClientContext(context, fallback) {
+  const candidate = context && typeof context === 'object' ? context : fallback;
+  if (
+    candidate?.type !== 'ima_web_first_party' ||
+    candidate.origin !== IMA_WEB_BASE_URL ||
+    !String(candidate.referer || '').startsWith(`${IMA_WEB_BASE_URL}/`)
+  ) {
+    const error = new Error('IMA Web first-party client context is unavailable');
+    error.code = 'web_context_missing';
+    throw error;
+  }
+  return {
+    origin: IMA_WEB_BASE_URL,
+    referer: String(candidate.referer),
+    fromBrowserIma: '1',
+    userAgent: String(candidate.userAgent || DEFAULT_USER_AGENT),
+  };
+}
+
 async function readJsonResponse(response, label, options = {}) {
   const text = await response.text();
   let payload;
@@ -488,134 +519,6 @@ function buildRuntimeEnvText(options) {
     lines.push(`IMA_WEB_AGENT_REFRESH_INTERVAL_MS=${shellQuote(options.refreshIntervalMs)}`);
   }
   return `${lines.join('\n')}\n`;
-}
-
-async function* parseIMAWebAgentStream(response) {
-  if (!response.body) {
-    throw new Error('IMA Web Agent did not return a readable stream');
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const seenSources = new Set();
-
-  for await (const chunk of response.body) {
-    buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n');
-
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary >= 0) {
-      const eventBlock = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const event = parseIMAWebAgentEvent(eventBlock);
-      const mapped = mapIMAWebAgentEvent(event, seenSources);
-      if (mapped) {
-        yield mapped;
-      }
-      boundary = buffer.indexOf('\n\n');
-    }
-  }
-
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    const event = parseIMAWebAgentEvent(buffer);
-    const mapped = mapIMAWebAgentEvent(event, seenSources);
-    if (mapped) {
-      yield mapped;
-    }
-  }
-}
-
-function parseIMAWebAgentEvent(eventBlock) {
-  const event = { eventName: 'message', dataText: '' };
-  const dataLines = [];
-
-  for (const line of eventBlock.split('\n')) {
-    if (line.startsWith('event:')) {
-      event.eventName = line.slice(6).trim();
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  }
-
-  event.dataText = dataLines.join('\n');
-  if (event.dataText && event.dataText !== '[DONE]') {
-    try {
-      event.data = JSON.parse(event.dataText);
-    } catch {
-      event.data = event.dataText;
-    }
-  } else {
-    event.data = event.dataText;
-  }
-  return event;
-}
-
-function mapIMAWebAgentEvent(event, seenSources = new Set()) {
-  if (event.eventName === 'MESSAGE') {
-    const text = pickMessageChunk(event.data);
-    return text ? { type: 'delta', text } : null;
-  }
-
-  if (event.eventName === 'SEARCH_MEDIAS' || event.eventName === 'CONTEXT_REFERENCES') {
-    const sources = extractSources(event.data, seenSources);
-    const searchSummary = typeof event.data?.processing === 'string' ? event.data.processing : '';
-    if (sources.length > 0 || searchSummary) {
-      return { type: 'sources', sources, searchSummary };
-    }
-  }
-
-  if (event.eventName === 'COMPLETED') {
-    const code = typeof event.data?.Code === 'number' ? event.data.Code : 0;
-    if (code !== 0) {
-      throw new Error(event.data?.Msg || `IMA Web Agent completed with code ${code}`);
-    }
-    return { type: 'done' };
-  }
-
-  return null;
-}
-
-function pickMessageChunk(data) {
-  if (typeof data === 'string') {
-    return data;
-  }
-  if (!data || typeof data !== 'object') {
-    return '';
-  }
-  for (const key of ['Text', 'text', 'content', 'Content', 'message', 'Message']) {
-    if (typeof data[key] === 'string') {
-      return data[key];
-    }
-  }
-  return '';
-}
-
-function extractSources(data, seenSources) {
-  if (!data || typeof data !== 'object') {
-    return [];
-  }
-
-  const items = []
-    .concat(Array.isArray(data.medias) ? data.medias : [])
-    .concat(Array.isArray(data.Medias) ? data.Medias : [])
-    .concat(Array.isArray(data.references) ? data.references : [])
-    .concat(Array.isArray(data.items) ? data.items : []);
-
-  const sources = [];
-  for (const item of items) {
-    const mediaId = String(item.id || item.media_id || item.mediaId || '').trim();
-    if (!mediaId || seenSources.has(mediaId)) {
-      continue;
-    }
-    seenSources.add(mediaId);
-    sources.push({
-      index: seenSources.size,
-      title: String(item.title || item.name || '未命名资料').trim(),
-      snippet: String(item.publisher || item.knowledgeBaseInfo?.name || '').trim(),
-    });
-  }
-
-  return sources;
 }
 
 module.exports = {

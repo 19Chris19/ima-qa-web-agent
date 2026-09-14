@@ -1,4 +1,9 @@
 const { normalizeAccountId } = require('./web-agent-account-directory');
+const {
+  HEALTH_CODES,
+  classifyAccountHealthError,
+  healthMessage,
+} = require('./account-health');
 
 function registerAdminRoutes(app, options = {}) {
   const accountDirectory = options.accountDirectory;
@@ -14,15 +19,37 @@ function registerAdminRoutes(app, options = {}) {
     options.imaWebAgentClient?.syncAccounts?.(accountDirectory.getPoolAccounts());
     options.onAccountsSynced?.(options.imaWebAgentClient?.stats?.());
   };
+  const managementSnapshot = (includeEvents = false) => buildManagementSnapshot({
+    accountDirectory,
+    pool: options.imaWebAgentClient,
+    includeEvents,
+  });
+  const actionResponse = (accountId, operation, details = {}) => {
+    const snapshot = managementSnapshot(true);
+    return {
+      success: true,
+      operation: {
+        type: operation,
+        code: 'ok',
+        message: details.message || healthMessage('ok'),
+        completedAt: new Date().toISOString(),
+      },
+      ...snapshot,
+      account: snapshot.accounts.find((account) => account.id === accountId) || null,
+      consistency: verifyAccountConsistency({
+        accountDirectory,
+        pool: options.imaWebAgentClient,
+        accountId,
+        expected: details.expected || 'present',
+      }),
+    };
+  };
   syncPool();
 
   app.get('/api/admin/accounts', auth, (req, res) => {
     res.json({
       success: true,
-      accounts: accountDirectory.listAccounts({
-        includeEvents: wantsDetails(req),
-      }),
-      pool: options.imaWebAgentClient?.stats?.({ includeDetails: wantsDetails(req) }) || null,
+      ...managementSnapshot(wantsDetails(req)),
       queue: options.askQueue?.stats?.() || null,
     });
   });
@@ -131,6 +158,7 @@ function registerAdminRoutes(app, options = {}) {
         const enrollment = await enrollmentManager.start({
           name: req.body?.name,
           id: req.body?.id,
+          reauthAccountId: req.body?.reauthAccountId,
           replace: Boolean(req.body?.replace),
         });
         res.status(201).json({ success: true, enrollment });
@@ -234,10 +262,13 @@ function registerAdminRoutes(app, options = {}) {
 
   app.post('/api/admin/accounts/:accountId/disable', auth, (req, res) => {
     try {
-      const account = accountDirectory.setDisabled(req.params.accountId, true, req.body?.reason);
+      accountDirectory.setDisabled(req.params.accountId, true, req.body?.reason);
       options.imaWebAgentClient?.setAccountDisabled?.(req.params.accountId, true, req.body?.reason);
       syncPool();
-      res.json({ success: true, account });
+      res.json(actionResponse(req.params.accountId, 'disable', {
+        message: '账号已停用，已从本机运行池移除',
+        expected: 'disabled',
+      }));
     } catch (error) {
       sendAdminError(res, error);
     }
@@ -245,10 +276,13 @@ function registerAdminRoutes(app, options = {}) {
 
   app.post('/api/admin/accounts/:accountId/enable', auth, (req, res) => {
     try {
-      const account = accountDirectory.setDisabled(req.params.accountId, false);
+      accountDirectory.setDisabled(req.params.accountId, false);
       options.imaWebAgentClient?.setAccountDisabled?.(req.params.accountId, false);
       syncPool();
-      res.json({ success: true, account });
+      res.json(actionResponse(req.params.accountId, 'enable', {
+        message: '账号已启用，已同步到本机运行池；请执行检查确认 IMA 会话可用',
+        expected: 'enabled',
+      }));
     } catch (error) {
       sendAdminError(res, error);
     }
@@ -258,14 +292,18 @@ function registerAdminRoutes(app, options = {}) {
     try {
       syncPool();
       const poolAccount = await options.imaWebAgentClient.refreshAccount(req.params.accountId);
-      const account = accountDirectory.getAccount(req.params.accountId);
-      res.json({
-        success: true,
-        account: account ? accountDirectory.listAccounts({ includeEvents: true }).find((item) => item.id === account.id) : null,
-        poolAccount,
+      accountDirectory.recordAccountHealth(req.params.accountId, {
+        operation: 'refresh',
+        ...poolAccount.healthCheck,
       });
+      syncPool();
+      res.json(actionResponse(req.params.accountId, 'refresh', {
+        message: '登录态已刷新并通过 IMA 会话检查',
+        expected: 'present',
+      }));
     } catch (error) {
-      sendAdminError(res, error);
+      const code = recordAccountHealthFailure(accountDirectory, req.params.accountId, error, 'refresh');
+      sendAdminError(res, error, code);
     }
   });
 
@@ -273,15 +311,17 @@ function registerAdminRoutes(app, options = {}) {
     try {
       syncPool();
       const poolAccount = await options.imaWebAgentClient.checkAccount(req.params.accountId);
-      accountDirectory.recordEvent(req.params.accountId, 'account_checked', 'Account knowledge session check passed');
-      res.json({ success: true, poolAccount });
+      accountDirectory.recordAccountHealth(req.params.accountId, {
+        operation: 'check',
+        ...poolAccount.healthCheck,
+      });
+      res.json(actionResponse(req.params.accountId, 'check', {
+        message: 'IMA 会话检查通过，未发送知识库问答',
+        expected: 'present',
+      }));
     } catch (error) {
-      try {
-        accountDirectory.recordEvent(req.params.accountId, 'account_check_failed', safeAdminError(error));
-      } catch {
-        // Ignore secondary logging failures.
-      }
-      sendAdminError(res, error);
+      const code = recordAccountHealthFailure(accountDirectory, req.params.accountId, error, 'check');
+      sendAdminError(res, error, code);
     }
   });
 
@@ -298,11 +338,92 @@ function registerAdminRoutes(app, options = {}) {
     try {
       const deleted = accountDirectory.deleteAccount(req.params.accountId);
       syncPool();
-      res.status(deleted ? 200 : 404).json({ success: deleted });
+      if (!deleted) {
+        return res.status(404).json({ success: false, error: '账号不存在' });
+      }
+      res.json(actionResponse(req.params.accountId, 'delete', {
+        message: '已删除本机账号记录和受管导出文件；未删除 IMA 云端账号',
+        expected: 'absent',
+      }));
     } catch (error) {
       sendAdminError(res, error);
     }
   });
+}
+
+function buildManagementSnapshot({ accountDirectory, pool, includeEvents = false }) {
+  const directoryAccounts = accountDirectory.listAccounts({ includeEvents });
+  const poolSummary = pool?.stats?.({ includeDetails: true }) || null;
+  const poolAccounts = new Map((poolSummary?.accounts || []).map((account) => [account.id, account]));
+  const accounts = directoryAccounts.map((account) => {
+    const poolAccount = poolAccounts.get(account.id) || null;
+    return {
+      ...account,
+      schedulerStatus: poolAccount?.status || 'unavailable',
+      poolSynchronized: Boolean(poolAccount),
+      availabilityStatus: account.health?.status || 'needs_check',
+      maintenanceOperation: poolAccount?.maintenanceOperation || null,
+    };
+  });
+  const summary = {
+    totalAccounts: accounts.length,
+    availableAccounts: accounts.filter((account) => account.availabilityStatus === 'ready').length,
+    needsCheckAccounts: accounts.filter((account) => account.availabilityStatus === 'needs_check').length,
+    unavailableAccounts: accounts.filter((account) => account.availabilityStatus === 'unavailable').length,
+    busyAccounts: accounts.filter((account) => account.schedulerStatus === 'busy').length,
+    coolingDownAccounts: accounts.filter((account) => account.schedulerStatus === 'cooling_down').length,
+  };
+  return { accounts, summary, pool: poolSummary };
+}
+
+function verifyAccountConsistency({ accountDirectory, pool, accountId, expected }) {
+  const directoryAccount = accountDirectory.getAccount(accountId);
+  const poolAccounts = pool?.stats?.({ includeDetails: true })?.accounts;
+  const poolAccount = Array.isArray(poolAccounts)
+    ? poolAccounts.find((account) => account.id === accountId)
+    : null;
+  const observed = Array.isArray(poolAccounts);
+  let consistent = false;
+  if (expected === 'absent') {
+    consistent = observed && !directoryAccount && !poolAccount;
+  } else if (expected === 'disabled') {
+    consistent = observed && Boolean(directoryAccount?.runtime?.disabled) && poolAccount?.disabled === true;
+  } else if (expected === 'enabled') {
+    consistent = observed && !directoryAccount?.runtime?.disabled && poolAccount?.disabled === false;
+  } else {
+    consistent = observed && Boolean(directoryAccount) && Boolean(poolAccount);
+  }
+  return {
+    directory: directoryAccount ? 'present' : 'absent',
+    pool: observed ? (poolAccount ? 'present' : 'absent') : 'not_observable',
+    consistent,
+  };
+}
+
+function recordAccountHealthFailure(accountDirectory, accountId, error, operation) {
+  const code = HEALTH_CODES[error?.code]
+    ? error.code
+    : classifyAccountHealthError(error, operation);
+  if (code === 'account_operation_in_progress' || error?.statusCode === 404) {
+    return code;
+  }
+  const outcome = { operation, code };
+  if (code === 'auth_expired' || code === 'auth_rejected') {
+    outcome.sessionValid = false;
+    outcome.webReady = true;
+  } else if (code === 'knowledge_base_unavailable') {
+    outcome.sessionValid = false;
+    outcome.knowledgeReady = false;
+    outcome.webReady = true;
+  } else if (code === 'web_context_missing') {
+    outcome.webReady = false;
+  }
+  try {
+    accountDirectory.recordAccountHealth(accountId, outcome);
+  } catch {
+    // Preserve the primary management error if its local audit update also fails.
+  }
+  return code;
 }
 
 function rejectDuplicateAccount(accountDirectory, input = {}, replace) {
@@ -391,10 +512,12 @@ function wantsDetails(req) {
   return ['1', 'true', 'yes'].includes(String(req.query.details || '').trim().toLowerCase());
 }
 
-function sendAdminError(res, error) {
+function sendAdminError(res, error, fixedCode = '') {
+  const code = fixedCode || (HEALTH_CODES[error?.code] ? error.code : '');
   res.status(error.statusCode || 400).json({
     success: false,
-    error: safeAdminError(error),
+    code: code || undefined,
+    error: code ? healthMessage(code) : safeAdminError(error),
   });
 }
 

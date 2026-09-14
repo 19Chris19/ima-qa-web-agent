@@ -50,6 +50,7 @@ test('mapIMAWebAgentEvent maps sources, deltas, and completion', () => {
 
   assert.deepEqual(sources, {
     type: 'sources',
+    sourceKind: 'knowledge', sourceKinds: ['knowledge'],
     searchSummary: '找到了106篇知识库资料',
     sources: [{ index: 1, title: 'Group One.md', snippet: '' }],
   });
@@ -103,12 +104,15 @@ test('IMAWebAgentClient sends init_session then assistant/qa and streams mapped 
   assert.equal(requests[0].url, 'https://ima.qq.com/cgi-bin/session_logic/init_session');
   assert.equal(requests[0].body.knowledgeBaseInfoWithFolder.knowledgeBaseId, 'web-kb-id');
   assert.equal(requests[0].headers['x-ima-cookie'], 'cookie');
+  assert.equal(requests[0].headers.origin, 'https://ima.qq.com');
+  assert.match(requests[0].headers.referer, /knowledgeBaseId=web-kb-id/);
   assert.equal(requests[1].url, 'https://ima.qq.com/cgi-bin/assistant/qa');
   assert.equal(requests[1].body.question, '3DGS 是什么？');
   assert.equal(requests[1].body.model_info.model_id, 'official_3');
   assert.deepEqual(events, [
     {
       type: 'sources',
+      sourceKind: 'knowledge', sourceKinds: ['knowledge'],
       searchSummary: '找到了2篇知识库资料',
       sources: [{ index: 1, title: '资料 A', snippet: '' }],
     },
@@ -213,17 +217,17 @@ test('IMAWebAgentClient reuses a provided conversation session and reports a rep
   assert.equal(requests.filter((request) => request.url.endsWith('/init_session')).length, 0);
 
   const replaced = [];
-  for await (const event of client.streamAsk({
-    question: '失效后的追问',
-    sessionId: 'expired-session',
-    onSession: (sessionId) => replaced.push(sessionId),
-  })) {
-    if (event.type === 'delta') {
-      assert.equal(event.text, 'new-session-1');
-    }
-  }
-  assert.deepEqual(replaced, ['expired-session', 'new-session-1']);
-  assert.equal(requests.at(-1).body.session_id, 'new-session-1');
+  await assert.rejects(async () => {
+    for await (const event of client.streamAsk({
+      question: '失效后的追问',
+      sessionId: 'expired-session',
+      onSession: (sessionId) => replaced.push(sessionId),
+    })) { void event; }
+  }, /401/);
+  assert.deepEqual(replaced, ['expired-session']);
+  assert.equal(initCount, 0);
+  assert.equal(requests.filter((request) => request.url.endsWith('/assistant/qa')).length, 2);
+
 });
 
 test('IMAWebAgentClient refreshes expired web auth and retries init_session once', async () => {
@@ -297,6 +301,35 @@ test('IMAWebAgentClient refreshes expired web auth and retries init_session once
   assert.equal(refreshedCookie['IMA-TOKEN'], 'token-new');
   assert.equal(refreshedCookie['IMA-REFRESH-TOKEN'], 'refresh-new');
   assert.deepEqual(events, [{ type: 'delta', text: '续期后回答' }, { type: 'done' }]);
+});
+
+test('IMAWebAgentClient can check an expired session without mutating login credentials', async () => {
+  const requests = [];
+  const client = new IMAWebAgentClient(
+    {
+      knowledgeBaseId: 'web-kb-id',
+      headers: {
+        'x-ima-cookie': 'IMA-UID=user-1; IMA-TOKEN=token-old; IMA-REFRESH-TOKEN=refresh-old',
+        'x-ima-bkn': '123',
+      },
+    },
+    async (url, options) => {
+      requests.push({ url, options });
+      return new Response(JSON.stringify({ code: 41, msg: '登录失败，请重新登录' }), { status: 200 });
+    },
+  );
+
+  await assert.rejects(
+    () => client.initSession({
+      clientContext: client.createFirstPartyClientContext(),
+      allowAuthRefresh: false,
+    }),
+    (error) => error.code === 'auth_expired',
+  );
+
+  assert.equal(requests.filter((request) => request.url.endsWith('/init_session')).length, 1);
+  assert.equal(requests.some((request) => request.url.endsWith('/auth_login/refresh')), false);
+  assert.match(client.headers['x-ima-cookie'], /IMA-TOKEN=token-old/);
 });
 
 test('IMAWebAgentClient proactively refreshes near-expired auth and persists runtime env', async () => {

@@ -61,8 +61,10 @@ class WebAgentEnrollmentManager {
       throw enrollmentError('已有一个账号接入任务进行中，请先完成或取消它', 409);
     }
 
-    const name = cleanAccountName(options.name);
-    const id = normalizeAccountId(options.id || name);
+    const reauthAccount = options.reauthAccountId ? this.accountDirectory.getAccount(options.reauthAccountId) : null;
+    if (options.reauthAccountId && !reauthAccount) throw enrollmentError('需要重新登录的账号不存在', 404);
+    const name = reauthAccount ? reauthAccount.name : cleanAccountName(options.name);
+    const id = reauthAccount ? reauthAccount.id : normalizeAccountId(options.id || name);
     const knowledgeBaseId = String(
       options.knowledgeBaseId || this.config.webAgent?.sharedKnowledgeBaseId || '',
     ).trim();
@@ -72,7 +74,7 @@ class WebAgentEnrollmentManager {
     const existing = this.accountDirectory.listAccounts().find((account) =>
       normalizeAccountId(account.id) === id || normalizeAccountId(account.name) === normalizeAccountId(name),
     );
-    if (existing && !options.replace) {
+    if (existing && !options.replace && !reauthAccount) {
       throw enrollmentError(`账号 ${existing.name} 已存在；重新绑定需要明确选择替换`, 409);
     }
 
@@ -82,6 +84,7 @@ class WebAgentEnrollmentManager {
       accountId: id,
       knowledgeBaseId,
       replace: Boolean(options.replace),
+      reauthAccountId: reauthAccount?.id || '',
       state: 'launching_browser',
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -455,7 +458,7 @@ class WebAgentEnrollmentManager {
           if (job.state !== 'verifying') {
             return;
           }
-          job.account = this.accountDirectory.upsertCapturedAccount({
+          const capturedAccount = {
             id: job.accountId,
             name: job.name,
             knowledgeBaseId: job.knowledgeBaseId,
@@ -466,7 +469,10 @@ class WebAgentEnrollmentManager {
             refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
             source: 'admin-qr-enrollment',
             replace: job.replace,
-          });
+          };
+          job.account = job.reauthAccountId
+            ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
+            : this.accountDirectory.upsertCapturedAccount(capturedAccount);
           this.pool.syncAccounts(this.accountDirectory.getPoolAccounts());
           this.onAccountsSynced?.();
           this._setState(job, 'completed', '账号已验证并同步到账号池');
@@ -1278,6 +1284,7 @@ function publicJob(job, now = Date.now()) {
   return {
     taskId: job.id,
     name: job.name,
+    mode: job.reauthAccountId ? 'reauth' : 'enroll',
     state: job.state,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt || job.createdAt).toISOString(),
