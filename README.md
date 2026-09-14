@@ -13,6 +13,8 @@
   &nbsp;·&nbsp;
   <a href="./docs/DEPLOYMENT.md"><strong>部署文档</strong></a>
   &nbsp;·&nbsp;
+  <a href="./docs/ACCEPTANCE_TESTING.md"><strong>部署后验收</strong></a>
+  &nbsp;·&nbsp;
   <a href="./CHANGELOG.md"><strong>更新日志</strong></a>
 </p>
 
@@ -206,6 +208,8 @@ node examples/bot-adapter/run.mjs
 示例不接入微信或 Android，也不包含平台消息收发。它演示用户隔离、同一用户串行沿用会话、容量读取和保守的重复消息处理。每条平台消息使用稳定消息 ID 调用 Provider A 的持久幂等接口；机器人本身仍需持久保存消息处理状态，并对平台回复做去重。架构、事件与失败状态见 [机器人适配契约](./docs/BOT_ADAPTER.md)。
 
 ## 维护与验证
+
+首次部署或测试候选分支时，请按[部署与真实验收指南](./docs/ACCEPTANCE_TESTING.md)使用独立目录、配置和端口完成扫码、知识库问答、来源、追问及重启恢复检查。代码测试通过不等于已经对真实 IMA 账号或上游完成验收。
 
 ### 日常查看
 
