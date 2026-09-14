@@ -293,6 +293,7 @@ class ConversationStore {
         updatedAt: conversation.updatedAt,
         expiresAt: conversation.expiresAt,
         title: conversation.title,
+        mode: conversation.mode,
         turns: conversation.turns,
         upstream: conversation.upstream,
       })),

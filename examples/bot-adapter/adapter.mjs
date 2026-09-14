@@ -32,7 +32,7 @@ export class BotAdapter {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       try {
-        const result = await this.ask({ owner, question, conversationId: this.conversations.get(owner), signal });
+        const result = await this.ask({ owner, messageId, question, conversationId: this.conversations.get(owner), signal });
         if (!result.success || !result.answer || !result.conversationId) throw new Error('incomplete_response');
         this.conversations.set(owner, result.conversationId);
         return result;

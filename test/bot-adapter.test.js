@@ -12,6 +12,8 @@ test('bot adapter isolates users and reuses a receipt without redispatch', async
   await Promise.all([adapter.receive(first), adapter.receive(first), adapter.receive({ ...first, user: 'synthetic-2' })]);
   await adapter.receive({ ...first, messageId: '2' });
   assert.equal(calls.length, 3);
+  assert.equal(calls[0].messageId, '1');
+  assert.equal(calls[2].messageId, '2');
   assert.notEqual(calls[0].owner, calls[1].owner);
   assert.equal(calls[2].conversationId, calls[0].owner);
   assert.throws(() => adapter.receive({ ...first, question: 'Different' }), /idempotency_conflict/);

@@ -2114,3 +2114,111 @@ test('local RAG fallback helpers detect mechanical refusal and build topical ans
     /网格化后的可打印结果/,
   );
 });
+
+test('internal Provider A retries with the same idempotency key replay the stored turn after restart', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() {
+    dispatched++;
+    yield { type: 'route', accountId: 'synthetic-account' };
+    yield { type: 'session', sessionId: 'synthetic-session' };
+    yield { type: 'sources', sources: [{ index: 1, title: 'Synthetic source', snippet: 'Synthetic evidence' }], searchSummary: 'Synthetic search' };
+    yield { type: 'delta', text: 'Synthetic answer [1]' };
+    yield { type: 'done' };
+  } };
+  const headers = { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-bot-user', 'Idempotency-Key': 'message-1' };
+  const makeService = () => makeApp({ config, imaWebAgentClient: fakeAgent,
+    conversationStore: new ConversationStore({ storePath: conversationPath }) });
+  try {
+    let responsePayload;
+    await withServer(makeService(), async baseUrl => {
+      const first = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic private question' }) });
+      assert.equal(first.status, 200);
+      responsePayload = await first.json();
+      assert.equal(responsePayload.answer, 'Synthetic answer [1]');
+    });
+    await withServer(makeService(), async baseUrl => {
+      const replay = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic private question' }) });
+      assert.equal(replay.status, 200);
+      const data = await replay.json();
+      assert.equal(data.idempotentReplay, true);
+      assert.equal(data.answer, responsePayload.answer);
+      assert.equal(data.conversationId, responsePayload.conversationId);
+    });
+    assert.equal(dispatched, 1);
+    const ledger = await fs.readFile(`${conversationPath}.internal-idempotency.json`, 'utf8');
+    assert.equal(ledger.includes('Synthetic private question'), false);
+    assert.equal(ledger.includes('Synthetic answer'), false);
+    assert.equal(ledger.includes('synthetic-bot-user'), false);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('internal idempotency refuses a changed request body and never sends it upstream', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() { dispatched++; yield { type: 'delta', text: 'Synthetic answer' }; yield { type: 'done' }; } };
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const send = question => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers: { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-owner', 'Idempotency-Key': 'same-message' }, body: JSON.stringify({ question }) });
+      assert.equal((await send('Synthetic question')).status, 200);
+      const changed = await send('Different synthetic question');
+      assert.equal(changed.status, 409);
+      assert.equal((await changed.json()).error, 'idempotency_conflict');
+    });
+    assert.equal(dispatched, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('concurrent identical internal messages dispatch once and the duplicate sees processing', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() {
+    dispatched++;
+    await new Promise(resolve => setTimeout(resolve, 40));
+    yield { type: 'delta', text: 'Synthetic answer' };
+    yield { type: 'done' };
+  } };
+  const headers = { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-owner', 'Idempotency-Key': 'concurrent-message' };
+  const body = JSON.stringify({ question: 'Synthetic concurrent question' });
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const send = () => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body });
+      const first = send();
+      const duplicate = send();
+      const [firstResponse, duplicateResponse] = await Promise.all([first, duplicate]);
+      const responses = [firstResponse, duplicateResponse];
+      assert.equal(responses.filter(response => response.status === 200).length, 1);
+      assert.equal(responses.filter(response => response.status === 409).length, 1);
+      const conflict = await responses.find(response => response.status === 409).json();
+      assert.equal(conflict.idempotencyState, 'processing');
+    });
+    assert.equal(dispatched, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('unknown internal request state remains non-retriable across service restart', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() { dispatched++; throw new Error('synthetic upstream failure'); } };
+  const headers = { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-owner', 'Idempotency-Key': 'uncertain-message' };
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent }), async baseUrl => {
+      const first = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic question' }) });
+      assert.equal(first.status, 500);
+    });
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent }), async baseUrl => {
+      const retry = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic question' }) });
+      assert.equal(retry.status, 409);
+      assert.equal((await retry.json()).idempotencyState, 'unknown');
+    });
+    assert.equal(dispatched, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});

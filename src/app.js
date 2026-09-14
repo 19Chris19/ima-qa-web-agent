@@ -6,6 +6,7 @@ const { QueueFullError, RequestAbortedError, createAskQueue } = require('./ask-q
 const { isOpenAPIQuotaExceededError } = require('./ima-client');
 const { buildMessages } = require('./prompt');
 const { createRateLimiter } = require('./rate-limit');
+const { InternalAskIdempotency } = require('./internal-ask-idempotency');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -38,8 +39,11 @@ function createApp({
     queueLimit: config.concurrency?.queueLimit,
   });
   app.locals.imaQaAskQueue = askQueue;
+  app.locals.askLimits = config.limits;
   app.locals.accountPoolExerciseManager = accountPoolExerciseManager || null;
   const rateLimiter = createRateLimiter(config.rateLimit);
+  const internalIdempotency = config.conversations?.storePath
+    ? new InternalAskIdempotency({ storePath: `${config.conversations.storePath}.internal-idempotency.json` }) : null;
 
   app.disable('x-powered-by');
   if (config.security?.trustProxy) {
@@ -245,6 +249,7 @@ function createApp({
     '/internal/provider-a/deep-ask',
     requireInternalServiceToken(config.security?.internalServiceToken),
     markInternalProviderADeepAsk,
+    createInternalIdempotencyMiddleware({ ledger: internalIdempotency, conversations }),
     askHandler,
   );
 
@@ -360,6 +365,93 @@ function requireInternalServiceToken(expectedToken) {
 function markInternalProviderADeepAsk(req, _res, next) {
   req.isInternalProviderADeepAsk = true;
   next();
+}
+
+function createInternalIdempotencyMiddleware({ ledger, conversations }) {
+  return (req, res, next) => {
+    const suppliedKey = String(req.get('Idempotency-Key') || '').trim();
+    if (!suppliedKey) return next();
+    if (!ledger) return res.status(503).json({ success: false, error: '内部幂等存储未配置' });
+    if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(suppliedKey)) return res.status(400).json({ success: false, error: 'Idempotency-Key 格式无效' });
+    if (wantsSse(req)) return res.status(400).json({ success: false, error: '带幂等键的内部请求必须使用 JSON 响应' });
+    const validation = validateAskRequest(req.body, req.app.locals.askLimits);
+    if (!validation.ok) return next();
+    const ownerKey = getConversationOwnerKey(req, res);
+    let clientDisconnected = false;
+    const onClientClose = () => {
+      if (!res.writableEnded) clientDisconnected = true;
+    };
+    res.on('close', onClientClose);
+    return (async () => {
+      const claim = await ledger.claim(ownerKey, suppliedKey, ledger.fingerprint(validation.question, validation.conversationId));
+      if (clientDisconnected || req.aborted || res.destroyed) {
+        await ledger.markUnknown(claim.key, ownerKey);
+        return;
+      }
+      res.off('close', onClientClose);
+      if (claim.state === 'complete') {
+        const replay = findCompletedTurn(conversations, ownerKey, claim);
+        if (!replay) return res.status(410).json({ success: false, error: '原会话已过期，幂等结果无法恢复' });
+        return res.json({ success: true, ...replay, requestId: crypto.randomUUID(), idempotentReplay: true });
+      }
+      if (claim.state !== 'processing') {
+        return res.status(409).json({ success: false, error: claim.state === 'unknown' ? '原请求结果未知，请检查会话记录，不会自动重发' : '原请求仍在处理中', idempotencyState: claim.state });
+      }
+      if (!claim.isNew) {
+        return res.status(409).json({ success: false, error: '原请求仍在处理中', idempotencyState: 'processing' });
+      }
+
+      let persisted = false;
+      let responsePromise;
+      const originalJson = res.json.bind(res);
+      res.json = body => {
+        if (responsePromise) return res;
+        persisted = true;
+        responsePromise = (async () => {
+          try {
+            if (res.statusCode < 400 && body?.success === true && body.conversationId && typeof body.answer === 'string') {
+              await ledger.complete(claim.key, ownerKey, { conversationId: body.conversationId, question: validation.question, answer: body.answer });
+            } else await ledger.markUnknown(claim.key, ownerKey);
+            return originalJson(body);
+          } catch (error) {
+            res.status(503);
+            return originalJson({ success: false, error: '结果已生成，但幂等状态未能保存；请检查会话记录后再操作', failureReason: 'idempotency_persist_failed', storeErrorCode: error.storageCauseCode || error.code || 'unknown' });
+          }
+        })();
+        return res;
+      };
+      res.once('close', () => {
+        if (!res.writableEnded && !persisted) {
+          persisted = true;
+          void ledger.markUnknown(claim.key, ownerKey).catch(() => {});
+        }
+      });
+      next();
+    })().catch(error => {
+      res.off('close', onClientClose);
+      if (clientDisconnected || req.aborted || res.destroyed) return;
+      if (!res.headersSent) res.status(error.statusCode || 503).json({ success: false, error: error.code || '内部幂等存储不可用' });
+      else res.end();
+    });
+  };
+}
+
+function findCompletedTurn(conversations, ownerKey, claim) {
+  try {
+    const detail = conversations.getDetail(claim.conversationId, ownerKey);
+    const messages = detail.messages;
+    for (let index = messages.length - 2; index >= 0; index -= 2) {
+      const user = messages[index];
+      const assistant = messages[index + 1];
+      if (user?.role !== 'user' || assistant?.role !== 'assistant') continue;
+      const questionHash = crypto.createHash('sha256').update(user.content).digest('hex');
+      const answerHash = crypto.createHash('sha256').update(assistant.content).digest('hex');
+      if (questionHash === claim.questionHash && answerHash === claim.answerHash) {
+        return { answer: assistant.content, sources: assistant.sources || [], searchSummary: assistant.searchSummary || '', conversationId: claim.conversationId };
+      }
+    }
+  } catch {}
+  return null;
 }
 
 function safeTokenEqual(left, right) {
@@ -1038,6 +1130,7 @@ module.exports = {
   createCorsMiddleware,
   createSecurityHeadersMiddleware,
   createApp,
+  createInternalIdempotencyMiddleware,
   createRequestSignal,
   getErrorStatusCode,
   getClientIp,

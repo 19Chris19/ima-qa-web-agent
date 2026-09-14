@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { BotAdapter } from './adapter.mjs';
 
 const real = process.argv.includes('--real');
@@ -14,8 +15,8 @@ async function request(route, options = {}) {
 }
 const adapter = new BotAdapter({
   capacity: real ? () => request('/internal/provider-a/capacity') : async () => ({ maxConcurrent: 2 }),
-  ask: real ? ({ owner, question, conversationId, signal }) => request('/internal/provider-a/deep-ask', {
-    method: 'POST', headers: { 'X-IMA-Client-Id': `bot-demo:${owner}` }, signal,
+  ask: real ? ({ owner, messageId, question, conversationId, signal }) => request('/internal/provider-a/deep-ask', {
+    method: 'POST', headers: { 'X-IMA-Client-Id': `bot-demo:${owner}`, 'Idempotency-Key': createHash('sha256').update(messageId).digest('hex') }, signal,
     body: JSON.stringify({ question, conversationId, stream: false }),
   }) : async ({ owner, question, conversationId }) => ({ success: true, answer: `Synthetic answer: ${question}`, conversationId: conversationId || `demo-${owner}` }),
 });

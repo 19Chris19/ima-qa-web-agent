@@ -47,6 +47,20 @@ test('ConversationStore persists bounded turns and keeps them owned by one clien
   assert.equal(restored.stats().storedConversations, 1);
 });
 
+test('conversation mode survives process restart and does not change with global defaults', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ima-mode-migration-'));
+  const storePath = path.join(tempDir, 'conversations.json');
+  const initial = new ConversationStore({ storePath });
+  const legacy = initial.create('synthetic-owner');
+  const native = initial.create('synthetic-owner', { mode: 'knowledge_agent' });
+  const restored = new ConversationStore({ storePath });
+  assert.equal(restored.getUpstream(legacy.conversationId, 'synthetic-owner').mode, undefined);
+  assert.equal(restored.getUpstream(native.conversationId, 'synthetic-owner').mode, 'knowledge_agent');
+  restored.setUpstream(native.conversationId, { accountId: 'synthetic-account', sessionId: 'synthetic-session' }, 'synthetic-owner');
+  const nextStart = new ConversationStore({ storePath });
+  assert.equal(nextStart.getUpstream(native.conversationId, 'synthetic-owner').mode, 'knowledge_agent');
+});
+
 test('ConversationStore rejects simultaneous messages for the same conversation', () => {
   const store = new ConversationStore({ persist: false });
   const conversation = store.create('customer-user-a');

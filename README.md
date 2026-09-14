@@ -193,6 +193,18 @@ npm run admin:enroll -- \
 
 内部的 `/internal/` 路由只供受保护的私有深查集成使用，**不能**通过 Nginx 暴露到公网。
 
+## 二次开发示例：消息机器人
+
+仓库附带一个只在终端运行的适配器示例，展示如何把不同用户的消息映射到各自会话，再向 Provider A 请求答案：
+
+```bash
+node examples/bot-adapter/run.mjs
+```
+
+默认使用合成回答，不需要账号、网络或 API 凭证。准备好 Provider A 服务后，可在受信任的后端设置 `PROVIDER_A_URL` 和 `PROVIDER_A_SERVICE_TOKEN`，使用 `node examples/bot-adapter/run.mjs --real` 发起真实问答。该示例调用服务端的容量接口和受保护的深查接口；服务 token 不进入浏览器。
+
+示例不接入微信或 Android，也不包含平台消息收发。它演示用户隔离、同一用户串行沿用会话、容量读取和保守的重复消息处理。每条平台消息使用稳定消息 ID 调用 Provider A 的持久幂等接口；机器人本身仍需持久保存消息处理状态，并对平台回复做去重。架构、事件与失败状态见 [机器人适配契约](./docs/BOT_ADAPTER.md)。
+
 ## 维护与验证
 
 ### 日常查看

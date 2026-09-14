@@ -32,6 +32,9 @@ test('one proved answer qualifies without storing question or answer', async t =
   const result = await readiness.verify('synthetic', 'Synthetic private question');
   assert.equal(result.success, true);
   assert.equal(result.schedulable, 1);
+  assert.equal(result.capacity, 1);
+  assert.equal(result.generation, directory.load().generation);
+  assert.equal(readiness.appliedGeneration, directory.load().generation);
   const disk = fs.readFileSync(directory.storePath, 'utf8');
   assert.equal(disk.includes('Synthetic private question'), false);
   assert.equal(disk.includes('Synthetic answer'), false);
@@ -49,6 +52,7 @@ test('web-only revalidation removes an old qualification and releases maintenanc
   const result = await readiness.verify('synthetic');
   assert.equal(result.code, 'probe_evidence_insufficient');
   assert.equal(result.schedulable, 0);
+  assert.equal(result.capacity, 0);
   assert.equal(pool.accounts[0].maintenanceOperation, '');
 });
 
