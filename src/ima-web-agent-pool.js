@@ -51,6 +51,9 @@ class IMAWebAgentPool {
       const existing = existingById.get(id);
       if (existing) {
         existing.name = config.name || existing.name || id;
+        existing.webQualification = config.webQualification || null;
+        existing.principalFingerprint = config.principalFingerprint;
+        existing.knowledgeBaseId = config.knowledgeBaseId;
         existing.client.applyConfig?.({ ...config, id, name: existing.name });
         existing.disabled = Boolean(config.disabled);
         existing.disabledReason = config.disabledReason || '';
@@ -73,6 +76,9 @@ class IMAWebAgentPool {
         lastUsedAt: Number(config.lastUsedAt || 0),
         totalRequests: Number(config.totalRequests || 0),
         maintenanceOperation: '',
+        webQualification: config.webQualification || null,
+        principalFingerprint: config.principalFingerprint,
+        knowledgeBaseId: config.knowledgeBaseId,
       };
       next.push(account);
       added.push(account);
@@ -142,7 +148,13 @@ class IMAWebAgentPool {
   }
 
   async *streamAsk(options = {}) {
-    const preferredAccountId = String(options.accountId || '').trim();
+    let preferredAccountId = String(options.accountId || '').trim();
+    if (options.mode === 'knowledge_agent' && this.webReadiness) {
+      const eligible = this.accounts.filter(account => this.webReadiness(account));
+      if (preferredAccountId && !eligible.some(account => account.id === preferredAccountId)) throw new NoAvailableWebAgentAccountError('会话账号需要重新验证');
+      preferredAccountId ||= eligible.find(account => !account.activeRequests)?.id || eligible[0]?.id;
+      if (!preferredAccountId) throw new NoAvailableWebAgentAccountError('暂无通过问答验证的账号');
+    }
     const account = preferredAccountId
       ? await this._waitForPreferredAccount(preferredAccountId, options.signal)
       : await this._waitForAnyAccount(options.signal);
@@ -159,6 +171,9 @@ class IMAWebAgentPool {
     };
     delete clientOptions.accountId;
     try {
+      if (options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account)) {
+        throw new NoAvailableWebAgentAccountError('账号状态已变化，请稍后重试');
+      }
       const stream = account.client.streamAsk(clientOptions);
       let reportedSession = false;
       for await (const event of stream) {
@@ -284,6 +299,7 @@ class IMAWebAgentPool {
     const now = this.now();
     return this.accounts
       .filter((account) => !account.disabled)
+      .filter((account) => !account.maintenanceOperation)
       .filter((account) => account.activeRequests === 0)
       .filter((account) => account.cooldownUntil <= now)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0] || null;
@@ -353,7 +369,7 @@ class IMAWebAgentPool {
 
     const available = () => {
       const candidateNow = this.now();
-      return !account.disabled && account.activeRequests === 0 && account.cooldownUntil <= candidateNow;
+      return !account.disabled && !account.maintenanceOperation && account.activeRequests === 0 && account.cooldownUntil <= candidateNow;
     };
     if (available()) {
       return this._reserveAccount(account);
@@ -407,7 +423,7 @@ class IMAWebAgentPool {
         waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号正在冷却，请稍后重试'));
         continue;
       }
-      if (waiter.account.activeRequests === 0 && waiter.account.cooldownUntil <= this.now()) {
+      if (!waiter.account.maintenanceOperation && waiter.account.activeRequests === 0 && waiter.account.cooldownUntil <= this.now()) {
         waiter.resolve(this._reserveAccount(waiter.account));
       }
     }

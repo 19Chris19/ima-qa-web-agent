@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseIMAWebAgentStream, parseIMAWebAgentEvent, mapIMAWebAgentEvent, extractSources } = require('./ima-upstream-protocol');
+const { buildIMAKnowledgeAgentHeaders, buildIMAKnowledgeAgentRequest, buildIMAKnowledgeAgentSessionRequest, classifyIMAKnowledgeAgentSource } = require('./ima-knowledge-agent-contract');
 
 const IMA_WEB_BASE_URL = 'https://ima.qq.com';
 const INIT_SESSION_PATH = '/cgi-bin/session_logic/init_session';
@@ -145,8 +146,8 @@ class IMAWebAgentClient {
   async _initSessionOnce(options = {}) {
     const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${INIT_SESSION_PATH}`, {
       method: 'POST',
-      headers: this._headers(options.clientContext),
-      body: JSON.stringify({
+      headers: options.mode === 'knowledge_agent' ? buildIMAKnowledgeAgentHeaders(this.headers, { knowledgeBaseId: this.knowledgeBaseId }) : this._headers(options.clientContext),
+      body: JSON.stringify(options.mode === 'knowledge_agent' ? buildIMAKnowledgeAgentSessionRequest({ knowledgeBaseId: this.knowledgeBaseId }) : {
         envInfo: { robotType: ROBOT_TYPE_KNOWLEDGE, interactType: 0 },
         relatedUrl: this.knowledgeBaseId,
         sceneType: 1,
@@ -241,20 +242,21 @@ class IMAWebAgentClient {
     this.persistRuntimeEnv();
   }
 
-  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession } = {}) {
-    await this.ensureFreshAuth({ signal });
-    let activeSessionId = requestedSessionId || await this.initSession({ signal });
+  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession, mode = 'classic_knowledge', onDispatch, allowAuthRefresh = true } = {}) {
+    if (allowAuthRefresh) await this.ensureFreshAuth({ signal });
+    let activeSessionId = requestedSessionId || await this.initSession({ signal, mode, allowAuthRefresh });
     onSession?.(activeSessionId);
 
     // Once dispatched, an interrupted question must not be asked again implicitly.
-    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId });
+    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId, mode, onDispatch });
   }
 
-  async *_streamAskOnce({ question, signal, sessionId }) {
+  async *_streamAskOnce({ question, signal, sessionId, mode, onDispatch }) {
+    onDispatch?.();
     const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${QA_PATH}`, {
       method: 'POST',
-      headers: this._headers(),
-      body: JSON.stringify({
+      headers: mode === 'knowledge_agent' ? buildIMAKnowledgeAgentHeaders(this.headers, { knowledgeBaseId: this.knowledgeBaseId }) : this._headers(),
+      body: JSON.stringify(mode === 'knowledge_agent' ? buildIMAKnowledgeAgentRequest({ question, sessionId, knowledgeBaseId: this.knowledgeBaseId, clientId: crypto.randomUUID(), modelId: this.modelId, modelType: this.modelType }) : {
         session_id: sessionId,
         robot_type: ROBOT_TYPE_KNOWLEDGE,
         question,
@@ -284,7 +286,12 @@ class IMAWebAgentClient {
       throw new Error(`IMA Web Agent returned HTTP ${response.status}: ${text.slice(0, 200)}`);
     }
 
-    yield* parseIMAWebAgentStream(response);
+    yield* parseIMAWebAgentStream(response, mode === 'knowledge_agent' ? {
+      sourceClassifier: (item, context = {}) => classifyIMAKnowledgeAgentSource(item, {
+        expectedKnowledgeScopeRef: crypto.createHash('sha256').update(this.knowledgeBaseId).digest('hex'),
+        sourceEventName: typeof context === 'string' ? context : context.sourceEventName || context.eventName || '',
+      }).kind,
+    } : {});
   }
 
   _headers(clientContext) {

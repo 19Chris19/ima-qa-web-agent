@@ -57,6 +57,17 @@
   let token = sessionStorage.getItem(tokenStorageKey) || '';
   let bootstrap = null;
   let accounts = [];
+  let readiness = null;
+  const upgradeWebMode = document.querySelector('#upgradeWebMode');
+  upgradeWebMode?.addEventListener('click', async () => {
+    if (!await confirmWebAction('升级原生知识库 Agent', '新会话需要账号通过问答验证。已有会话不变，是否继续？')) return;
+    upgradeWebMode.disabled = true;
+    try {
+      await request('/api/admin/web-mode', { method: 'POST', body: JSON.stringify({ mode: 'knowledge_agent' }) });
+      await loadAdminState();
+    } catch (error) { setFeedback(enrollFeedback, error.message, true); }
+    finally { upgradeWebMode.disabled = false; }
+  });
   let enrollment = null;
   let enrollmentPollTimer = null;
   let enrollmentQrUrl = '';
@@ -110,6 +121,11 @@
       ]);
       bootstrap = bootstrapPayload;
       accounts = Array.isArray(accountPayload.accounts) ? accountPayload.accounts : [];
+      readiness = accountPayload.readiness;
+      if (upgradeWebMode) upgradeWebMode.hidden = !readiness || readiness.mode === 'knowledge_agent';
+      const readinessSummary = document.querySelector('#webReadinessSummary');
+      if (readinessSummary) readinessSummary.textContent = readiness
+        ? `基础健康 ${readiness.basicHealthy} · 当前可调度 ${readiness.schedulable} · 待验证 ${readiness.pending}` : '';
       sessionStorage.setItem(tokenStorageKey, token);
       login.hidden = true;
       panel.hidden = false;
@@ -167,10 +183,10 @@
     const cooling = Number(pool?.coolingDownAccounts || 0);
     summary.replaceChildren(
       createMetric('账号总数', total),
-      createMetric('可用', available),
+      createMetric(readiness ? '基础健康' : '可用', readiness?.basicHealthy ?? available),
       createMetric('忙碌', busy),
       createMetric('冷却', cooling),
-      createMetric('问答并发', Number(queue?.maxConcurrent || 1)),
+      createMetric('问答并发', readiness?.capacity ?? Number(queue?.maxConcurrent || 1)),
     );
   }
 
@@ -226,6 +242,7 @@
           name: cleanAccountName(enrollmentName.value),
           replace: replaceEnrollment.checked,
           reauthAccountId,
+          testQuestion: document.querySelector('#enrollmentTestQuestion')?.value,
         }),
       });
       enrollment = payload.enrollment;
@@ -272,7 +289,7 @@
     stopEnrollmentPolling();
     const accountName = String(completedEnrollment?.account?.name || '新账号');
     dismissEnrollmentDialog();
-    setFeedback(enrollFeedback, `账号 ${accountName} 已验证并加入账号池。`);
+    setFeedback(enrollFeedback, `账号 ${accountName}：${completedEnrollment.detail || '接入完成，请查看账号状态'}。`);
     await loadAdminState();
   }
 
@@ -1242,7 +1259,8 @@
       name.textContent = account.name;
       const status = document.createElement('span');
       status.className = `admin-account-status ${account.availabilityStatus || 'unknown'}`;
-      status.textContent = statusLabel(account.availabilityStatus);
+      const qualification = readiness?.accounts?.find(item => item.id === account.id);
+      status.textContent = qualification ? ({ ready: '可用于问答', pending: '待验证', verifying: '验证中', busy: '忙碌', cooling: '冷却', disabled: '已停用', needs_login: '需重新登录' }[qualification.state] || '待验证') : statusLabel(account.availabilityStatus);
       heading.append(name, status);
 
       const meta = document.createElement('p');
@@ -1256,6 +1274,7 @@
         createAction(actionInFlight ? '处理中...' : '检查', () => runAccountAction(account, 'check'), actionInFlight),
         createAction(actionInFlight ? '处理中...' : '刷新', () => runAccountAction(account, 'refresh'), actionInFlight),
       ];
+      if (readiness) accountActions.push(createAction('验证问答能力', () => verifyAccount(account), actionInFlight || qualification?.state === 'verifying'));
       if (['auth_expired', 'auth_rejected'].includes(account.health?.last_check_code)) {
         accountActions.push(createAction('重新登录', () => {
           openEnrollmentDialog();
@@ -1280,6 +1299,64 @@
       row.append(heading, meta, actions, result);
       accountList.appendChild(row);
     }
+  }
+
+  async function verifyAccount(account) {
+    if (accountActionsInFlight.has(account.id)) return;
+    const question = await confirmWebAction('验证问答能力', '将执行一次真实知识库问答，不发送机器人消息。', '请根据当前知识库概括主要主题，并引用相关资料');
+    if (!question?.trim()) return;
+    accountActionsInFlight.add(account.id);
+    accountActionFeedback.set(account.id, { message: '正在验证问答能力...', isError: false });
+    renderAccounts();
+    try {
+      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`, { method: 'POST', body: JSON.stringify({ question }) });
+      const messages = { ok: '验证成功，可用于知识库问答', probe_evidence_insufficient: '回答或知识库来源不足，账号保留待验证', probe_timeout: '验证超时，请稍后手动重试', probe_cancelled: '验证已取消', account_store_generation_conflict: '账号状态发生变化，请重新验证', pool_sync_failed: '验证已保存，调度同步失败，账号暂时隔离', auth_expired: '登录已过期，请重新登录', auth_rejected: '登录被拒绝，请重新登录', upstream_temporary: '上游暂时不可用，请稍后重试' };
+      accountActionFeedback.set(account.id, { message: messages[result.code] || `验证未完成（${result.code}）`, isError: !result.success });
+    } catch (error) { accountActionFeedback.set(account.id, { message: error.message, isError: true }); }
+    finally {
+      accountActionsInFlight.delete(account.id);
+      await loadAdminState();
+      renderAccounts();
+    }
+  }
+
+  function confirmWebAction(title, notice, initialQuestion) {
+    if (document.querySelector('#webActionDialog')) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const dialog = document.createElement('dialog');
+      dialog.id = 'webActionDialog';
+      dialog.className = 'admin-enrollment-dialog';
+      const form = document.createElement('form');
+      form.className = 'admin-enrollment-form';
+      const heading = document.createElement('h2');
+      heading.textContent = title;
+      const text = document.createElement('p');
+      text.textContent = notice;
+      form.append(heading, text);
+      let input;
+      if (initialQuestion) {
+        const label = document.createElement('label');
+        label.textContent = '知识库测试问题';
+        input = document.createElement('textarea');
+        input.id = 'webActionQuestion';
+        label.htmlFor = input.id;
+        input.value = initialQuestion;
+        input.maxLength = 1200;
+        input.required = true;
+        form.append(label, input);
+      }
+      const cancel = createAction('取消', () => finish(null));
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.textContent = '确认';
+      form.append(cancel, submit);
+      const finish = value => { dialog.close(); dialog.remove(); resolve(value); };
+      form.addEventListener('submit', event => { event.preventDefault(); finish(input ? input.value.trim() : true); });
+      dialog.addEventListener('cancel', event => { event.preventDefault(); finish(null); });
+      dialog.append(form);
+      document.body.append(dialog);
+      dialog.showModal();
+    });
   }
 
   function createAction(label, handler, disabled = false) {

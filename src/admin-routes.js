@@ -9,6 +9,7 @@ function registerAdminRoutes(app, options = {}) {
   const accountDirectory = options.accountDirectory;
   const enrollmentManager = options.enrollmentManager;
   const accountPoolExerciseManager = options.accountPoolExerciseManager;
+  const webReadiness = options.webReadiness;
   if (!accountDirectory) {
     return;
   }
@@ -16,7 +17,8 @@ function registerAdminRoutes(app, options = {}) {
   const auth = createAdminAuthMiddleware(options.config?.security?.adminToken);
   const sharedKnowledgeBaseId = String(options.config?.webAgent?.sharedKnowledgeBaseId || '').trim();
   const syncPool = () => {
-    options.imaWebAgentClient?.syncAccounts?.(accountDirectory.getPoolAccounts());
+    if (webReadiness) webReadiness.sync();
+    else options.imaWebAgentClient?.syncAccounts?.(accountDirectory.getPoolAccounts());
     options.onAccountsSynced?.(options.imaWebAgentClient?.stats?.());
   };
   const managementSnapshot = (includeEvents = false) => buildManagementSnapshot({
@@ -51,8 +53,30 @@ function registerAdminRoutes(app, options = {}) {
       success: true,
       ...managementSnapshot(wantsDetails(req)),
       queue: options.askQueue?.stats?.() || null,
+      readiness: webReadiness?.snapshot() || null,
     });
   });
+
+  if (webReadiness) {
+    app.post('/api/admin/web-mode', auth, (req, res) => {
+      try {
+        const readiness = webReadiness.setMode(req.body?.mode);
+        options.onAccountsSynced?.();
+        res.json({ success: true, readiness });
+      }
+      catch (error) { sendAdminError(res, error); }
+    });
+    app.post('/api/admin/accounts/:accountId/verify', auth, async (req, res) => {
+      try {
+        const result = await webReadiness.verify(req.params.accountId, req.body?.question);
+        options.onAccountsSynced?.();
+        res.json(result);
+      } catch (error) { sendAdminError(res, error); }
+    });
+    app.post('/api/admin/accounts/:accountId/verify/cancel', auth, (req, res) => {
+      res.json(webReadiness.cancel(req.params.accountId));
+    });
+  }
 
   app.get('/api/admin/bootstrap', auth, (_req, res) => {
     res.json({
@@ -160,6 +184,7 @@ function registerAdminRoutes(app, options = {}) {
           id: req.body?.id,
           reauthAccountId: req.body?.reauthAccountId,
           replace: Boolean(req.body?.replace),
+          testQuestion: req.body?.testQuestion,
         });
         res.status(201).json({ success: true, enrollment });
       } catch (error) {

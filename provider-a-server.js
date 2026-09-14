@@ -8,6 +8,7 @@ const { AccountPoolExerciseManager, AccountPoolExerciseReportStore } = require('
 const { ConversationStore } = require('./src/conversation-store');
 const { synchronizeProviderAQueueCapacity } = require('./src/provider-a-capacity');
 const { loadRuntimeEnv } = require('./src/runtime-env');
+const { WebReadiness } = require('./src/web-readiness');
 
 async function main() {
   const envLoad = loadRuntimeEnv();
@@ -49,17 +50,20 @@ async function main() {
   }
   imaWebAgentClient.startAutoRefresh();
 
+  const webReadiness = new WebReadiness({ directory: accountDirectory, pool: imaWebAgentClient, mode: config.webAgent.webMode });
   const app = createApp({
     config,
     imaWebAgentClient,
     accountDirectory,
     conversationStore,
+    webReadiness,
   });
   synchronizeQueueCapacity = () =>
     synchronizeProviderAQueueCapacity({
       askQueue: app.locals.imaQaAskQueue,
       config,
       pool: imaWebAgentClient,
+      webReadiness,
     });
   synchronizeQueueCapacity();
   const accountPoolExerciseManager = new AccountPoolExerciseManager({
@@ -79,6 +83,8 @@ async function main() {
     accountDirectory,
     pool: imaWebAgentClient,
     onAccountsSynced: synchronizeQueueCapacity,
+    onEnrolled: (id, question) => webReadiness.verify(id, question),
+    onCancelVerification: id => webReadiness.cancel(id),
   });
   registerAdminRoutes(app, {
     config,
@@ -88,6 +94,7 @@ async function main() {
     onAccountsSynced: synchronizeQueueCapacity,
     enrollmentManager,
     accountPoolExerciseManager,
+    webReadiness,
   });
 
   app.listen(config.port, () => {

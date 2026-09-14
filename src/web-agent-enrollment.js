@@ -35,6 +35,8 @@ class WebAgentEnrollmentManager {
     this.pool = options.pool;
     this.config = options.config || {};
     this.onAccountsSynced = options.onAccountsSynced || null;
+    this.onEnrolled = options.onEnrolled || null;
+    this.onCancelVerification = options.onCancelVerification || null;
     this.clientFactory = options.clientFactory || ((config) => new IMAWebAgentClient(config));
     this.browserLauncher = options.browserLauncher || launchVisibleBrowserContext;
     this.fetch = options.fetch || globalThis.fetch;
@@ -78,10 +80,15 @@ class WebAgentEnrollmentManager {
       throw enrollmentError(`账号 ${existing.name} 已存在；重新绑定需要明确选择替换`, 409);
     }
 
+    const testQuestion = options.testQuestion || '请根据当前知识库概括主要主题，并引用相关资料';
+    if (typeof testQuestion !== 'string' || !testQuestion.trim() || testQuestion.length > 2000) {
+      throw enrollmentError('请输入不超过 2000 字的知识库测试问题', 400);
+    }
     const job = {
       id: this.idFactory(),
       name,
       accountId: id,
+      testQuestion,
       knowledgeBaseId,
       replace: Boolean(options.replace),
       reauthAccountId: reauthAccount?.id || '',
@@ -191,6 +198,7 @@ class WebAgentEnrollmentManager {
       return publicJob(job);
     }
     this._setState(job, 'cancelled', '已关闭临时浏览器并清理登录任务');
+    this.onCancelVerification?.(job.account?.id || job.accountId);
     job.error = '已取消账号接入';
     await this._cleanup(job);
     this._releaseActive(job);
@@ -475,8 +483,17 @@ class WebAgentEnrollmentManager {
             : this.accountDirectory.upsertCapturedAccount(capturedAccount);
           this.pool.syncAccounts(this.accountDirectory.getPoolAccounts());
           this.onAccountsSynced?.();
-          this._setState(job, 'completed', '账号已验证并同步到账号池');
           await this._cleanup(job);
+          if (this.onEnrolled) {
+            job.detail = '登录完成，正在执行一次知识库问答验证';
+            this._touch(job);
+            const result = await this.onEnrolled(job.account.id, job.testQuestion);
+            this.onAccountsSynced?.();
+            if (job.state === 'cancelled') return;
+            this._setState(job, 'completed', result.success ? '账号已接入，可用于知识库问答' : '账号已接入，问答验证未通过，请在账号列表重试');
+          } else {
+            this._setState(job, 'completed', '账号已验证并同步到账号池');
+          }
           this._releaseActive(job);
           this._scheduleRemoval(job);
           return;

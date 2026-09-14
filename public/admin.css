@@ -1,3 +1,17 @@
+body[data-mode="admin"] [hidden] {
+  display: none !important;
+}
+
+.admin-enrollment-form textarea {
+  width: 100%;
+  min-height: 100px;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+}
+
+#webActionDialog { padding: 24px; }
+
 body[data-mode="admin"] {
   min-height: 100%;
   background: var(--paper);

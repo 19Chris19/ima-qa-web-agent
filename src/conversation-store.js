@@ -79,6 +79,7 @@ class ConversationStore {
       updatedAt: now,
       expiresAt: now + this.ttlMs,
       title: '',
+      mode: options.mode === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge',
       turns: [],
       upstream: {
         accountId: '',
@@ -139,6 +140,7 @@ class ConversationStore {
     return {
       accountId: conversation.upstream.accountId,
       sessionId: conversation.upstream.sessionId,
+      ...(conversation.mode === 'knowledge_agent' ? { mode: 'knowledge_agent' } : {}),
     };
   }
 
@@ -326,6 +328,7 @@ function normalizeConversation(value) {
     updatedAt,
     expiresAt,
     title: conversationTitle(value?.title),
+    mode: value.mode === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge',
     turns: Array.isArray(value.turns)
       ? value.turns
           .map((turn) => ({

@@ -481,6 +481,7 @@ function getConfig(env = process.env) {
       model: readEnv(env, 'MIMO_MODEL') || DEFAULT_MIMO_MODEL,
     },
     webAgent: {
+      webMode: readEnv(env, 'IMA_WEB_AGENT_WEB_MODE') || undefined,
       ...primaryWebAgentAccount,
       accounts: webAgentAccounts,
       sharedKnowledgeBaseId: webAgentSharedKnowledgeBaseId,

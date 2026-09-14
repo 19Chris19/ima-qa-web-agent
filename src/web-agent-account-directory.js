@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
+const { commitStore, conflict } = require('./generation-store');
 const { buildRuntimeEnvText } = require('./ima-web-agent-client');
 const { healthMessage } = require('./account-health');
 
@@ -19,6 +20,7 @@ function defaultAccountStoreKeyPath() {
 class WebAgentAccountDirectory {
   constructor(options = {}) {
     this.storePath = path.resolve(options.storePath || defaultAccountStorePath());
+    this.wasExisting = fs.existsSync(this.storePath);
     this.keyPath = path.resolve(options.keyPath || defaultAccountStoreKeyPath());
     this.keyMaterial = options.keyMaterial || process.env.IMA_QA_ACCOUNT_STORE_KEY || '';
     this.now = options.now || (() => new Date().toISOString());
@@ -39,6 +41,8 @@ class WebAgentAccountDirectory {
     const parsed = JSON.parse(fs.readFileSync(this.storePath, 'utf8'));
     this.store = {
       version: STORE_VERSION,
+      generation: Number(parsed.generation || 0),
+      settings: parsed.settings || {},
       createdAt: parsed.createdAt || this.now(),
       updatedAt: parsed.updatedAt || this.now(),
       accounts: Array.isArray(parsed.accounts) ? parsed.accounts.map(normalizeStoredAccount) : [],
@@ -52,6 +56,21 @@ class WebAgentAccountDirectory {
   listAccounts(options = {}) {
     const includeEvents = Boolean(options.includeEvents);
     return this.load().accounts.map((account) => sanitizeAccount(account, { includeEvents }));
+  }
+
+  reload() {
+    this.store = null;
+    return this.load();
+  }
+
+  commitWebQualification(accountId, proof, expectedGeneration) {
+    this.reload();
+    if (this.store.generation !== expectedGeneration) throw conflict();
+    const account = this._requireAccount(accountId);
+    if (account.principalFingerprint !== proof.principalFingerprint) throw conflict();
+    account.runtime.webQualification = proof;
+    this._writeStore();
+    return this.store.generation;
   }
 
   getAccount(accountId) {
@@ -82,6 +101,8 @@ class WebAgentAccountDirectory {
         lastError: account.runtime.lastError,
         lastUsedAt: account.runtime.lastUsedAt,
         hasRefreshCredentials: account.runtime.hasRefreshCredentials,
+        webQualification: account.runtime.webQualification || null,
+        principalFingerprint: account.principalFingerprint,
       };
     });
   }
@@ -619,15 +640,12 @@ class WebAgentAccountDirectory {
   _writeStore() {
     const store = this.load();
     store.updatedAt = this.now();
-    const dir = path.dirname(this.storePath);
-    const tempPath = path.join(dir, `.${path.basename(this.storePath)}.${process.pid}.tmp`);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(tempPath, JSON.stringify(store, null, 2), { mode: 0o600 });
-    fs.renameSync(tempPath, this.storePath);
     try {
-      fs.chmodSync(this.storePath, 0o600);
-    } catch {
-      // Best effort only; write mode covers normal creation.
+      const next = commitStore(this.storePath, store);
+      store.generation = next.generation;
+    } catch (error) {
+      this.store = null;
+      throw error;
     }
   }
 
@@ -783,6 +801,7 @@ function defaultRuntimeState() {
     knowledgeReady: null,
     webReady: null,
     hasRefreshCredentials: false,
+    webQualification: null,
     updatedAt: null,
   };
 }

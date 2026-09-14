@@ -29,6 +29,7 @@ function createApp({
   accountDirectory,
   conversationStore,
   accountPoolExerciseManager,
+  webReadiness,
 }) {
   const app = express();
   const conversations = conversationStore || new ConversationStore({ persist: false });
@@ -78,9 +79,17 @@ function createApp({
     res.json(health);
   });
 
+  app.get('/internal/provider-a/capacity', requireInternalServiceToken(config.security?.internalServiceToken), (_req, res) => {
+    const state = webReadiness?.snapshot();
+    const queue = askQueue.stats();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ schemaVersion: 1, generation: state?.generation || 0,
+      maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0 });
+  });
+
   app.post('/api/conversations', requireApiToken(config.security?.apiToken), (_req, res) => {
     const ownerKey = getConversationOwnerKey(_req, res);
-    res.status(201).json({ success: true, conversation: conversations.create(ownerKey) });
+    res.status(201).json({ success: true, conversation: conversations.create(ownerKey, { mode: webReadiness?.mode }) });
   });
 
   app.get('/api/conversations', requireApiToken(config.security?.apiToken), (req, res) => {
@@ -143,13 +152,13 @@ function createApp({
     let conversationId = validation.conversationId;
     try {
       if (!conversationId) {
-        conversationId = conversations.create(ownerKey).conversationId;
+        conversationId = conversations.create(ownerKey, { mode: webReadiness?.mode }).conversationId;
       }
       try {
         conversations.beginRequest(conversationId, ownerKey);
       } catch (error) {
         if (req.isInternalProviderADeepAsk && error instanceof ConversationNotFoundError) {
-          conversations.create(ownerKey, { id: conversationId });
+          conversations.create(ownerKey, { id: conversationId, mode: webReadiness?.mode });
           conversations.beginRequest(conversationId, ownerKey);
         } else {
           throw error;
