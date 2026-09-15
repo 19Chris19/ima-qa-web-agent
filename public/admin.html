@@ -35,6 +35,8 @@
 
       <section class="admin-panel" id="adminPanel" hidden>
         <div class="admin-summary" id="adminSummary"></div>
+        <p id="webReadinessSummary"></p>
+        <button id="upgradeWebMode" type="button" hidden>升级新会话至原生知识库 Agent</button>
 
         <section class="admin-enroll" aria-label="接入账号">
           <div class="admin-section-heading">
@@ -112,6 +114,7 @@
             </div>
           </div>
           <div class="admin-account-list" id="accountList"></div>
+          <p class="admin-feedback" id="accountFeedback" role="status"></p>
         </section>
 
         <section class="admin-exercise-reports" id="exerciseReportsPanel" aria-label="演练报告" hidden>
@@ -141,6 +144,9 @@
           <form class="admin-enrollment-form" id="enrollmentForm">
             <label for="enrollmentName">账号名称</label>
             <input id="enrollmentName" maxlength="80" autocomplete="off" placeholder="account-c" required />
+            <label for="enrollmentTestQuestion">知识库验证问题</label>
+            <textarea id="enrollmentTestQuestion" maxlength="2000" required>请根据当前知识库概括主要主题，并引用相关资料</textarea>
+            <p>扫码后将自动执行一次真实 IMA 问答。验证失败仍保留账号，不会发送任何机器人消息。</p>
             <label class="admin-check-row" for="replaceEnrollment">
               <input id="replaceEnrollment" type="checkbox" />
               <span>替换同名账号的登录态</span>

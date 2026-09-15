@@ -127,6 +127,92 @@ test('QR enrollment keeps screenshot in memory and stores credentials only after
   assert.throws(() => manager.getQr(started.taskId), /没有可展示/);
 });
 
+test('enrollment closes browser before one automatic probe and retains account when probe fails', async () => {
+  let calls = 0;
+  const setup = makeManager({ onEnrolled: async (id, question) => {
+    calls++;
+    assert.equal(setup.fakeBrowser.context.closed, true);
+    assert.equal(question, 'Synthetic test question');
+    assert.ok(setup.accountDirectory.getAccount(id));
+    return { success: false, code: 'probe_evidence_insufficient' };
+  } });
+  const { manager, state, accountDirectory } = setup;
+  const started = await manager.start({ name: 'synthetic-enrollment', testQuestion: 'Synthetic test question' });
+  await waitFor(() => Boolean(state.wake));
+  state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic-user; IMA-TOKEN=synthetic-token', 'x-ima-bkn': '123' } };
+  state.wake();
+  await waitFor(() => manager.get(started.taskId).state === 'completed');
+  assert.equal(calls, 1);
+  assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.match(manager.get(started.taskId).detail, /验证未通过/);
+  assert.equal(JSON.stringify(manager.get(started.taskId)).includes('Synthetic test question'), false);
+  await manager.shutdown();
+});
+
+test('QR re-login is bound to the existing slot and preserves it on identity mismatch', async () => {
+  const { accountDirectory, manager, state } = makeManager();
+  accountDirectory.upsertCapturedAccount({
+    id: 'account-c',
+    name: 'Account C',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=user-c; IMA-TOKEN=old-token; IMA-REFRESH-TOKEN=old-refresh',
+      'x-ima-bkn': '123',
+    },
+  });
+
+  const started = await manager.start({
+    reauthAccountId: 'account-c',
+    name: 'attacker-name',
+  });
+  assert.equal(started.name, 'Account C');
+  await waitFor(() => manager.get(started.taskId).state === 'waiting_for_scan');
+  await waitFor(() => Boolean(state.wake));
+  state.auth = {
+    headers: {
+      'x-ima-cookie': 'IMA-UID=different-user; IMA-TOKEN=new-token; IMA-REFRESH-TOKEN=new-refresh',
+      'x-ima-bkn': '456',
+    },
+  };
+  state.wake();
+
+  await waitFor(() => manager.get(started.taskId).state === 'failed');
+  assert.match(manager.get(started.taskId).error, /不是原账号/u);
+  assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.equal(accountDirectory.listAccounts()[0].name, 'Account C');
+});
+
+test('QR re-login replaces the original slot only after the same IMA identity verifies', async () => {
+  const { accountDirectory, manager, poolCalls, state } = makeManager();
+  accountDirectory.upsertCapturedAccount({
+    id: 'account-c',
+    name: 'Account C',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=user-c; IMA-TOKEN=old-token; IMA-REFRESH-TOKEN=old-refresh',
+      'x-ima-bkn': '123',
+    },
+  });
+
+  const started = await manager.start({ reauthAccountId: 'account-c' });
+  await waitFor(() => manager.get(started.taskId).state === 'waiting_for_scan');
+  await waitFor(() => Boolean(state.wake));
+  state.auth = {
+    headers: {
+      'x-ima-cookie': 'IMA-UID=user-c; IMA-TOKEN=new-token; IMA-REFRESH-TOKEN=new-refresh',
+      'x-ima-bkn': '456',
+    },
+  };
+  state.wake();
+
+  await waitFor(() => manager.get(started.taskId).state === 'completed');
+  assert.equal(manager.get(started.taskId).mode, 'reauth');
+  assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.equal(accountDirectory.listAccounts()[0].name, 'Account C');
+  assert.equal(state.initCalls, 1);
+  assert.equal(poolCalls.length, 1);
+});
+
 test('captureAuthFromContext recognizes a compatible IMA account record outside the legacy storage key', async () => {
   const context = {
     async cookies() {

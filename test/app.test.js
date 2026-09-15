@@ -1131,6 +1131,205 @@ test('admin routes can inspect and manage Web Agent accounts with token auth', a
   });
 });
 
+test('admin account operations use a first-party session context and return one consistent health projection', async () => {
+  const tempDir = await fsMkdtemp();
+  const accountDirectory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  accountDirectory.upsertCapturedAccount({
+    id: 'account-health',
+    name: 'Account Health',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=synthetic-user; IMA-TOKEN=synthetic-token; IMA-REFRESH-TOKEN=synthetic-refresh',
+      'x-ima-bkn': '123',
+    },
+  });
+  const initCalls = [];
+  const pool = new IMAWebAgentPool(
+    { accounts: accountDirectory.getPoolAccounts(), healthCheckTimeoutMs: 100 },
+    {
+      onAccountStateChange(snapshot) {
+        accountDirectory.recordRuntimeState(snapshot);
+      },
+      onAccountCredentialsChange(accountId, snapshot) {
+        accountDirectory.updateCredentialsFromClient(accountId, snapshot);
+      },
+      clientFactory(account) {
+        return {
+          applyConfig() {},
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context', owner: 'server' };
+          },
+          async initSession(options) {
+            initCalls.push(options);
+            return 'synthetic-session';
+          },
+          async refreshAuth() {},
+          persistRuntimeEnv() {
+            return true;
+          },
+          getConfigSnapshot() {
+            return {
+              id: account.id,
+              name: account.name,
+              knowledgeBaseId: account.knowledgeBaseId,
+              headers: account.headers,
+              modelId: account.modelId,
+              modelType: account.modelType,
+            };
+          },
+        };
+      },
+    },
+  );
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, adminToken: 'admin-token' },
+      webAgent: { sharedKnowledgeBaseId: 'web-kb-id' },
+    },
+    accountDirectory,
+    imaWebAgentClient: pool,
+  });
+  const headers = { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' };
+
+  await withServer(app, async (baseUrl) => {
+    const before = await (await fetch(`${baseUrl}/api/admin/accounts?details=1`, { headers })).json();
+    assert.equal(before.summary.availableAccounts, 0);
+    assert.equal(before.accounts[0].availabilityStatus, 'needs_check');
+    assert.equal(before.accounts[0].health.local_schedulable, true);
+
+    const check = await fetch(`${baseUrl}/api/admin/accounts/account-health/check`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const checked = await check.json();
+    assert.equal(check.status, 200);
+    assert.equal(checked.account.availabilityStatus, 'ready');
+    assert.equal(checked.summary.availableAccounts, 1);
+    assert.equal(checked.consistency.consistent, true);
+    assert.equal(initCalls.length, 1);
+    assert.equal(initCalls[0].clientContext.owner, 'server');
+    assert.equal(initCalls[0].question, undefined);
+    assert.equal(JSON.stringify(checked).includes('synthetic-token'), false);
+    assert.equal(JSON.stringify(checked).includes('synthetic-refresh'), false);
+
+    const refresh = await fetch(`${baseUrl}/api/admin/accounts/account-health/refresh`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const refreshed = await refresh.json();
+    assert.equal(refresh.status, 200);
+    assert.equal(refreshed.account.health.last_refresh_code, 'ok');
+    assert.equal(initCalls.length, 2);
+
+    const disabled = await (await fetch(`${baseUrl}/api/admin/accounts/account-health/disable`, {
+      method: 'POST', headers, body: '{}',
+    })).json();
+    assert.equal(disabled.consistency.consistent, true);
+    assert.equal(disabled.account.status, 'disabled');
+
+    const enabled = await (await fetch(`${baseUrl}/api/admin/accounts/account-health/enable`, {
+      method: 'POST', headers, body: '{}',
+    })).json();
+    assert.equal(enabled.consistency.consistent, true);
+    assert.equal(enabled.account.status, 'available');
+
+    const deleted = await (await fetch(`${baseUrl}/api/admin/accounts/account-health`, {
+      method: 'DELETE', headers,
+    })).json();
+    assert.equal(deleted.account, null);
+    assert.equal(deleted.consistency.consistent, true);
+  });
+});
+
+test('admin health APIs persist fixed failure categories without leaking upstream details', async () => {
+  const tempDir = await fsMkdtemp();
+  const accountDirectory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  for (const id of ['account-expired', 'account-temporary', 'account-context']) {
+    accountDirectory.upsertCapturedAccount({
+      id,
+      name: id,
+      knowledgeBaseId: 'web-kb-id',
+      headers: {
+        'x-ima-cookie': `IMA-UID=${id}; IMA-TOKEN=synthetic-token; IMA-REFRESH-TOKEN=synthetic-refresh`,
+        'x-ima-bkn': '123',
+      },
+    });
+  }
+  const pool = new IMAWebAgentPool(
+    { accounts: accountDirectory.getPoolAccounts(), healthCheckTimeoutMs: 100 },
+    {
+      onAccountStateChange(snapshot) {
+        accountDirectory.recordRuntimeState(snapshot);
+      },
+      clientFactory(account) {
+        if (account.id === 'account-context') {
+          return { async initSession() { return 'should-not-run'; } };
+        }
+        return {
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context' };
+          },
+          async initSession() {
+            if (account.id === 'account-temporary') {
+              throw new Error('fetch failed: synthetic network detail');
+            }
+            return 'synthetic-session';
+          },
+          async refreshAuth() {
+            if (account.id === 'account-expired') {
+              throw new Error('IMA Web login expired and refresh credentials are unavailable');
+            }
+          },
+        };
+      },
+    },
+  );
+  const app = makeApp({
+    config: {
+      ...baseConfig,
+      qaProvider: 'ima-web-agent',
+      security: { ...baseConfig.security, adminToken: 'admin-token' },
+      webAgent: { sharedKnowledgeBaseId: 'web-kb-id' },
+    },
+    accountDirectory,
+    imaWebAgentClient: pool,
+  });
+  const headers = { Authorization: 'Bearer admin-token', 'Content-Type': 'application/json' };
+
+  await withServer(app, async (baseUrl) => {
+    const expired = await fetch(`${baseUrl}/api/admin/accounts/account-expired/refresh`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const expiredBody = await expired.json();
+    assert.equal(expired.status, 422);
+    assert.equal(expiredBody.code, 'auth_expired');
+    assert.match(expiredBody.error, /重新扫码登录/);
+
+    const temporary = await fetch(`${baseUrl}/api/admin/accounts/account-temporary/check`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const temporaryBody = await temporary.json();
+    assert.equal(temporary.status, 502);
+    assert.equal(temporaryBody.code, 'upstream_temporary');
+    assert.equal(JSON.stringify(temporaryBody).includes('synthetic network detail'), false);
+
+    const context = await fetch(`${baseUrl}/api/admin/accounts/account-context/check`, {
+      method: 'POST', headers, body: '{}',
+    });
+    const contextBody = await context.json();
+    assert.equal(context.status, 500);
+    assert.equal(contextBody.code, 'web_context_missing');
+    assert.equal(accountDirectory.listAccounts().find((account) => account.id === 'account-expired').health.session_valid, false);
+    assert.equal(accountDirectory.listAccounts().find((account) => account.id === 'account-context').health.web_ready, false);
+  });
+});
+
 test('admin enrollment routes require a token and keep QR screenshots private', async () => {
   const tempDir = await fsMkdtemp();
   const accountDirectory = new WebAgentAccountDirectory({
@@ -1223,7 +1422,7 @@ test('admin enrollment routes require a token and keep QR screenshots private', 
     const createdPayload = await created.json();
     assert.equal(created.status, 201);
     assert.equal(createdPayload.enrollment.taskId, 'enrollment-1');
-    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false });
+    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false, reauthAccountId: undefined, testQuestion: undefined });
 
     const qr = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1/qr`, {
       headers: { Authorization: 'Bearer admin-token' },
@@ -1914,4 +2113,112 @@ test('local RAG fallback helpers detect mechanical refusal and build topical ans
     buildLocalRagFallbackAnswer('如何将3DGS模型转换成网格 Mesh 或用于3D打印？', sources),
     /网格化后的可打印结果/,
   );
+});
+
+test('internal Provider A retries with the same idempotency key replay the stored turn after restart', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() {
+    dispatched++;
+    yield { type: 'route', accountId: 'synthetic-account' };
+    yield { type: 'session', sessionId: 'synthetic-session' };
+    yield { type: 'sources', sources: [{ index: 1, title: 'Synthetic source', snippet: 'Synthetic evidence' }], searchSummary: 'Synthetic search' };
+    yield { type: 'delta', text: 'Synthetic answer [1]' };
+    yield { type: 'done' };
+  } };
+  const headers = { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-bot-user', 'Idempotency-Key': 'message-1' };
+  const makeService = () => makeApp({ config, imaWebAgentClient: fakeAgent,
+    conversationStore: new ConversationStore({ storePath: conversationPath }) });
+  try {
+    let responsePayload;
+    await withServer(makeService(), async baseUrl => {
+      const first = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic private question' }) });
+      assert.equal(first.status, 200);
+      responsePayload = await first.json();
+      assert.equal(responsePayload.answer, 'Synthetic answer [1]');
+    });
+    await withServer(makeService(), async baseUrl => {
+      const replay = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic private question' }) });
+      assert.equal(replay.status, 200);
+      const data = await replay.json();
+      assert.equal(data.idempotentReplay, true);
+      assert.equal(data.answer, responsePayload.answer);
+      assert.equal(data.conversationId, responsePayload.conversationId);
+    });
+    assert.equal(dispatched, 1);
+    const ledger = await fs.readFile(`${conversationPath}.internal-idempotency.json`, 'utf8');
+    assert.equal(ledger.includes('Synthetic private question'), false);
+    assert.equal(ledger.includes('Synthetic answer'), false);
+    assert.equal(ledger.includes('synthetic-bot-user'), false);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('internal idempotency refuses a changed request body and never sends it upstream', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() { dispatched++; yield { type: 'delta', text: 'Synthetic answer' }; yield { type: 'done' }; } };
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const send = question => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers: { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-owner', 'Idempotency-Key': 'same-message' }, body: JSON.stringify({ question }) });
+      assert.equal((await send('Synthetic question')).status, 200);
+      const changed = await send('Different synthetic question');
+      assert.equal(changed.status, 409);
+      assert.equal((await changed.json()).error, 'idempotency_conflict');
+    });
+    assert.equal(dispatched, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('concurrent identical internal messages dispatch once and the duplicate sees processing', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() {
+    dispatched++;
+    await new Promise(resolve => setTimeout(resolve, 40));
+    yield { type: 'delta', text: 'Synthetic answer' };
+    yield { type: 'done' };
+  } };
+  const headers = { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-owner', 'Idempotency-Key': 'concurrent-message' };
+  const body = JSON.stringify({ question: 'Synthetic concurrent question' });
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const send = () => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body });
+      const first = send();
+      const duplicate = send();
+      const [firstResponse, duplicateResponse] = await Promise.all([first, duplicate]);
+      const responses = [firstResponse, duplicateResponse];
+      assert.equal(responses.filter(response => response.status === 200).length, 1);
+      assert.equal(responses.filter(response => response.status === 409).length, 1);
+      const conflict = await responses.find(response => response.status === 409).json();
+      assert.equal(conflict.idempotencyState, 'processing');
+    });
+    assert.equal(dispatched, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('unknown internal request state remains non-retriable across service restart', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() { dispatched++; throw new Error('synthetic upstream failure'); } };
+  const headers = { authorization: 'Bearer synthetic-service-token', 'content-type': 'application/json', 'X-IMA-Client-Id': 'synthetic-owner', 'Idempotency-Key': 'uncertain-message' };
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent }), async baseUrl => {
+      const first = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic question' }) });
+      assert.equal(first.status, 500);
+    });
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent }), async baseUrl => {
+      const retry = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ question: 'Synthetic question' }) });
+      assert.equal(retry.status, 409);
+      assert.equal((await retry.json()).idempotencyState, 'unknown');
+    });
+    assert.equal(dispatched, 1);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
 });

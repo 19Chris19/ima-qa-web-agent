@@ -1,6 +1,6 @@
 {
   "name": "ima-qa-web",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "IMA shared knowledge base QA gateway with streaming Web Agent answers, isolated conversations, and encrypted account-pool enrollment.",
   "repository": {
     "type": "git",
@@ -15,6 +15,7 @@
     "assets",
     "docs",
     "eval",
+    "examples",
     "public",
     "scripts",
     "src",
@@ -40,6 +41,7 @@
     "local-rag:index": "node scripts/build-local-rag-index.mjs",
     "start": "node provider-a-server.js",
     "dev": "node --watch provider-a-server.js",
+    "soak:synthetic": "node scripts/soak-provider-a.mjs",
     "test": "node --test"
   },
   "keywords": [
@@ -50,12 +52,16 @@
     "streaming"
   ],
   "license": "MIT",
+  "overrides": {
+    "qs": "^6.16.0"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "pdf-parse": "^2.4.5",
-    "playwright-core": "^1.62.1"
+    "playwright-core": "^1.62.1",
+    "proper-lockfile": "^4.1.2"
   },
   "engines": {
     "node": ">=18.18"

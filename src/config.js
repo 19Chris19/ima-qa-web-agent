@@ -17,6 +17,7 @@ const DEFAULT_RATE_LIMIT_MAX = 20;
 const DEFAULT_HEALTH_DETAILS = 'basic';
 const DEFAULT_WEB_AGENT_ACCOUNT_COOLDOWN_MS = 120 * 1000;
 const DEFAULT_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS = 2;
+const DEFAULT_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS = 15 * 1000;
 const DEFAULT_WEB_AGENT_ACCOUNT_POOL_CAPACITY_MODE = 'auto';
 const DEFAULT_WEB_AGENT_ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_WEB_AGENT_ENROLLMENT_SCREENSHOT_INTERVAL_MS = 900;
@@ -480,6 +481,7 @@ function getConfig(env = process.env) {
       model: readEnv(env, 'MIMO_MODEL') || DEFAULT_MIMO_MODEL,
     },
     webAgent: {
+      webMode: readEnv(env, 'IMA_WEB_AGENT_WEB_MODE') || undefined,
       ...primaryWebAgentAccount,
       accounts: webAgentAccounts,
       sharedKnowledgeBaseId: webAgentSharedKnowledgeBaseId,
@@ -522,6 +524,12 @@ function getConfig(env = process.env) {
         'IMA_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS',
         DEFAULT_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
         { min: 1 },
+      ),
+      healthCheckTimeoutMs: parseIntegerWithDefault(
+        readEnv(env, 'IMA_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS'),
+        'IMA_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS',
+        DEFAULT_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS,
+        { min: 1000 },
       ),
     },
     localRag: {
@@ -615,6 +623,7 @@ module.exports = {
   DEFAULT_WEB_AGENT_MODEL_TYPE,
   DEFAULT_WEB_AGENT_ACCOUNT_COOLDOWN_MS,
   DEFAULT_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
+  DEFAULT_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS,
   DEFAULT_WEB_AGENT_ACCOUNT_POOL_CAPACITY_MODE,
   DEFAULT_WEB_AGENT_ENROLLMENT_TIMEOUT_MS,
   DEFAULT_WEB_AGENT_ENROLLMENT_SCREENSHOT_INTERVAL_MS,

@@ -99,6 +99,56 @@ test('WebAgentAccountDirectory toggles disabled state and removes accounts', () 
   assert.equal(directory.listAccounts().length, 0);
 });
 
+test('WebAgentAccountDirectory persists a sanitized health projection separately from local scheduling', () => {
+  const tempDir = makeTempDirectory();
+  const directory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+    now: () => '2026-09-02T00:00:00.000Z',
+  });
+  directory.upsertCapturedAccount({
+    id: 'account-health',
+    name: 'Account Health',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=user-health; IMA-TOKEN=token-health; IMA-REFRESH-TOKEN=refresh-health',
+      'x-ima-bkn': '123',
+    },
+  });
+
+  const before = directory.listAccounts()[0];
+  assert.equal(before.health.local_schedulable, true);
+  assert.equal(before.health.session_valid, null);
+  assert.equal(before.health.refreshable, true);
+  assert.equal(before.health.status, 'needs_check');
+
+  directory.recordAccountHealth('account-health', {
+    operation: 'check',
+    code: 'ok',
+    checkedAt: '2026-09-02T00:00:01.000Z',
+    sessionValid: true,
+    knowledgeReady: true,
+    webReady: true,
+  });
+  const checked = directory.listAccounts({ includeEvents: true })[0];
+  assert.equal(checked.health.status, 'ready');
+  assert.equal(checked.health.last_check_code, 'ok');
+  assert.equal(checked.events.at(-1).meta.code, 'ok');
+  assert.equal(JSON.stringify(checked).includes('token-health'), false);
+  assert.equal(JSON.stringify(checked).includes('refresh-health'), false);
+
+  directory.recordAccountHealth('account-health', {
+    operation: 'check',
+    code: 'knowledge_base_unavailable',
+    sessionValid: false,
+    knowledgeReady: false,
+    webReady: true,
+  });
+  const unavailable = directory.listAccounts()[0];
+  assert.equal(unavailable.health.status, 'unavailable');
+  assert.equal(unavailable.health.knowledge_ready, false);
+});
+
 test('WebAgentAccountDirectory does not create a plaintext runtime export by default', () => {
   const tempDir = makeTempDirectory();
   const directory = new WebAgentAccountDirectory({
@@ -153,6 +203,41 @@ test('WebAgentAccountDirectory rejects duplicate normalized account IDs unless r
     headers,
     replace: true,
   }));
+});
+
+test('WebAgentAccountDirectory re-login preserves a slot and rejects a different IMA identity', () => {
+  const tempDir = makeTempDirectory();
+  const directory = new WebAgentAccountDirectory({
+    storePath: path.join(tempDir, 'accounts.json'),
+    keyPath: path.join(tempDir, 'accounts.key'),
+  });
+  directory.upsertCapturedAccount({
+    id: 'account-e',
+    name: 'Account E',
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=user-e; IMA-TOKEN=old-token; IMA-REFRESH-TOKEN=old-refresh',
+      'x-ima-bkn': '234',
+    },
+  });
+
+  assert.throws(() => directory.replaceCapturedAccount('account-e', {
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=different-user; IMA-TOKEN=new-token; IMA-REFRESH-TOKEN=new-refresh',
+      'x-ima-bkn': '345',
+    },
+  }), (error) => error.code === 'ima_identity_mismatch' && error.statusCode === 409);
+  assert.equal(directory.listAccounts().length, 1);
+
+  assert.doesNotThrow(() => directory.replaceCapturedAccount('account-e', {
+    knowledgeBaseId: 'web-kb-id',
+    headers: {
+      'x-ima-cookie': 'IMA-UID=user-e; IMA-TOKEN=new-token; IMA-REFRESH-TOKEN=new-refresh',
+      'x-ima-bkn': '345',
+    },
+  }));
+  assert.equal(directory.listAccounts()[0].name, 'Account E');
 });
 
 test('WebAgentAccountDirectory rejects the same IMA identity under a new account name', () => {

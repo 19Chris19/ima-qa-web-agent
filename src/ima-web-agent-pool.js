@@ -1,7 +1,12 @@
 const { IMAWebAgentClient } = require('./ima-web-agent-client');
+const {
+  classifyAccountHealthError,
+  createAccountHealthError,
+} = require('./account-health');
 
 const DEFAULT_ACCOUNT_COOLDOWN_MS = 120 * 1000;
 const DEFAULT_ACCOUNT_MAX_CONSECUTIVE_ERRORS = 2;
+const DEFAULT_ACCOUNT_HEALTH_CHECK_TIMEOUT_MS = 15 * 1000;
 
 class NoAvailableWebAgentAccountError extends Error {
   constructor(message = 'IMA 账号池暂时没有可用账号，请稍后再试') {
@@ -27,6 +32,9 @@ class IMAWebAgentPool {
     this.maxConsecutiveErrors = Number(
       config.accountMaxConsecutiveErrors || DEFAULT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
     );
+    this.healthCheckTimeoutMs = Number(
+      config.healthCheckTimeoutMs || DEFAULT_ACCOUNT_HEALTH_CHECK_TIMEOUT_MS,
+    );
     this.autoRefreshStarted = false;
     this.accounts = [];
     this.syncAccounts(accounts);
@@ -43,6 +51,9 @@ class IMAWebAgentPool {
       const existing = existingById.get(id);
       if (existing) {
         existing.name = config.name || existing.name || id;
+        existing.webQualification = config.webQualification || null;
+        existing.principalFingerprint = config.principalFingerprint;
+        existing.knowledgeBaseId = config.knowledgeBaseId;
         existing.client.applyConfig?.({ ...config, id, name: existing.name });
         existing.disabled = Boolean(config.disabled);
         existing.disabledReason = config.disabledReason || '';
@@ -64,6 +75,10 @@ class IMAWebAgentPool {
         lastError: config.lastError || '',
         lastUsedAt: Number(config.lastUsedAt || 0),
         totalRequests: Number(config.totalRequests || 0),
+        maintenanceOperation: '',
+        webQualification: config.webQualification || null,
+        principalFingerprint: config.principalFingerprint,
+        knowledgeBaseId: config.knowledgeBaseId,
       };
       next.push(account);
       added.push(account);
@@ -133,7 +148,13 @@ class IMAWebAgentPool {
   }
 
   async *streamAsk(options = {}) {
-    const preferredAccountId = String(options.accountId || '').trim();
+    let preferredAccountId = String(options.accountId || '').trim();
+    if (options.mode === 'knowledge_agent' && this.webReadiness) {
+      const eligible = this.accounts.filter(account => this.webReadiness(account));
+      if (preferredAccountId && !eligible.some(account => account.id === preferredAccountId)) throw new NoAvailableWebAgentAccountError('会话账号需要重新验证');
+      preferredAccountId ||= eligible.find(account => !account.activeRequests)?.id || eligible[0]?.id;
+      if (!preferredAccountId) throw new NoAvailableWebAgentAccountError('暂无通过问答验证的账号');
+    }
     const account = preferredAccountId
       ? await this._waitForPreferredAccount(preferredAccountId, options.signal)
       : await this._waitForAnyAccount(options.signal);
@@ -150,6 +171,9 @@ class IMAWebAgentPool {
     };
     delete clientOptions.accountId;
     try {
+      if (options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account)) {
+        throw new NoAvailableWebAgentAccountError('账号状态已变化，请稍后重试');
+      }
       const stream = account.client.streamAsk(clientOptions);
       let reportedSession = false;
       for await (const event of stream) {
@@ -179,26 +203,64 @@ class IMAWebAgentPool {
 
   async refreshAccount(accountIdOrName, options = {}) {
     const account = this._requireAccount(accountIdOrName);
-    if (typeof account.client.refreshAuth !== 'function') {
-      throw new Error('Account does not support auth refresh');
-    }
-    await account.client.refreshAuth(options);
-    account.client.persistRuntimeEnv?.();
-    this._markSuccess(account);
-    this._notifyCredentials(account);
-    this._notifyState(account);
-    return this._publicAccountState(account, { includeDetails: true });
+    return this._runMaintenanceOperation(account, 'refresh', async () => {
+      if (typeof account.client.refreshAuth !== 'function') {
+        throw createAccountHealthError('auth_expired');
+      }
+      try {
+        await runWithBoundedSignal(
+          (signal) => account.client.refreshAuth({ ...options, signal }),
+          options.timeoutMs || this.healthCheckTimeoutMs,
+        );
+        account.client.persistRuntimeEnv?.();
+        this._notifyCredentials(account);
+      } catch (error) {
+        throw createAccountHealthError(classifyAccountHealthError(error, 'refresh'), error);
+      }
+      return this._checkAccount(account, options, { refreshed: true });
+    });
   }
 
   async checkAccount(accountIdOrName, options = {}) {
     const account = this._requireAccount(accountIdOrName);
+    return this._runMaintenanceOperation(account, 'check', () => this._checkAccount(account, options));
+  }
+
+  async _checkAccount(account, options = {}, result = {}) {
     if (typeof account.client.initSession !== 'function') {
-      throw new Error('Account does not support health checks');
+      throw createAccountHealthError('web_context_missing');
     }
-    await account.client.initSession(options);
-    this._markSuccess(account);
+    const clientContext = account.client.createFirstPartyClientContext?.();
+    if (!clientContext) {
+      throw createAccountHealthError('web_context_missing');
+    }
+
+    try {
+      await runWithBoundedSignal(
+        (signal) => account.client.initSession({
+          signal,
+          clientContext,
+          // A check must not silently refresh or replace account credentials.
+          allowAuthRefresh: false,
+        }),
+        options.timeoutMs || this.healthCheckTimeoutMs,
+      );
+    } catch (error) {
+      throw createAccountHealthError(classifyAccountHealthError(error, result.refreshed ? 'refresh' : 'check'), error);
+    }
+
     this._notifyState(account);
-    return this._publicAccountState(account, { includeDetails: true });
+    return {
+      ...this._publicAccountState(account, { includeDetails: true }),
+      healthCheck: {
+        code: 'ok',
+        checkedAt: new Date(this.now()).toISOString(),
+        sessionValid: true,
+        knowledgeReady: true,
+        webReady: true,
+        refreshed: Boolean(result.refreshed),
+      },
+    };
   }
 
   setAccountDisabled(accountIdOrName, disabled, reason = '') {
@@ -214,6 +276,20 @@ class IMAWebAgentPool {
     return this._publicAccountState(account, { includeDetails: true });
   }
 
+  async _runMaintenanceOperation(account, operation, fn) {
+    if (account.maintenanceOperation) {
+      throw createAccountHealthError('account_operation_in_progress');
+    }
+    account.maintenanceOperation = operation;
+    this._notifyState(account);
+    try {
+      return await fn();
+    } finally {
+      account.maintenanceOperation = '';
+      this._notifyState(account);
+    }
+  }
+
   _leaseAccount() {
     const account = this._findAvailableAccount();
     return account ? this._reserveAccount(account) : null;
@@ -223,6 +299,7 @@ class IMAWebAgentPool {
     const now = this.now();
     return this.accounts
       .filter((account) => !account.disabled)
+      .filter((account) => !account.maintenanceOperation)
       .filter((account) => account.activeRequests === 0)
       .filter((account) => account.cooldownUntil <= now)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0] || null;
@@ -292,7 +369,7 @@ class IMAWebAgentPool {
 
     const available = () => {
       const candidateNow = this.now();
-      return !account.disabled && account.activeRequests === 0 && account.cooldownUntil <= candidateNow;
+      return !account.disabled && !account.maintenanceOperation && account.activeRequests === 0 && account.cooldownUntil <= candidateNow;
     };
     if (available()) {
       return this._reserveAccount(account);
@@ -346,7 +423,7 @@ class IMAWebAgentPool {
         waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号正在冷却，请稍后重试'));
         continue;
       }
-      if (waiter.account.activeRequests === 0 && waiter.account.cooldownUntil <= this.now()) {
+      if (!waiter.account.maintenanceOperation && waiter.account.activeRequests === 0 && waiter.account.cooldownUntil <= this.now()) {
         waiter.resolve(this._reserveAccount(waiter.account));
       }
     }
@@ -395,6 +472,7 @@ class IMAWebAgentPool {
       unavailableAccounts: accounts.filter((account) => account.status === 'unavailable').length,
       cooldownMs: this.cooldownMs,
       maxConsecutiveErrors: this.maxConsecutiveErrors,
+      healthCheckTimeoutMs: this.healthCheckTimeoutMs,
     };
     if (options.includeDetails) {
       summary.accounts = accounts;
@@ -418,6 +496,7 @@ class IMAWebAgentPool {
       lastError: account.lastError,
       lastUsedAt: account.lastUsedAt,
       totalRequests: account.totalRequests,
+      maintenanceOperation: account.maintenanceOperation || null,
     }));
   }
 
@@ -447,6 +526,7 @@ class IMAWebAgentPool {
       id: account.id,
       name: account.name,
       status,
+      disabled: account.disabled,
       disabledReason: account.disabledReason || '',
       activeRequests: account.activeRequests,
       cooldownSecondsRemaining: coolingDown
@@ -454,6 +534,7 @@ class IMAWebAgentPool {
         : 0,
       consecutiveErrors: account.consecutiveErrors,
       totalRequests: account.totalRequests,
+      maintenanceOperation: account.maintenanceOperation || null,
     };
 
     if (options.includeDetails) {
@@ -506,8 +587,38 @@ function safeErrorMessage(error) {
   return String(error?.message || error || '服务暂时不可用').slice(0, 240);
 }
 
+async function runWithBoundedSignal(run, timeoutMs) {
+  const controller = new AbortController();
+  const boundedTimeoutMs = Math.max(1, Number(timeoutMs) || DEFAULT_ACCOUNT_HEALTH_CHECK_TIMEOUT_MS);
+  let timedOut = false;
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      const error = new Error('IMA session health check timed out');
+      error.code = 'health_check_timeout';
+      reject(error);
+    }, boundedTimeoutMs);
+  });
+
+  try {
+    return await Promise.race([Promise.resolve().then(() => run(controller.signal)), timeoutPromise]);
+  } catch (error) {
+    if (timedOut && error?.code !== 'health_check_timeout') {
+      const timeoutError = new Error('IMA session health check timed out');
+      timeoutError.code = 'health_check_timeout';
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 module.exports = {
   DEFAULT_ACCOUNT_COOLDOWN_MS,
+  DEFAULT_ACCOUNT_HEALTH_CHECK_TIMEOUT_MS,
   DEFAULT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
   IMAWebAgentPool,
   NoAvailableWebAgentAccountError,

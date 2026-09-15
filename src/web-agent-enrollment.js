@@ -35,6 +35,8 @@ class WebAgentEnrollmentManager {
     this.pool = options.pool;
     this.config = options.config || {};
     this.onAccountsSynced = options.onAccountsSynced || null;
+    this.onEnrolled = options.onEnrolled || null;
+    this.onCancelVerification = options.onCancelVerification || null;
     this.clientFactory = options.clientFactory || ((config) => new IMAWebAgentClient(config));
     this.browserLauncher = options.browserLauncher || launchVisibleBrowserContext;
     this.fetch = options.fetch || globalThis.fetch;
@@ -61,8 +63,10 @@ class WebAgentEnrollmentManager {
       throw enrollmentError('已有一个账号接入任务进行中，请先完成或取消它', 409);
     }
 
-    const name = cleanAccountName(options.name);
-    const id = normalizeAccountId(options.id || name);
+    const reauthAccount = options.reauthAccountId ? this.accountDirectory.getAccount(options.reauthAccountId) : null;
+    if (options.reauthAccountId && !reauthAccount) throw enrollmentError('需要重新登录的账号不存在', 404);
+    const name = reauthAccount ? reauthAccount.name : cleanAccountName(options.name);
+    const id = reauthAccount ? reauthAccount.id : normalizeAccountId(options.id || name);
     const knowledgeBaseId = String(
       options.knowledgeBaseId || this.config.webAgent?.sharedKnowledgeBaseId || '',
     ).trim();
@@ -72,16 +76,22 @@ class WebAgentEnrollmentManager {
     const existing = this.accountDirectory.listAccounts().find((account) =>
       normalizeAccountId(account.id) === id || normalizeAccountId(account.name) === normalizeAccountId(name),
     );
-    if (existing && !options.replace) {
+    if (existing && !options.replace && !reauthAccount) {
       throw enrollmentError(`账号 ${existing.name} 已存在；重新绑定需要明确选择替换`, 409);
     }
 
+    const testQuestion = options.testQuestion || '请根据当前知识库概括主要主题，并引用相关资料';
+    if (typeof testQuestion !== 'string' || !testQuestion.trim() || testQuestion.length > 2000) {
+      throw enrollmentError('请输入不超过 2000 字的知识库测试问题', 400);
+    }
     const job = {
       id: this.idFactory(),
       name,
       accountId: id,
+      testQuestion,
       knowledgeBaseId,
       replace: Boolean(options.replace),
+      reauthAccountId: reauthAccount?.id || '',
       state: 'launching_browser',
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -188,6 +198,7 @@ class WebAgentEnrollmentManager {
       return publicJob(job);
     }
     this._setState(job, 'cancelled', '已关闭临时浏览器并清理登录任务');
+    this.onCancelVerification?.(job.account?.id || job.accountId);
     job.error = '已取消账号接入';
     await this._cleanup(job);
     this._releaseActive(job);
@@ -455,7 +466,7 @@ class WebAgentEnrollmentManager {
           if (job.state !== 'verifying') {
             return;
           }
-          job.account = this.accountDirectory.upsertCapturedAccount({
+          const capturedAccount = {
             id: job.accountId,
             name: job.name,
             knowledgeBaseId: job.knowledgeBaseId,
@@ -466,11 +477,23 @@ class WebAgentEnrollmentManager {
             refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
             source: 'admin-qr-enrollment',
             replace: job.replace,
-          });
+          };
+          job.account = job.reauthAccountId
+            ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
+            : this.accountDirectory.upsertCapturedAccount(capturedAccount);
           this.pool.syncAccounts(this.accountDirectory.getPoolAccounts());
           this.onAccountsSynced?.();
-          this._setState(job, 'completed', '账号已验证并同步到账号池');
           await this._cleanup(job);
+          if (this.onEnrolled) {
+            job.detail = '登录完成，正在执行一次知识库问答验证';
+            this._touch(job);
+            const result = await this.onEnrolled(job.account.id, job.testQuestion);
+            this.onAccountsSynced?.();
+            if (job.state === 'cancelled') return;
+            this._setState(job, 'completed', result.success ? '账号已接入，可用于知识库问答' : '账号已接入，问答验证未通过，请在账号列表重试');
+          } else {
+            this._setState(job, 'completed', '账号已验证并同步到账号池');
+          }
           this._releaseActive(job);
           this._scheduleRemoval(job);
           return;
@@ -1278,6 +1301,7 @@ function publicJob(job, now = Date.now()) {
   return {
     taskId: job.id,
     name: job.name,
+    mode: job.reauthAccountId ? 'reauth' : 'enroll',
     state: job.state,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt || job.createdAt).toISOString(),

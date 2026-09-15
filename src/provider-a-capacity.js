@@ -1,10 +1,10 @@
-function synchronizeProviderAQueueCapacity({ askQueue, config, pool }) {
+function synchronizeProviderAQueueCapacity({ askQueue, config, pool, webReadiness }) {
   if (!askQueue?.setMaxConcurrent || !config?.concurrency?.autoScaleWithAccounts) {
     return askQueue?.stats?.() || null;
   }
 
   const poolStats = pool?.stats?.() || {};
-  const eligibleAccounts = Math.max(
+  const eligibleAccounts = webReadiness ? webReadiness.snapshot().capacity : Math.max(
     0,
     Number(poolStats.totalAccounts || 0) - Number(poolStats.unavailableAccounts || 0),
   );

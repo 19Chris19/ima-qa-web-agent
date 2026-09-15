@@ -51,11 +51,23 @@
   const exerciseReportsPanel = document.querySelector('#exerciseReportsPanel');
   const exerciseReportList = document.querySelector('#exerciseReportList');
   const exerciseReportDetail = document.querySelector('#exerciseReportDetail');
+  const accountFeedback = document.querySelector('#accountFeedback');
 
   const tokenStorageKey = 'ima-qa-admin-token';
   let token = sessionStorage.getItem(tokenStorageKey) || '';
   let bootstrap = null;
   let accounts = [];
+  let readiness = null;
+  const upgradeWebMode = document.querySelector('#upgradeWebMode');
+  upgradeWebMode?.addEventListener('click', async () => {
+    if (!await confirmWebAction('升级原生知识库 Agent', '新会话需要账号通过问答验证。已有会话不变，是否继续？')) return;
+    upgradeWebMode.disabled = true;
+    try {
+      await request('/api/admin/web-mode', { method: 'POST', body: JSON.stringify({ mode: 'knowledge_agent' }) });
+      await loadAdminState();
+    } catch (error) { setFeedback(enrollFeedback, error.message, true); }
+    finally { upgradeWebMode.disabled = false; }
+  });
   let enrollment = null;
   let enrollmentPollTimer = null;
   let enrollmentQrUrl = '';
@@ -64,6 +76,9 @@
   let activeExercise = null;
   let exerciseReports = [];
   let exercisePollTimer = null;
+  const accountActionsInFlight = new Set();
+  let reauthAccountId = '';
+  const accountActionFeedback = new Map();
 
   tokenInput.value = token;
   tokenForm.addEventListener('submit', async (event) => {
@@ -106,10 +121,15 @@
       ]);
       bootstrap = bootstrapPayload;
       accounts = Array.isArray(accountPayload.accounts) ? accountPayload.accounts : [];
+      readiness = accountPayload.readiness;
+      if (upgradeWebMode) upgradeWebMode.hidden = !readiness || readiness.mode === 'knowledge_agent';
+      const readinessSummary = document.querySelector('#webReadinessSummary');
+      if (readinessSummary) readinessSummary.textContent = readiness
+        ? `基础健康 ${readiness.basicHealthy} · 当前可调度 ${readiness.schedulable} · 待验证 ${readiness.pending}` : '';
       sessionStorage.setItem(tokenStorageKey, token);
       login.hidden = true;
       panel.hidden = false;
-      renderSummary(accountPayload.pool, accountPayload.queue);
+      renderSummary(accountPayload.summary, accountPayload.queue);
       startEnrollmentButton.disabled = !bootstrap?.enrollment?.supportsAdminPageQr;
       startEnrollmentButton.title = bootstrap?.enrollment?.supportsAdminPageQr
         ? ''
@@ -163,10 +183,10 @@
     const cooling = Number(pool?.coolingDownAccounts || 0);
     summary.replaceChildren(
       createMetric('账号总数', total),
-      createMetric('可用', available),
+      createMetric(readiness ? '基础健康' : '可用', readiness?.basicHealthy ?? available),
       createMetric('忙碌', busy),
       createMetric('冷却', cooling),
-      createMetric('问答并发', Number(queue?.maxConcurrent || 1)),
+      createMetric('问答并发', readiness?.capacity ?? Number(queue?.maxConcurrent || 1)),
     );
   }
 
@@ -221,6 +241,8 @@
         body: JSON.stringify({
           name: cleanAccountName(enrollmentName.value),
           replace: replaceEnrollment.checked,
+          reauthAccountId,
+          testQuestion: document.querySelector('#enrollmentTestQuestion')?.value,
         }),
       });
       enrollment = payload.enrollment;
@@ -267,7 +289,7 @@
     stopEnrollmentPolling();
     const accountName = String(completedEnrollment?.account?.name || '新账号');
     dismissEnrollmentDialog();
-    setFeedback(enrollFeedback, `账号 ${accountName} 已验证并加入账号池。`);
+    setFeedback(enrollFeedback, `账号 ${accountName}：${completedEnrollment.detail || '接入完成，请查看账号状态'}。`);
     await loadAdminState();
   }
 
@@ -409,6 +431,8 @@
     enrollment = null;
     completedEnrollmentTaskId = '';
     enrollmentForm.reset();
+    reauthAccountId = '';
+    enrollmentName.disabled = false;
     enrollmentForm.hidden = false;
     enrollmentProgress.hidden = true;
     enrollmentQr.removeAttribute('src');
@@ -1234,8 +1258,9 @@
       const name = document.createElement('h3');
       name.textContent = account.name;
       const status = document.createElement('span');
-      status.className = `admin-account-status ${account.status || 'unknown'}`;
-      status.textContent = statusLabel(account.status);
+      status.className = `admin-account-status ${account.availabilityStatus || 'unknown'}`;
+      const qualification = readiness?.accounts?.find(item => item.id === account.id);
+      status.textContent = qualification ? ({ ready: '可用于问答', pending: '待验证', verifying: '验证中', busy: '忙碌', cooling: '冷却', disabled: '已停用', needs_login: '需重新登录' }[qualification.state] || '待验证') : statusLabel(account.availabilityStatus);
       heading.append(name, status);
 
       const meta = document.createElement('p');
@@ -1244,36 +1269,126 @@
 
       const actions = document.createElement('div');
       actions.className = 'admin-account-actions';
+      const actionInFlight = accountActionsInFlight.has(account.id);
       const accountActions = [
-        createAction('检查', () => runAccountAction(account.id, 'check')),
-        createAction('刷新', () => runAccountAction(account.id, 'refresh')),
+        createAction(actionInFlight ? '处理中...' : '检查', () => runAccountAction(account, 'check'), actionInFlight),
+        createAction(actionInFlight ? '处理中...' : '刷新', () => runAccountAction(account, 'refresh'), actionInFlight),
       ];
+      if (readiness) accountActions.push(createAction('验证问答能力', () => verifyAccount(account), actionInFlight || qualification?.state === 'verifying'));
+      if (['auth_expired', 'auth_rejected'].includes(account.health?.last_check_code)) {
+        accountActions.push(createAction('重新登录', () => {
+          openEnrollmentDialog();
+          if (enrollment) return;
+          reauthAccountId = account.id;
+          enrollmentName.value = account.name;
+          enrollmentName.disabled = true;
+        }, actionInFlight));
+      }
       if (!account.identityDuplicate) {
-        accountActions.push(createAction(account.status === 'disabled' ? '启用' : '停用', () =>
-          runAccountAction(account.id, account.status === 'disabled' ? 'enable' : 'disable'),
+        const disabled = account.status === 'disabled';
+        accountActions.push(createAction(actionInFlight ? '处理中...' : disabled ? '启用' : '停用', () =>
+          runAccountAction(account, disabled ? 'enable' : 'disable'), actionInFlight,
         ));
       }
-      accountActions.push(createAction('删除', () => deleteAccount(account)));
+      accountActions.push(createAction(actionInFlight ? '处理中...' : '删除', () => deleteAccount(account), actionInFlight));
       actions.append(...accountActions);
-      row.append(heading, meta, actions);
+      const feedback = accountActionFeedback.get(account.id);
+      const result = document.createElement('p');
+      result.className = `admin-feedback${feedback?.isError ? ' error' : ''}`;
+      result.textContent = feedback?.message || '';
+      row.append(heading, meta, actions, result);
       accountList.appendChild(row);
     }
   }
 
-  function createAction(label, handler) {
+  async function verifyAccount(account) {
+    if (accountActionsInFlight.has(account.id)) return;
+    const question = await confirmWebAction('验证问答能力', '将执行一次真实知识库问答，不发送机器人消息。', '请根据当前知识库概括主要主题，并引用相关资料');
+    if (!question?.trim()) return;
+    accountActionsInFlight.add(account.id);
+    accountActionFeedback.set(account.id, { message: '正在验证问答能力...', isError: false });
+    renderAccounts();
+    try {
+      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`, { method: 'POST', body: JSON.stringify({ question }) });
+      const messages = { ok: '验证成功，可用于知识库问答', probe_evidence_insufficient: '回答或知识库来源不足，账号保留待验证', probe_timeout: '验证超时，请稍后手动重试', probe_cancelled: '验证已取消', account_store_generation_conflict: '账号状态发生变化，请重新验证', pool_sync_failed: '验证已保存，调度同步失败，账号暂时隔离', auth_expired: '登录已过期，请重新登录', auth_rejected: '登录被拒绝，请重新登录', upstream_temporary: '上游暂时不可用，请稍后重试' };
+      accountActionFeedback.set(account.id, { message: messages[result.code] || `验证未完成（${result.code}）`, isError: !result.success });
+    } catch (error) { accountActionFeedback.set(account.id, { message: error.message, isError: true }); }
+    finally {
+      accountActionsInFlight.delete(account.id);
+      await loadAdminState();
+      renderAccounts();
+    }
+  }
+
+  function confirmWebAction(title, notice, initialQuestion) {
+    if (document.querySelector('#webActionDialog')) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const dialog = document.createElement('dialog');
+      dialog.id = 'webActionDialog';
+      dialog.className = 'admin-enrollment-dialog';
+      const form = document.createElement('form');
+      form.className = 'admin-enrollment-form';
+      const heading = document.createElement('h2');
+      heading.textContent = title;
+      const text = document.createElement('p');
+      text.textContent = notice;
+      form.append(heading, text);
+      let input;
+      if (initialQuestion) {
+        const label = document.createElement('label');
+        label.textContent = '知识库测试问题';
+        input = document.createElement('textarea');
+        input.id = 'webActionQuestion';
+        label.htmlFor = input.id;
+        input.value = initialQuestion;
+        input.maxLength = 1200;
+        input.required = true;
+        form.append(label, input);
+      }
+      const cancel = createAction('取消', () => finish(null));
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.textContent = '确认';
+      form.append(cancel, submit);
+      const finish = value => { dialog.close(); dialog.remove(); resolve(value); };
+      form.addEventListener('submit', event => { event.preventDefault(); finish(input ? input.value.trim() : true); });
+      dialog.addEventListener('cancel', event => { event.preventDefault(); finish(null); });
+      dialog.append(form);
+      document.body.append(dialog);
+      dialog.showModal();
+    });
+  }
+
+  function createAction(label, handler, disabled = false) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
+    button.disabled = Boolean(disabled);
     button.addEventListener('click', handler);
     return button;
   }
 
-  async function runAccountAction(accountId, action) {
+  async function runAccountAction(account, action) {
+    if (accountActionsInFlight.has(account.id)) {
+      return;
+    }
+    accountActionsInFlight.add(account.id);
+    accountActionFeedback.set(account.id, { message: `${accountActionLabel(action)}中...`, isError: false });
+    renderAccounts();
     try {
-      await request(`/api/admin/accounts/${encodeURIComponent(accountId)}/${action}`, { method: 'POST', body: '{}' });
+      const payload = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/${action}`, { method: 'POST', body: '{}' });
+      accountActionFeedback.set(account.id, {
+        message: payload.operation?.message || `${accountActionLabel(action)}成功`,
+        isError: false,
+      });
       await loadAdminState();
     } catch (error) {
-      setFeedback(enrollFeedback, error.message || '账号操作失败', true);
+      accountActionFeedback.set(account.id, { message: error.message || '账号操作失败', isError: true });
+      setFeedback(accountFeedback, error.message || '账号操作失败', true);
+      await loadAdminState();
+    } finally {
+      accountActionsInFlight.delete(account.id);
+      renderAccounts();
     }
   }
 
@@ -1281,16 +1396,27 @@
     if (!window.confirm(`删除账号“${account.name}”？此操作不会删除 IMA 账号本身。`)) {
       return;
     }
+    if (accountActionsInFlight.has(account.id)) return;
+    accountActionsInFlight.add(account.id);
+    accountActionFeedback.set(account.id, { message: '删除中...', isError: false });
+    renderAccounts();
     try {
-      await request(`/api/admin/accounts/${encodeURIComponent(account.id)}`, { method: 'DELETE' });
+      const payload = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}`, { method: 'DELETE' });
+      accountActionFeedback.delete(account.id);
+      setFeedback(accountFeedback, payload.operation?.message || '账号已从本机账号池删除。');
       await loadAdminState();
     } catch (error) {
-      setFeedback(enrollFeedback, error.message || '删除失败', true);
+      accountActionFeedback.set(account.id, { message: error.message || '删除失败', isError: true });
+      setFeedback(accountFeedback, error.message || '删除失败', true);
+    } finally {
+      accountActionsInFlight.delete(account.id);
+      renderAccounts();
     }
   }
 
   function accountMeta(account) {
     const items = [];
+    const health = account.health || {};
     if (account.identityDuplicate) {
       items.push('与另一条记录是同一 IMA 登录身份，已自动停用，不计入并发');
     } else if (account.identityVerified) {
@@ -1301,6 +1427,22 @@
     }
     if (Number(account.cooldownSecondsRemaining || 0)) {
       items.push(`冷却 ${account.cooldownSecondsRemaining} 秒`);
+    }
+    if (account.schedulerStatus === 'busy') {
+      items.push('本机调度：处理中');
+    } else if (account.schedulerStatus === 'cooling_down') {
+      items.push('本机调度：冷却中');
+    }
+    items.push(`本机可调度：${health.local_schedulable ? '是' : '否'}`);
+    items.push(`会话：${healthFlagLabel(health.session_valid)}`);
+    items.push(`刷新：${health.refreshable ? '可刷新' : '不可刷新'}`);
+    items.push(`知识库：${healthFlagLabel(health.knowledge_ready)}`);
+    items.push(`Web：${healthFlagLabel(health.web_ready)}`);
+    if (health.last_check_at) {
+      items.push(`上次检查 ${formatDate(health.last_check_at)}：${health.last_check_message || '已完成'}`);
+    }
+    if (health.last_refresh_at) {
+      items.push(`上次刷新 ${formatDate(health.last_refresh_at)}${health.last_refresh_code === 'ok' ? '' : `：${health.last_refresh_code || '失败'}`}`);
     }
     if (account.tokenExpiresAt) {
       items.push(`访问令牌 ${formatDate(account.tokenExpiresAt)}`);
@@ -1316,11 +1458,18 @@
 
   function statusLabel(status) {
     return {
-      available: '可用',
-      busy: '处理中',
-      cooling_down: '冷却中',
-      disabled: '已停用',
+      ready: '已验证可用',
+      needs_check: '待检查',
+      unavailable: '不可用',
     }[status] || '未知';
+  }
+
+  function healthFlagLabel(value) {
+    return value === true ? '通过' : value === false ? '失败' : '未检查';
+  }
+
+  function accountActionLabel(action) {
+    return { check: '检查', refresh: '刷新', enable: '启用', disable: '停用', delete: '删除' }[action] || '操作';
   }
 
   function formatDate(value) {

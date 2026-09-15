@@ -14,6 +14,7 @@ const {
   DEFAULT_REQUEST_TIMEOUT_MS,
   DEFAULT_WEB_AGENT_ACCOUNT_COOLDOWN_MS,
   DEFAULT_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
+  DEFAULT_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS,
   DEFAULT_WEB_AGENT_ACCOUNT_STORE_KEY_PATH,
   DEFAULT_WEB_AGENT_ACCOUNT_STORE_PATH,
   DEFAULT_WEB_AGENT_BROWSER_PATH,
@@ -135,6 +136,7 @@ test('getConfig supports optional IMA Web Agent mode', () => {
     config.webAgent.accountMaxConsecutiveErrors,
     DEFAULT_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
   );
+  assert.equal(config.webAgent.healthCheckTimeoutMs, DEFAULT_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS);
 });
 
 test('getConfig allows Web Agent control plane startup without pre-seeded accounts', () => {
@@ -282,6 +284,7 @@ test('getConfig puts Web Agent account pools into automatic capacity mode by def
     ]),
     IMA_WEB_AGENT_ACCOUNT_COOLDOWN_MS: '90000',
     IMA_WEB_AGENT_ACCOUNT_MAX_CONSECUTIVE_ERRORS: '3',
+    IMA_WEB_AGENT_HEALTH_CHECK_TIMEOUT_MS: '12000',
   });
 
   assert.equal(config.webAgent.accounts.length, 2);
@@ -291,6 +294,7 @@ test('getConfig puts Web Agent account pools into automatic capacity mode by def
   assert.equal(config.webAgent.accounts[0].runtimeEnvPath, '/tmp/account-a.env');
   assert.equal(config.webAgent.accountCooldownMs, 90000);
   assert.equal(config.webAgent.accountMaxConsecutiveErrors, 3);
+  assert.equal(config.webAgent.healthCheckTimeoutMs, 12000);
   assert.equal(config.concurrency.maxConcurrentAsk, 1);
   assert.equal(config.concurrency.autoScaleWithAccounts, true);
 });

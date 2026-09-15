@@ -269,6 +269,7 @@ test('IMAWebAgentPool starts periodic refresh for accounts enrolled after startu
 
 test('IMAWebAgentPool refreshAccount notifies credential persistence callback', async () => {
   const credentialChanges = [];
+  const checkCalls = [];
   const pool = new IMAWebAgentPool(
     {
       accounts: [makeAccount('account-a')],
@@ -282,6 +283,15 @@ test('IMAWebAgentPool refreshAccount notifies credential persistence callback', 
       clientFactory(account) {
         return {
           async refreshAuth() {},
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context' };
+          },
+          async initSession(options) {
+            checkCalls.push(options);
+            assert.equal(options.clientContext.type, 'synthetic-first-party-context');
+            assert.equal(options.signal instanceof AbortSignal, true);
+            return 'synthetic-session';
+          },
           persistRuntimeEnv() {
             return true;
           },
@@ -309,6 +319,131 @@ test('IMAWebAgentPool refreshAccount notifies credential persistence callback', 
   assert.equal(credentialChanges.length, 1);
   assert.equal(credentialChanges[0].accountId, 'account-a');
   assert.equal(credentialChanges[0].snapshot.knowledgeBaseId, 'web-kb-id');
+  assert.equal(checkCalls.length, 1);
+});
+
+test('IMAWebAgentPool health check forwards a service-owned first-party context without asking a question', async () => {
+  const calls = [];
+  const pool = new IMAWebAgentPool(
+    { accounts: [makeAccount('account-a')], healthCheckTimeoutMs: 100 },
+    {
+      clientFactory() {
+        return {
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context', source: 'service' };
+          },
+          async initSession(options) {
+            calls.push(options);
+            return 'session-for-health-only';
+          },
+          async *streamAsk() {
+            throw new Error('health check must not call streamAsk');
+          },
+        };
+      },
+    },
+  );
+
+  const result = await pool.checkAccount('account-a');
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].clientContext, { type: 'synthetic-first-party-context', source: 'service' });
+  assert.equal(calls[0].allowAuthRefresh, false);
+  assert.equal(calls[0].question, undefined);
+  assert.equal(result.healthCheck.sessionValid, true);
+  assert.equal(result.healthCheck.knowledgeReady, true);
+  assert.equal(result.healthCheck.webReady, true);
+});
+
+test('IMAWebAgentPool fails closed when a health-check client has no first-party context', async () => {
+  const pool = new IMAWebAgentPool(
+    { accounts: [makeAccount('account-a')] },
+    {
+      clientFactory() {
+        return {
+          async initSession() {
+            throw new Error('should not run without a client context');
+          },
+        };
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => pool.checkAccount('account-a'),
+    (error) => error.code === 'web_context_missing' && /会话上下文/.test(error.message),
+  );
+});
+
+test('IMAWebAgentPool classifies expired refresh credentials and transient health failures', async () => {
+  const refreshPool = new IMAWebAgentPool(
+    { accounts: [makeAccount('account-a')] },
+    {
+      clientFactory() {
+        return {
+          async refreshAuth() {
+            throw new Error('IMA Web login expired and refresh credentials are unavailable');
+          },
+        };
+      },
+    },
+  );
+  await assert.rejects(
+    () => refreshPool.refreshAccount('account-a'),
+    (error) => error.code === 'auth_expired',
+  );
+
+  const checkPool = new IMAWebAgentPool(
+    { accounts: [makeAccount('account-b')] },
+    {
+      clientFactory() {
+        return {
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context' };
+          },
+          async initSession() {
+            throw new Error('fetch failed');
+          },
+        };
+      },
+    },
+  );
+  await assert.rejects(
+    () => checkPool.checkAccount('account-b'),
+    (error) => error.code === 'upstream_temporary',
+  );
+});
+
+test('IMAWebAgentPool bounds a stuck health check and prevents a duplicate maintenance operation', async () => {
+  let firstSignal;
+  const pool = new IMAWebAgentPool(
+    { accounts: [makeAccount('account-a')], healthCheckTimeoutMs: 15 },
+    {
+      clientFactory() {
+        return {
+          createFirstPartyClientContext() {
+            return { type: 'synthetic-first-party-context' };
+          },
+          async initSession({ signal }) {
+            firstSignal = signal;
+            return new Promise(() => {});
+          },
+        };
+      },
+    },
+  );
+
+  const first = pool.checkAccount('account-a');
+  await new Promise((resolve) => setTimeout(resolve, 1));
+  await assert.rejects(
+    () => pool.checkAccount('account-a'),
+    (error) => error.code === 'account_operation_in_progress',
+  );
+  await assert.rejects(
+    () => first,
+    (error) => error.code === 'upstream_temporary',
+  );
+  assert.equal(firstSignal.aborted, true);
 });
 
 test('IMAWebAgentPool proxies refresh, persistence, and auto-refresh to accounts', async () => {
