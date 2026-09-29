@@ -16,12 +16,16 @@
   const embedClientId = document.body?.dataset?.mode === 'embed' ? getOrCreateEmbedClientId() : '';
   let conversationId = localStorage.getItem(conversationStorageKey) || '';
   let conversationSummaries = [];
-  let lastQuestion = '';
   let isBusy = false;
+  let activeController = null;
   let followStreamingAnswer = true;
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (isBusy) {
+      activeController?.abort();
+      return;
+    }
     submitQuestion(input.value);
   });
 
@@ -33,6 +37,7 @@
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      if (isBusy) return;
       submitQuestion(input.value);
     }
   });
@@ -207,10 +212,12 @@
     }
 
     isBusy = true;
+    activeController = new AbortController();
     followStreamingAnswer = true;
-    lastQuestion = question;
     setStatus('busy', '回答中');
-    sendButton.disabled = true;
+    sendButton.classList.add('is-busy');
+    sendButton.title = '停止回答';
+    sendButton.setAttribute('aria-label', '停止回答');
     newConversationButton.disabled = true;
     input.value = '';
     input.style.height = 'auto';
@@ -225,12 +232,24 @@
       setStatus('', 'ready');
     } catch (error) {
       assistantMessage.bubble.classList.remove('pending');
-      assistantMessage.text.textContent = error.message || '服务暂时不可用';
-      assistantMessage.bubble.appendChild(createRetryButton());
-      setStatus('error', '请求失败');
+      if (assistantMessage.answer) {
+        renderAnswer(assistantMessage.text, assistantMessage.answer, {
+          sourceIndexes: sourceIndexes(assistantMessage.sources),
+        });
+      }
+      const failure = document.createElement('p');
+      failure.className = 'answer-failure';
+      failure.textContent = activeController?.signal.aborted
+        ? '已停止，以上回答未完成。'
+        : `回答未完成：${error.message || '连接中断'}`;
+      assistantMessage.bubble.appendChild(failure);
+      setStatus('error', '未完成');
     } finally {
       isBusy = false;
-      sendButton.disabled = false;
+      activeController = null;
+      sendButton.classList.remove('is-busy');
+      sendButton.title = '发送';
+      sendButton.setAttribute('aria-label', '发送');
       newConversationButton.disabled = false;
       input.focus();
     }
@@ -239,6 +258,7 @@
   async function streamAnswer(question, assistantMessage) {
     const response = await fetch('/api/ask', requestOptions({
       method: 'POST',
+      signal: activeController.signal,
       headers: {
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
@@ -264,6 +284,7 @@
     let sourceList = [];
     let renderScheduled = false;
     let streamingFinished = false;
+    let terminalCount = 0;
     const renderStreamingAnswer = () => {
       if (renderScheduled) {
         return;
@@ -274,7 +295,10 @@
         if (streamingFinished) {
           return;
         }
-        renderAnswer(assistantMessage.text, answer, { streaming: true });
+        renderAnswer(assistantMessage.text, answer, {
+          streaming: true,
+          sourceIndexes: sourceIndexes(sourceList),
+        });
         updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
         scrollToBottom({ force: followStreamingAnswer });
       });
@@ -299,6 +323,7 @@
 
         if (event.event === 'sources') {
           sourceList = event.data.sources || [];
+          assistantMessage.sources = sourceList;
           sourceMeta = renderSources(assistantMessage.bubble, sourceList, {
             searchSummary: event.data.searchSummary || '',
           });
@@ -307,14 +332,19 @@
         if (event.event === 'delta') {
           const text = event.data.text || '';
           answer += text;
+          assistantMessage.answer = answer;
           renderStreamingAnswer();
         }
+
+        if (event.event === 'done') terminalCount += 1;
 
         if (event.event === 'error') {
           throw new Error(event.data.error || '服务暂时不可用');
         }
       }
     }
+
+    if (terminalCount !== 1) throw new Error('连接中断，上游回答未完整结束');
 
     if (sourceList.length) {
       sourceMeta = renderSources(assistantMessage.bubble, sourceList, {
@@ -324,7 +354,7 @@
     }
 
     streamingFinished = true;
-    renderAnswer(assistantMessage.text, answer);
+    renderAnswer(assistantMessage.text, answer, { sourceIndexes: sourceIndexes(sourceList) });
     updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
     scrollToBottom({ force: followStreamingAnswer });
 
@@ -351,6 +381,7 @@
     for (const message of messages) {
       const view = appendMessage(message.role, message.content || '');
       if (message.role === 'assistant' && message.sources?.length) {
+        renderAnswer(view.text, message.content || '', { sourceIndexes: sourceIndexes(message.sources) });
         renderSources(view.bubble, message.sources, {
           searchSummary: message.searchSummary || '',
           answer: message.content || '',
@@ -450,11 +481,15 @@
   }
 
   function renderAnswer(target, markdown, options = {}) {
-    target.innerHTML = formatAnswerHtml(markdown, options);
+    try {
+      window.ImaAnswerRenderer.updateAnswerElement(target, markdown, options);
+    } catch {
+      target.textContent = markdown;
+    }
   }
 
-  function formatAnswerHtml(markdown, options = {}) {
-    return window.ImaAnswerMarkdown.formatAnswerHtml(markdown, options);
+  function sourceIndexes(sources) {
+    return (sources || []).map((source) => source.index).filter((index) => Number.isSafeInteger(Number(index)));
   }
 
   function escapeHtml(value) {
@@ -554,15 +589,6 @@
     if (toggle) {
       toggle.textContent = sourceMeta.searchSummary || `找到 ${sourceMeta.count} 篇知识库资料`;
     }
-  }
-
-  function createRetryButton() {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'retry-button';
-    button.textContent = '重试';
-    button.addEventListener('click', () => submitQuestion(lastQuestion));
-    return button;
   }
 
   function setStatus(className, text) {
