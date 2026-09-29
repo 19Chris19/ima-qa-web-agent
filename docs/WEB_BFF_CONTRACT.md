@@ -1,6 +1,6 @@
 # 自定义网页后端接入合同（候选）
 
-简单嵌入优先用 `/embed.html`；如果需要自定义页面、身份和会话管理，在**自己的后端**调用 Provider A，浏览器只连自己的后端。可运行的无凭据版本见 [`examples/web-bff`](../examples/web-bff/README.md)。这份合同是公开候选分支的能力说明；尚未随 v0.3.0 Release 发布。
+简单嵌入优先用 `/embed.html`；如果需要自定义页面、身份和会话管理，在**自己的后端**调用 Provider A，浏览器只连自己的后端。可运行的无凭据版本见 [`examples/web-bff`](../examples/web-bff/README.md)。这是 v0.4.0 候选合同；公开 v0.3.0 尚不包含它。
 
 ## 凭证与路由
 
