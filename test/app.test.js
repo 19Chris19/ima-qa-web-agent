@@ -2359,3 +2359,34 @@ test('concurrent keyed native SSE rejects the duplicate without disturbing the f
     });
   } finally { release(); await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('web intent without a web source stays unverified and a classic conversation never changes mode', async () => {
+  const knowledgeBaseId = 'synthetic-knowledge-base';
+  const scope = crypto.createHash('sha256').update(knowledgeBaseId).digest('hex');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', webAgent: { sharedKnowledgeBaseId: knowledgeBaseId },
+    security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' } };
+  const conversations = new ConversationStore({ persist: false });
+  const old = conversations.create('synthetic-web-user', { mode: 'classic_knowledge' });
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() {
+    dispatched++;
+    yield { type: 'sources', sources: [{ index: 1, title: 'Synthetic KB source', snippet: 'Evidence' }], sourceKinds: ['knowledge'] };
+    yield { type: 'delta', text: 'Synthetic grounded answer' };
+    yield { type: 'done' };
+  } };
+  const headers = { Authorization: 'Bearer synthetic-service-token', 'Content-Type': 'application/json',
+    Accept: 'text/event-stream', 'X-IMA-Client-Id': 'synthetic-web-user' };
+  const body = { question: 'Synthetic question', retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope, source_intent: 'web_requested' };
+  await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: conversations }), async baseUrl => {
+    const send = payload => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify(payload) });
+    const mismatched = await send({ ...body, conversationId: old.conversationId });
+    assert.equal(mismatched.status, 409);
+    assert.equal(dispatched, 0);
+    const response = await send(body);
+    assert.equal(response.status, 200);
+    const events = await response.text();
+    assert.match(events, /"answer_basis":"knowledge"/u);
+    assert.match(events, /"web_source_count":0/u);
+    assert.equal(dispatched, 1);
+  });
+});

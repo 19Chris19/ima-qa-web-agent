@@ -1,6 +1,12 @@
 const assert = require('node:assert/strict');
 const { createHash, randomUUID } = require('node:crypto');
+const fs = require('node:fs/promises');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
+const { createApp } = require('../src/app');
+const { ConversationStore } = require('../src/conversation-store');
 
 async function withExample(options, fn) {
   const { createWebBff } = await import('../examples/web-bff/server.mjs');
@@ -71,4 +77,61 @@ test('web BFF rejects cross-origin posting before dispatch', async () => {
     const response = await fetch(`${base}/api/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://untrusted.example' }, body: '{}' });
     assert.equal(response.status, 403);
   });
+});
+
+test('real BFF and Provider A contract complete two isolated native turns without IMA credentials', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ima-web-bff-integration-'));
+  const storePath = path.join(root, 'conversations.json');
+  const sessions = [];
+  const config = {
+    qaProvider: 'ima-web-agent', mimo: { model: 'synthetic' }, webAgent: { sharedKnowledgeBaseId: 'synthetic-kb' },
+    security: { apiToken: 'synthetic-api-token', internalServiceToken: 'synthetic-service-token', allowedOrigins: [] },
+    limits: { maxQuestionLength: 2000 }, concurrency: { maxConcurrentAsk: 1, queueLimit: 2, requestTimeoutMs: 2000 },
+    rateLimit: { windowMs: 0, max: 0 }, conversations: { storePath },
+  };
+  const app = createApp({ config, conversationStore: new ConversationStore({ storePath }),
+    webReadiness: { mode: 'knowledge_agent', snapshot: () => ({ mode: 'knowledge_agent', generation: 1, capacity: 1, knowledgeAgentCapacity: 1, schedulable: 1 }) },
+    imaWebAgentClient: { async *streamAsk(options) {
+      sessions.push({ mode: options.mode, sessionId: options.sessionId, question: options.question });
+      yield { type: 'route', accountId: 'synthetic-account' };
+      yield { type: 'session', sessionId: options.sessionId || 'synthetic-upstream-session' };
+      yield { type: 'sources', sources: [{ index: 1, title: 'Synthetic KB', snippet: 'Safe evidence' }], sourceKinds: ['knowledge'] };
+      yield { type: 'delta', text: options.sessionId ? 'Synthetic follow-up' : 'Synthetic first answer' };
+      yield { type: 'done' };
+    } },
+  });
+  const provider = http.createServer(app);
+  await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
+  const providerUrl = `http://127.0.0.1:${provider.address().port}`;
+  const scopeRef = createHash('sha256').update('synthetic-kb').digest('hex');
+  try {
+    await withExample({ mode: 'real', providerUrl, apiToken: 'synthetic-api-token', serviceToken: 'synthetic-service-token', scopeRef }, async base => {
+      const home = await fetch(base);
+      const cookie = home.headers.get('set-cookie').split(';')[0];
+      const headers = { Cookie: cookie, 'Content-Type': 'application/json' };
+      const status = await (await fetch(`${base}/api/status`, { headers: { Cookie: cookie } })).json();
+      assert.equal(status.ready, true);
+      const send = async (question, conversationId = '') => {
+        const response = await fetch(`${base}/api/ask`, { method: 'POST', headers,
+          body: JSON.stringify({ question, conversationId, requestId: randomUUID() }) });
+        assert.equal(response.status, 200);
+        return response.text();
+      };
+      const first = await send('Synthetic original question');
+      assert.match(first, /event: done/u);
+      const id = /"conversationId":"([^"]+)"/u.exec(first)[1];
+      const second = await send('Synthetic follow-up question', id);
+      assert.match(second, /Synthetic follow-up/u);
+      assert.equal(sessions.length, 2);
+      assert.equal(sessions[0].mode, 'knowledge_agent');
+      assert.equal(sessions[1].sessionId, 'synthetic-upstream-session');
+      const detail = await (await fetch(`${base}/api/conversations/${id}`, { headers: { Cookie: cookie } })).json();
+      assert.equal(detail.messages[0].content, 'Synthetic original question');
+      assert.equal(detail.messages[1].knowledge_source_count, 1);
+      assert.equal(detail.messages[3].content, 'Synthetic follow-up');
+    });
+  } finally {
+    await new Promise(resolve => provider.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
