@@ -193,7 +193,7 @@ npm run admin:enroll -- \
 
 外站 iframe 与前端直调 API 时，在 `.env` 的 `ALLOWED_ORIGINS` 中配置精确的 `https://` 业务域名，并使用 Nginx 反代。SSE 需要关闭 buffering；反代、CORS、CSP 和 API token 的完整规则在 [部署文档](./docs/DEPLOYMENT.md#nginx)。
 
-内部的 `/internal/` 路由只供受保护的私有深查集成使用，**不能**通过 Nginx 暴露到公网。
+需要自定义网站页面时，先运行[最小网页后端示例](./examples/web-bff/README.md)（默认合成模式，无需账号或凭证），再按[网页后端接入合同](./docs/WEB_BFF_CONTRACT.md)接入已配置的 Provider A。浏览器只连自己的网站后端；受保护的 `/internal/` 路由只能由可信后端访问，**不能**通过 Nginx 暴露到公网。
 
 ## 二次开发示例：消息机器人
 
@@ -274,7 +274,7 @@ npm run test:concurrency -- \
 
 `apps/ima-voice-rag` 是主仓库中的独立实时语音入口。它仅在本地检索证据不足时，才可通过受保护的 `POST /internal/provider-a/deep-ask` 调用本服务。普通网页用户始终走公开 `/api/ask`。
 
-该集成不属于本 Provider A 独立发布包。启用时须使用单独随机生成的 `IMA_QA_INTERNAL_SERVICE_TOKEN`，它必须与管理员 token、公开 API token 分离，且不得写入浏览器、日志或 Git。Nginx 必须拒绝 `/internal/` 路径。
+该语音集成不属于本 Provider A 独立发布包。可信的网站后端也可以按上面的接入合同使用受保护的原生问答流；直接嵌入页面仍使用普通网页入口。启用内部接口时须使用单独随机生成的 `IMA_QA_INTERNAL_SERVICE_TOKEN`，它必须与管理员 token、公开 API token 分离，且不得写入浏览器、日志或 Git。Nginx 必须拒绝 `/internal/` 路径。
 </details>
 
 ## 许可
