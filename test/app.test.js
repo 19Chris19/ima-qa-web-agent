@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const test = require('node:test');
@@ -112,6 +113,7 @@ function makeApp(overrides = {}) {
     localRagClient: overrides.localRagClient,
     accountDirectory: overrides.accountDirectory,
     conversationStore: overrides.conversationStore,
+    webReadiness: overrides.webReadiness,
   });
   if (typeof overrides.createExerciseManager === 'function') {
     app.locals.accountPoolExerciseManager = overrides.createExerciseManager({
@@ -2221,4 +2223,139 @@ test('unknown internal request state remains non-retriable across service restar
     });
     assert.equal(dispatched, 1);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('web BFF capacity stays closed until native mode is selected', async () => {
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', webAgent: { sharedKnowledgeBaseId: 'synthetic-kb' },
+    security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' } };
+  let mode = 'classic_knowledge';
+  const app = makeApp({ config, webReadiness: { get mode() { return mode; }, snapshot: () => ({ mode, generation: 4, capacity: 3, knowledgeAgentCapacity: 2, schedulable: 3 }) } });
+  await withServer(app, async baseUrl => {
+    assert.equal((await fetch(`${baseUrl}/internal/provider-a/capacity`)).status, 401);
+    const read = async () => (await fetch(`${baseUrl}/internal/provider-a/capacity`, { headers: { Authorization: 'Bearer synthetic-service-token' } })).json();
+    assert.equal((await read()).policies.knowledge_agent.max_concurrent, 0);
+    const scope = crypto.createHash('sha256').update('synthetic-kb').digest('hex');
+    const denied = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST',
+      headers: { Authorization: 'Bearer synthetic-service-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: 'Synthetic question', retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope }) });
+    assert.equal(denied.status, 409);
+    assert.match((await denied.json()).error, /尚未升级/u);
+    mode = 'knowledge_agent';
+    const data = await read();
+    assert.equal(data.policies.knowledge_agent.max_concurrent, 2);
+    assert.equal(data.features.source_intent_web_requested_v1, true);
+    assert.equal(data.generation, 4);
+  });
+});
+
+test('protected native SSE binds scope, preserves original question, and records source evidence', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const knowledgeBaseId = 'synthetic-knowledge-base';
+  const scope = crypto.createHash('sha256').update(knowledgeBaseId).digest('hex');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', webAgent: { sharedKnowledgeBaseId: knowledgeBaseId },
+    security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  const calls = [];
+  const fakeAgent = { async *streamAsk(options) {
+    calls.push(options);
+    yield { type: 'session', sessionId: 'synthetic-session' };
+    yield { type: 'sources', sources: [{ index: 1, title: 'Synthetic knowledge', snippet: 'Evidence' }, { index: 2, title: 'Synthetic web', snippet: 'Evidence' }], sourceKinds: ['knowledge', 'web'] };
+    yield { type: 'delta', text: 'Synthetic answer [1] [2]' };
+    yield { type: 'done' };
+  } };
+  const headers = { Authorization: 'Bearer synthetic-service-token', 'Content-Type': 'application/json', Accept: 'text/event-stream', 'X-IMA-Client-Id': 'synthetic-web-user', 'Idempotency-Key': 'synthetic-request-1' };
+  const body = { question: 'Synthetic original question', retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope, source_intent: 'web_requested' };
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const denied = await fetch(`${baseUrl}/api/ask`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      assert.equal(denied.status, 400);
+      const wrongScope = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify({ ...body, knowledge_scope_ref: '0'.repeat(64) }) });
+      assert.equal(wrongScope.status, 409);
+      const first = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify(body) });
+      assert.equal(first.status, 200);
+      const events = await first.text();
+      assert.match(events, /event: done/u);
+      assert.match(events, /"source_intent":"web_requested"/u);
+      assert.match(events, /"answer_basis":"mixed"/u);
+      assert.match(events, /"knowledge_source_count":1/u);
+      assert.match(events, /"web_source_count":1/u);
+      const conversationId = /"conversationId":"([^"]+)"/u.exec(events)?.[1];
+      const detail = await fetch(`${baseUrl}/api/conversations/${conversationId}`, { headers: { 'X-IMA-Client-Id': 'synthetic-web-user' } });
+      const history = await detail.json();
+      assert.equal(history.messages[0].content, body.question);
+      assert.equal(history.messages[1].source_intent, 'web_requested');
+      assert.equal(history.messages[1].answer_basis, 'mixed');
+      assert.equal(history.messages[1].web_source_count, 1);
+      const duplicate = await fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify(body) });
+      assert.equal(duplicate.status, 409);
+      assert.equal((await duplicate.json()).idempotencyState, 'complete');
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].mode, 'knowledge_agent');
+      assert.match(calls[0].question, /Synthetic original question/u);
+      assert.notEqual(calls[0].question, body.question);
+    });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('keyed native SSE fails closed after an upstream error and refuses changed intent', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const knowledgeBaseId = 'synthetic-knowledge-base';
+  const scope = crypto.createHash('sha256').update(knowledgeBaseId).digest('hex');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', webAgent: { sharedKnowledgeBaseId: knowledgeBaseId },
+    security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  const fakeAgent = { async *streamAsk() { dispatched++; yield { type: 'delta', text: 'Partial' }; throw new Error('synthetic upstream failure'); } };
+  const headers = { Authorization: 'Bearer synthetic-service-token', 'Content-Type': 'application/json', Accept: 'text/event-stream', 'X-IMA-Client-Id': 'synthetic-web-user', 'Idempotency-Key': 'synthetic-request-failure' };
+  const body = { question: 'Synthetic question', retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope };
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const send = payload => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body: JSON.stringify(payload) });
+      const first = await send(body);
+      assert.equal(first.status, 200);
+      assert.match(await first.text(), /event: error/u);
+      const retry = await send(body);
+      assert.equal(retry.status, 409);
+      assert.equal((await retry.json()).idempotencyState, 'unknown');
+      const changed = await send({ ...body, source_intent: 'web_requested' });
+      assert.equal(changed.status, 409);
+      assert.equal((await changed.json()).error, 'idempotency_conflict');
+      assert.equal(dispatched, 1);
+    });
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test('concurrent keyed native SSE rejects the duplicate without disturbing the first request', async () => {
+  const root = await fsMkdtemp();
+  const conversationPath = path.join(root, 'conversations.json');
+  const knowledgeBaseId = 'synthetic-knowledge-base';
+  const scope = crypto.createHash('sha256').update(knowledgeBaseId).digest('hex');
+  const config = { ...baseConfig, qaProvider: 'ima-web-agent', webAgent: { sharedKnowledgeBaseId: knowledgeBaseId },
+    security: { ...baseConfig.security, internalServiceToken: 'synthetic-service-token' }, conversations: { storePath: conversationPath } };
+  let dispatched = 0;
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  const fakeAgent = { async *streamAsk() {
+    dispatched++;
+    await blocked;
+    yield { type: 'delta', text: 'Synthetic answer' };
+    yield { type: 'done' };
+  } };
+  const headers = { Authorization: 'Bearer synthetic-service-token', 'Content-Type': 'application/json', Accept: 'text/event-stream',
+    'X-IMA-Client-Id': 'synthetic-web-user', 'Idempotency-Key': 'synthetic-concurrent-request' };
+  const body = JSON.stringify({ question: 'Synthetic question', retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope });
+  try {
+    await withServer(makeApp({ config, imaWebAgentClient: fakeAgent, conversationStore: new ConversationStore({ storePath: conversationPath }) }), async baseUrl => {
+      const send = () => fetch(`${baseUrl}/internal/provider-a/deep-ask`, { method: 'POST', headers, body });
+      const first = await send();
+      assert.equal(first.status, 200);
+      await waitFor(() => dispatched === 1);
+      const duplicate = await send();
+      assert.equal(duplicate.status, 409);
+      assert.equal((await duplicate.json()).idempotencyState, 'processing');
+      release();
+      assert.match(await first.text(), /event: done/u);
+      assert.equal(dispatched, 1);
+    });
+  } finally { release(); await fs.rm(root, { recursive: true, force: true }); }
 });
