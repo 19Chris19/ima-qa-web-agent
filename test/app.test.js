@@ -820,6 +820,96 @@ test('POST /api/ask SSE can proxy IMA Web Agent mode', async () => {
   });
 });
 
+test('Web Agent SSE keeps chunk boundaries identical to refreshed history', async () => {
+  const expected = '| 设备 | 用途 |\n| --- | --- |\n| 手机 | 拍摄 |\n\n## 下一步\n继续测试。';
+  const app = makeApp({
+    config: { ...baseConfig, qaProvider: 'ima-web-agent' },
+    imaWebAgentClient: {
+      async *streamAsk() {
+        for (const text of ['| 设备 |', ' 用途 |\n', '| --- | --- |\n', '| 手机 | 拍摄 |\n\n', '## 下一步\n', '继续测试。']) {
+          yield { type: 'delta', text };
+        }
+        yield { type: 'done' };
+      },
+    },
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const headers = { 'Content-Type': 'application/json', 'X-IMA-Client-Id': 'fidelity-client' };
+    const response = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST', headers: { ...headers, Accept: 'text/event-stream' },
+      body: JSON.stringify({ question: '合成表格题' }),
+    });
+    const events = [...(await response.text()).matchAll(/^event: (\w+)\ndata: (.+)$/gm)]
+      .map(([, type, data]) => ({ type, data: JSON.parse(data) }));
+    const answer = events.filter(event => event.type === 'delta').map(event => event.data.text).join('');
+    assert.equal(answer, expected);
+    assert.equal(events.filter(event => event.type === 'done').length, 1);
+    const conversationId = events.find(event => event.type === 'conversation').data.conversationId;
+    const detail = await fetch(`${baseUrl}/api/conversations/${conversationId}`, { headers });
+    assert.equal((await detail.json()).messages[1].content, expected);
+  });
+});
+
+test('Web Agent JSON preserves answer whitespace and strips only a completed tail marker', async () => {
+  const app = makeApp({
+    config: { ...baseConfig, qaProvider: 'ima-web-agent' },
+    imaWebAgentClient: {
+      async *streamAsk() {
+        yield { type: 'delta', text: '## 标题\n\n1. 一项\n' };
+        yield { type: 'delta', text: '2. 二项\n (@context-' };
+        yield { type: 'delta', text: 'ref?id=42)' };
+        yield { type: 'done' };
+      },
+    },
+  });
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '合成列表题' }),
+    });
+    assert.equal((await response.json()).answer, '## 标题\n\n1. 一项\n2. 二项');
+  });
+});
+
+test('Web Agent incomplete stream does not persist a successful turn', async () => {
+  const app = makeApp({
+    config: { ...baseConfig, qaProvider: 'ima-web-agent' },
+    imaWebAgentClient: { async *streamAsk() { yield { type: 'delta', text: '部分内容' }; } },
+  });
+  await withServer(app, async (baseUrl) => {
+    const headers = { 'Content-Type': 'application/json', 'X-IMA-Client-Id': 'incomplete-client' };
+    const response = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST', headers: { ...headers, Accept: 'text/event-stream' },
+      body: JSON.stringify({ question: '合成断流题' }),
+    });
+    const events = [...(await response.text()).matchAll(/^event: (\w+)\ndata: (.+)$/gm)]
+      .map(([, type, data]) => ({ type, data: JSON.parse(data) }));
+    assert.equal(events.filter(event => event.type === 'done').length, 0);
+    assert.equal(events.filter(event => event.type === 'error').length, 1);
+    const conversationId = events.find(event => event.type === 'conversation').data.conversationId;
+    const detail = await fetch(`${baseUrl}/api/conversations/${conversationId}`, { headers });
+    assert.equal((await detail.json()).messages.length, 0);
+  });
+});
+
+test('Web Agent JSON rejects an incomplete upstream stream', async () => {
+  const app = makeApp({
+    config: { ...baseConfig, qaProvider: 'ima-web-agent' },
+    imaWebAgentClient: { async *streamAsk() { yield { type: 'delta', text: '部分内容' }; } },
+  });
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/ask`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '合成断流题' }),
+    });
+    const payload = await response.json();
+    assert.equal(response.status, 500);
+    assert.equal(payload.success, false);
+    assert.equal(payload.failureReason, 'upstream_terminal_missing');
+  });
+});
+
 test('POST /api/ask keeps Web Agent conversation session and rejects cross-client reuse', async () => {
   const calls = [];
   const app = makeApp({
@@ -875,6 +965,7 @@ test('POST /api/ask preserves conversations for short trusted client IDs', async
         yield { type: 'route', accountId: 'account-a' };
         yield { type: 'session', sessionId: options.sessionId || 'session-short-id' };
         yield { type: 'delta', text: '这是连续会话回答。' };
+        yield { type: 'done' };
       },
     },
   });
