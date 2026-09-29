@@ -7,6 +7,8 @@ const { isOpenAPIQuotaExceededError } = require('./ima-client');
 const { buildMessages } = require('./prompt');
 const { createRateLimiter } = require('./rate-limit');
 const { InternalAskIdempotency } = require('./internal-ask-idempotency');
+const { createAnswerTextStream, sanitizeIMAAnswerText } = require('./answer-text-stream');
+const { IMAUpstreamProtocolError } = require('./ima-upstream-protocol');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -536,7 +538,7 @@ async function handleJsonWebAgentAsk(context) {
       signal,
       upstream: conversationStore.getUpstream(conversationId, ownerKey),
     });
-    const answer = sanitizeKnowledgeBoundAnswer(result.answer) || noReliableContentAnswer();
+    const answer = sanitizeIMAAnswerText(result.answer) || noReliableContentAnswer();
     conversationStore.setUpstream(conversationId, result, ownerKey);
     appendConversationTurn(conversationStore, {
       conversationId,
@@ -598,6 +600,7 @@ async function handleStreamingWebAgentAsk(context) {
     let sessionId = '';
     const sourceKinds = [];
     let terminals = 0;
+    const answerTextStream = createAnswerTextStream();
     for await (const event of imaWebAgentClient.streamAsk({
       question: upstreamQuestion,
       signal,
@@ -624,7 +627,7 @@ async function handleStreamingWebAgentAsk(context) {
       }
 
       if (event.type === 'delta') {
-        const safeText = sanitizeKnowledgeBoundAnswer(event.text);
+        const safeText = answerTextStream.push(event.text);
         if (safeText) {
           answer += safeText;
           writeSse(res, 'delta', { text: safeText, requestId });
@@ -635,8 +638,13 @@ async function handleStreamingWebAgentAsk(context) {
 
     }
 
-    if (req.isInternalProviderADeepAsk && terminals !== 1) throw new Error('上游回答未完整结束');
+    if (terminals !== 1) throw new IMAUpstreamProtocolError('upstream_terminal_missing');
     if (signal?.aborted) throw new RequestAbortedError();
+    const finalText = answerTextStream.finish();
+    if (finalText) {
+      answer += finalText;
+      writeSse(res, 'delta', { text: finalText, requestId });
+    }
 
     const answerForHistory = answer || noReliableContentAnswer();
     const evidence = sourceEvidence(sourceKinds, sources.length, sourceIntent);
@@ -672,6 +680,7 @@ async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upst
   const sourceKinds = [];
   let accountId = '';
   let sessionId = '';
+  let terminals = 0;
 
   for await (const event of imaWebAgentClient.streamAsk({
     question,
@@ -697,7 +706,11 @@ async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upst
     if (event.type === 'delta') {
       answer += event.text || '';
     }
+    if (event.type === 'done') terminals += 1;
   }
+
+  if (terminals !== 1) throw new IMAUpstreamProtocolError('upstream_terminal_missing');
+  if (signal?.aborted) throw new RequestAbortedError();
 
   return { answer, sources, sourceKinds, searchSummary, accountId, sessionId };
 }
@@ -1219,6 +1232,9 @@ function sanitizeKnowledgeBoundAnswer(answer) {
 }
 
 function toUserSafeError(error) {
+  if (error instanceof IMAUpstreamProtocolError && error.code === 'upstream_terminal_missing') {
+    return '上游回答未完整结束，请稍后重试';
+  }
   if (isOpenAPIQuotaExceededError(error)) {
     return 'IMA OpenAPI 今日额度已用尽，请明日额度恢复后继续评测';
   }
@@ -1234,6 +1250,9 @@ function getErrorStatusCode(error) {
 }
 
 function classifyFailureReason(error) {
+  if (error instanceof IMAUpstreamProtocolError) {
+    return error.code;
+  }
   if (isOpenAPIQuotaExceededError(error)) {
     return 'openapi_quota_exceeded';
   }
