@@ -44,7 +44,7 @@ test('real web BFF uses separate server-side credentials and only forwards prote
   const scope = createHash('sha256').update('synthetic-kb').digest('hex');
   const fakeFetch = async (url, options) => {
     calls.push({ url, options });
-    if (url.endsWith('/internal/provider-a/capacity')) return new Response(JSON.stringify({ policies: { knowledge_agent: { max_concurrent: 2 } }, features: { source_intent_web_requested_v1: true } }), { status: 200 });
+    if (url.endsWith('/internal/provider-a/capacity')) return new Response(JSON.stringify({ schemaVersion: 1, policies: { knowledge_agent: { max_concurrent: 2 } }, features: { knowledge_agent_keyed_sse_v1: true, source_intent_web_requested_v1: true } }), { status: 200 });
     if (url.includes('/api/conversations?')) return new Response('{}', { status: 200 });
     if (url.endsWith('/internal/provider-a/deep-ask')) return new Response('event: conversation\ndata: {"conversationId":"synthetic"}\n\nevent: delta\ndata: {"text":"Answer"}\n\nevent: done\ndata: {"source_count":0}\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
     throw new Error('unexpected request');
@@ -57,6 +57,7 @@ test('real web BFF uses separate server-side credentials and only forwards prote
     assert.doesNotMatch(html, /synthetic-(ordinary|service)-token/u);
     const state = await (await fetch(`${base}/api/status`, { headers: { Cookie: cookie } })).json();
     assert.equal(state.ready, true);
+    assert.equal(state.contractSupported, true);
     const response = await fetch(`${base}/api/ask`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: 'Synthetic question', requestId: randomUUID(), sourceIntent: 'web' }) });
     assert.equal(response.status, 200);
@@ -69,6 +70,24 @@ test('real web BFF uses separate server-side credentials and only forwards prote
     assert.equal(body.knowledge_scope_ref, scope);
     assert.equal(body.source_intent, 'web_requested');
     assert.equal(calls.find(call => call.url.includes('/api/conversations?')).options.headers.Authorization, 'Bearer synthetic-ordinary-token');
+  });
+});
+
+test('real web BFF does not mark an older capacity contract ready', async () => {
+  const fakeFetch = async (url) => {
+    if (url.endsWith('/internal/provider-a/capacity')) return new Response(JSON.stringify({ schemaVersion: 1,
+      policies: { knowledge_agent: { max_concurrent: 2 } } }), { status: 200 });
+    if (url.includes('/api/conversations?')) return new Response('{}', { status: 200 });
+    throw new Error('unexpected request');
+  };
+  await withExample({ mode: 'real', providerUrl: 'http://127.0.0.1:3117', apiToken: 'synthetic-ordinary-token',
+    serviceToken: 'synthetic-service-token', scopeRef: createHash('sha256').update('synthetic-kb').digest('hex'), fetchImpl: fakeFetch }, async base => {
+    const home = await fetch(base);
+    const cookie = home.headers.get('set-cookie').split(';')[0];
+    const state = await (await fetch(`${base}/api/status`, { headers: { Cookie: cookie } })).json();
+    assert.equal(state.authenticated, true);
+    assert.equal(state.contractSupported, false);
+    assert.equal(state.ready, false);
   });
 });
 

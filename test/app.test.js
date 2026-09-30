@@ -2334,6 +2334,7 @@ test('web BFF capacity stays closed until native mode is selected', async () => 
     mode = 'knowledge_agent';
     const data = await read();
     assert.equal(data.policies.knowledge_agent.max_concurrent, 2);
+    assert.equal(data.features.knowledge_agent_keyed_sse_v1, true);
     assert.equal(data.features.source_intent_web_requested_v1, true);
     assert.equal(data.generation, 4);
   });

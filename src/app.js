@@ -97,7 +97,10 @@ function createApp({
       maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
-      features: { source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent' },
+      features: {
+        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent',
+        source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
+      },
     });
   });
 

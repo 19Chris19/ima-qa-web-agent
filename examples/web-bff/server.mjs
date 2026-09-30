@@ -85,8 +85,10 @@ export function createWebBff({ mode = 'synthetic', providerUrl = '', apiToken = 
         ]);
         const data = capacity.ok ? await capacity.json() : {};
         const native = Number(data.policies?.knowledge_agent?.max_concurrent || 0);
-        return sendJson(res, 200, { ready: capacity.ok && ordinary.ok && native > 0, capacity: native,
-          authenticated: capacity.ok && ordinary.ok, webIntentSupported: data.features?.source_intent_web_requested_v1 === true });
+        const contractSupported = data.schemaVersion === 1 && data.features?.knowledge_agent_keyed_sse_v1 === true;
+        return sendJson(res, 200, { ready: capacity.ok && ordinary.ok && contractSupported && native > 0, capacity: native,
+          authenticated: capacity.ok && ordinary.ok, contractSupported,
+          webIntentSupported: contractSupported && data.features?.source_intent_web_requested_v1 === true });
       } catch { return sendJson(res, 503, { ready: false, capacity: 0 }); }
     }
     const detail = /^\/api\/conversations\/([a-f0-9-]{36})$/u.exec(pathname);
