@@ -86,8 +86,9 @@ test('a killed lock holder is recovered without accepting its stale generation',
         if (output.includes('locked')) { clearTimeout(timer); resolve(); }
       });
       child.once('error', error => { clearTimeout(timer); reject(error); });
-      child.once('exit', code => { if (code !== null && code !== 0) { clearTimeout(timer); reject(new Error('lock_holder_failed')); } });
+      child.once('exit', () => { clearTimeout(timer); reject(new Error('lock_holder_exited_before_kill')); });
     });
+    assert.equal(child.exitCode, null);
     child.kill('SIGKILL');
     await new Promise(resolve => child.once('exit', resolve));
     const leasePath = `${file}.lock`;

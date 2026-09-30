@@ -33,6 +33,7 @@ test('one proved answer qualifies without storing question or answer', async t =
   assert.equal(result.success, true);
   assert.equal(result.schedulable, 1);
   assert.equal(result.capacity, 1);
+  assert.equal(result.knowledgeAgentCapacity, 1);
   assert.equal(result.generation, directory.load().generation);
   assert.equal(readiness.appliedGeneration, directory.load().generation);
   const disk = fs.readFileSync(directory.storePath, 'utf8');
@@ -53,6 +54,7 @@ test('web-only revalidation removes an old qualification and releases maintenanc
   assert.equal(result.code, 'probe_evidence_insufficient');
   assert.equal(result.schedulable, 0);
   assert.equal(result.capacity, 0);
+  assert.equal(result.knowledgeAgentCapacity, 0);
   assert.equal(pool.accounts[0].maintenanceOperation, '');
 });
 

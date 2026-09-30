@@ -70,7 +70,10 @@ class WebReadiness {
     const capacity = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
       states.find(state => state.id === account.id)?.state !== 'needs_login' &&
       account.cooldownUntil <= this.pool.now() && (this.mode === 'classic_knowledge' || validProof(account))).length;
-    return { mode: this.mode, generation: this.appliedGeneration, capacity,
+    const knowledgeAgentCapacity = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
+      states.find(state => state.id === account.id)?.state !== 'needs_login' &&
+      account.cooldownUntil <= this.pool.now() && validProof(account)).length;
+    return { mode: this.mode, generation: this.appliedGeneration, capacity, knowledgeAgentCapacity,
       basicHealthy: rows.filter(a => a.health?.session_valid && a.health?.knowledge_ready && a.health?.web_ready).length,
       schedulable: states.filter(a => a.schedulable).length,
       pending: states.filter(a => !a.qualified).length, accounts: states };

@@ -35,8 +35,16 @@ class InternalAskIdempotency {
     return hash(`${hash(owner)}\0${suppliedKey}`);
   }
 
-  fingerprint(question, conversationId) {
-    return hash(JSON.stringify({ question: String(question).trim(), conversationId: String(conversationId || '') }));
+  fingerprint(question, conversationId, contract = {}) {
+    const request = { question: String(question).trim(), conversationId: String(conversationId || '') };
+    if (contract.retrievalPolicy || contract.knowledgeScopeRef || contract.sourceIntent) {
+      Object.assign(request, {
+        retrievalPolicy: contract.retrievalPolicy || '',
+        knowledgeScopeRef: contract.knowledgeScopeRef || '',
+        sourceIntent: contract.sourceIntent || '',
+      });
+    }
+    return hash(JSON.stringify(request));
   }
 
   async claim(owner, suppliedKey, requestHash) {

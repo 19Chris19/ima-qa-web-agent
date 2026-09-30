@@ -193,7 +193,17 @@ npm run admin:enroll -- \
 
 外站 iframe 与前端直调 API 时，在 `.env` 的 `ALLOWED_ORIGINS` 中配置精确的 `https://` 业务域名，并使用 Nginx 反代。SSE 需要关闭 buffering；反代、CORS、CSP 和 API token 的完整规则在 [部署文档](./docs/DEPLOYMENT.md#nginx)。
 
-内部的 `/internal/` 路由只供受保护的私有深查集成使用，**不能**通过 Nginx 暴露到公网。
+需要自定义网站页面时，先运行[最小网页后端示例](./examples/web-bff/README.md)（默认合成模式，无需账号或凭证），再按[网页后端接入合同](./docs/WEB_BFF_CONTRACT.md)接入已配置的 Provider A。可信后端应先确认容量接口声明 `knowledge_agent_keyed_sse_v1`，不能仅凭服务连通或账号数判断协议可用。浏览器只连自己的网站后端；受保护的 `/internal/` 路由只能由可信后端访问，**不能**通过 Nginx 暴露到公网。
+
+Provider A 是可独立部署的问答服务，不是业务网站的代码仓库。知天下等品牌网站可在自己的私有仓库维护页面、身份和业务后端，并按发布 tag 固定兼容版本；这里不包含其 Logo、题库、账号或运行数据。两者通过接口而非共享账号目录连接：
+
+```text
+浏览器 → 业务网站前端 → 业务网站后端 (BFF) → Provider A → IMA
+                                    ├─ 普通 token：会话历史
+                                    └─ 服务 token：原生 Agent 容量与流式问答
+```
+
+直接嵌入 `/embed.html` 无需另做 BFF。自定义网站应在自己的 README 写明所用 Provider A tag、接入合同版本和升级验收结果；不能把 Provider A 的管理员 token 当作业务凭证。
 
 ## 二次开发示例：消息机器人
 
@@ -209,7 +219,7 @@ node examples/bot-adapter/run.mjs
 
 ## 维护与验证
 
-首次部署或升级到 v0.3.1 时，请按[部署与真实验收指南](./docs/ACCEPTANCE_TESTING.md)使用独立目录、配置和端口完成扫码、知识库问答、来源、追问及重启恢复检查。代码测试通过不等于已经对真实 IMA 账号或上游完成验收。
+首次部署或升级到 v0.4.0 时，请按[部署与真实验收指南](./docs/ACCEPTANCE_TESTING.md)使用独立目录、配置和端口完成扫码、知识库问答、来源、追问及重启恢复检查。代码测试通过不等于已经对真实 IMA 账号或上游完成验收。
 
 ### 日常查看
 
@@ -272,9 +282,9 @@ npm run test:concurrency -- \
 <details>
 <summary><strong>高级私有集成：VoiceRAG 深查</strong></summary>
 
-`apps/ima-voice-rag` 是主仓库中的独立实时语音入口。它仅在本地检索证据不足时，才可通过受保护的 `POST /internal/provider-a/deep-ask` 调用本服务。普通网页用户始终走公开 `/api/ask`。
+`apps/ima-voice-rag` 是主仓库中的独立实时语音入口。它仅在本地检索证据不足时，才可通过受保护的 `POST /internal/provider-a/deep-ask` 调用本服务。直接使用内置问答页的用户走公开 `/api/ask`；自定义网站的可信后端可按上面的合同使用受保护接口。
 
-该集成不属于本 Provider A 独立发布包。启用时须使用单独随机生成的 `IMA_QA_INTERNAL_SERVICE_TOKEN`，它必须与管理员 token、公开 API token 分离，且不得写入浏览器、日志或 Git。Nginx 必须拒绝 `/internal/` 路径。
+该语音集成不属于本 Provider A 独立发布包。可信的网站后端也可以按上面的接入合同使用受保护的原生问答流；直接嵌入页面仍使用普通网页入口。启用内部接口时须使用单独随机生成的 `IMA_QA_INTERNAL_SERVICE_TOKEN`，它必须与管理员 token、公开 API token 分离，且不得写入浏览器、日志或 Git。Nginx 必须拒绝 `/internal/` 路径。
 </details>
 
 ## 许可

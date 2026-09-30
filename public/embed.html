@@ -56,16 +56,21 @@
               aria-label="输入问题"
             ></textarea>
             <button class="icon-button" id="sendButton" type="submit" title="发送" aria-label="发送">
-              <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+              <svg class="send-icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
                 <path d="M5 12h13" />
                 <path d="m13 6 6 6-6 6" />
+              </svg>
+              <svg class="stop-icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
+                <rect x="7" y="7" width="10" height="10" rx="1" />
               </svg>
             </button>
           </form>
         </section>
       </section>
     </main>
-    <script src="/answer-markdown.js" defer></script>
+    <script src="/vendor/marked.umd.js" defer></script>
+    <script src="/vendor/purify.min.js" defer></script>
+    <script src="/answer-renderer.js" defer></script>
     <script src="/client.js" defer></script>
   </body>
 </html>

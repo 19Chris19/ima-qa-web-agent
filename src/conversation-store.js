@@ -155,6 +155,7 @@ class ConversationStore {
       createdAt: now,
       sources: normalizePublicSources(metadata.sources, answer),
       searchSummary: normalizeSearchSummary(metadata.searchSummary),
+      evidence: normalizeEvidence(metadata),
     });
     if (!conversation.title) {
       conversation.title = conversationTitle(normalizedQuestion);
@@ -199,6 +200,7 @@ class ConversationStore {
           createdAt: new Date(turn.createdAt).toISOString(),
           ...(turn.sources?.length ? { sources: turn.sources } : {}),
           ...(turn.searchSummary ? { searchSummary: turn.searchSummary } : {}),
+          ...turn.evidence,
         },
       ]),
     };
@@ -338,6 +340,7 @@ function normalizeConversation(value) {
             createdAt: Number(turn?.createdAt) || updatedAt,
             sources: normalizePublicSources(turn?.sources),
             searchSummary: normalizeSearchSummary(turn?.searchSummary),
+            evidence: normalizeEvidence(turn?.evidence),
           }))
           .filter((turn) => turn.question && turn.answer)
       : [],
@@ -407,6 +410,21 @@ function normalizePublicSources(value, answer = '') {
 
 function normalizeSearchSummary(value) {
   return truncate(value, MAX_SEARCH_SUMMARY_LENGTH);
+}
+
+function normalizeEvidence(value) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const basis = ['knowledge', 'web', 'mixed', 'agent_general'].includes(raw.answer_basis) ? raw.answer_basis : '';
+  const intent = raw.source_intent === 'web_requested' ? 'web_requested' : '';
+  if (!basis && !intent && raw.source_count === undefined) return {};
+  const count = key => Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 100 ? raw[key] : 0;
+  return {
+    source_intent: intent,
+    answer_basis: basis || 'agent_general',
+    source_count: count('source_count'),
+    knowledge_source_count: count('knowledge_source_count'),
+    web_source_count: count('web_source_count'),
+  };
 }
 
 function conversationTitle(value) {

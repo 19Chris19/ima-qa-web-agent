@@ -360,11 +360,39 @@ textarea {
   margin-bottom: 0;
 }
 
+.answer-markdown h1,
+.answer-markdown h2,
 .answer-markdown h3,
-.answer-markdown h4 {
+.answer-markdown h4,
+.answer-markdown h5,
+.answer-markdown h6 {
   margin: 14px 0 6px;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.45;
+}
+
+.answer-markdown :not(pre) > code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #edf1ef;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.answer-table-fallback {
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+
+.answer-unsupported-media,
+.answer-failure {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.answer-failure {
+  margin-top: 10px !important;
 }
 
 .answer-markdown ul,
@@ -726,6 +754,18 @@ textarea {
 
 .icon-button:hover {
   background: var(--accent-strong);
+}
+
+.icon-button .stop-icon {
+  display: none;
+}
+
+.icon-button.is-busy .send-icon {
+  display: none;
+}
+
+.icon-button.is-busy .stop-icon {
+  display: block;
 }
 
 .icon-button:disabled {
