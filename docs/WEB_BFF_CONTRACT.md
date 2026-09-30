@@ -1,6 +1,6 @@
-# 自定义网页后端接入合同（候选）
+# 自定义网页后端接入合同（v0.4.0）
 
-简单嵌入优先用 `/embed.html`；如果需要自定义页面、身份和会话管理，在**自己的后端**调用 Provider A，浏览器只连自己的后端。可运行的无凭据版本见 [`examples/web-bff`](../examples/web-bff/README.md)。这是 v0.4.0 候选合同；公开 v0.3.0 尚不包含它。
+简单嵌入优先用 `/embed.html`；如果需要自定义页面、身份和会话管理，在**自己的后端**调用 Provider A，浏览器只连自己的后端。可运行的无凭据版本见 [`examples/web-bff`](../examples/web-bff/README.md)。本合同从 v0.4.0 起提供；v0.3.1 不包含带幂等键的原生流式接入。
 
 ## 凭证与路由
 
@@ -16,7 +16,7 @@
 
 ## 原生问答请求
 
-先在管理页选择 `knowledge_agent`，并确认 `GET /internal/provider-a/capacity` 的 `policies.knowledge_agent.max_concurrent > 0`。该值反映当前模式下有资格的独立账号容量，和健康检查、账号总数不是一回事。`features.source_intent_web_requested_v1` 明确表示本轮联网意图合同是否可用。容量为零时应提示管理员处理，不要自动调用 IMA 做探测。已有经典模式会话不能静默转换；切换模式后新建会话。
+先在管理页选择 `knowledge_agent`，并确认 `GET /internal/provider-a/capacity` 的 `schemaVersion === 1`、`features.knowledge_agent_keyed_sse_v1 === true` 且 `policies.knowledge_agent.max_concurrent > 0`。前两项证明带幂等键的原生流式合同可用；容量反映当前模式下有资格的独立账号数，和健康检查、账号总数不是一回事。`features.source_intent_web_requested_v1` 单独表示本轮联网意图合同是否可用。合同缺失或容量为零时应提示管理员处理，不要自动调用 IMA 做探测。已有经典模式会话不能静默转换；切换模式后新建会话。
 
 服务端向深查接口发送 JSON：
 

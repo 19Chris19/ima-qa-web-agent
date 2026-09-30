@@ -8,7 +8,7 @@
 
 ## 真实 Provider A
 
-先在 Provider A 管理页完成扫码、知识库问答验证，并切换到 `knowledge_agent` 模式。确认 `/internal/provider-a/capacity` 的 `policies.knowledge_agent.max_concurrent` 大于零。然后在此目录创建被 Git 忽略的 `.env.local`，填写：
+先在 Provider A 管理页完成扫码、知识库问答验证，并切换到 `knowledge_agent` 模式。确认 `/internal/provider-a/capacity` 的 `features.knowledge_agent_keyed_sse_v1` 为 `true` 且 `policies.knowledge_agent.max_concurrent` 大于零；缺失合同的旧版即使显示容量也不会在示例中标为可问答。然后在此目录创建被 Git 忽略的 `.env.local`，填写：
 
 ```dotenv
 WEB_BFF_MODE=real

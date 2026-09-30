@@ -193,7 +193,7 @@ npm run admin:enroll -- \
 
 外站 iframe 与前端直调 API 时，在 `.env` 的 `ALLOWED_ORIGINS` 中配置精确的 `https://` 业务域名，并使用 Nginx 反代。SSE 需要关闭 buffering；反代、CORS、CSP 和 API token 的完整规则在 [部署文档](./docs/DEPLOYMENT.md#nginx)。
 
-需要自定义网站页面时，先运行[最小网页后端示例](./examples/web-bff/README.md)（默认合成模式，无需账号或凭证），再按[网页后端接入合同](./docs/WEB_BFF_CONTRACT.md)接入已配置的 Provider A。浏览器只连自己的网站后端；受保护的 `/internal/` 路由只能由可信后端访问，**不能**通过 Nginx 暴露到公网。
+需要自定义网站页面时，先运行[最小网页后端示例](./examples/web-bff/README.md)（默认合成模式，无需账号或凭证），再按[网页后端接入合同](./docs/WEB_BFF_CONTRACT.md)接入已配置的 Provider A。可信后端应先确认容量接口声明 `knowledge_agent_keyed_sse_v1`，不能仅凭服务连通或账号数判断协议可用。浏览器只连自己的网站后端；受保护的 `/internal/` 路由只能由可信后端访问，**不能**通过 Nginx 暴露到公网。
 
 Provider A 是可独立部署的问答服务，不是业务网站的代码仓库。知天下等品牌网站可在自己的私有仓库维护页面、身份和业务后端，并按发布 tag 固定兼容版本；这里不包含其 Logo、题库、账号或运行数据。两者通过接口而非共享账号目录连接：
 
@@ -219,7 +219,7 @@ node examples/bot-adapter/run.mjs
 
 ## 维护与验证
 
-首次部署或升级到 v0.3.1 时，请按[部署与真实验收指南](./docs/ACCEPTANCE_TESTING.md)使用独立目录、配置和端口完成扫码、知识库问答、来源、追问及重启恢复检查。代码测试通过不等于已经对真实 IMA 账号或上游完成验收。
+首次部署或升级到 v0.4.0 时，请按[部署与真实验收指南](./docs/ACCEPTANCE_TESTING.md)使用独立目录、配置和端口完成扫码、知识库问答、来源、追问及重启恢复检查。代码测试通过不等于已经对真实 IMA 账号或上游完成验收。
 
 ### 日常查看
 
