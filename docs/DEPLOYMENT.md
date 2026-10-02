@@ -1,5 +1,7 @@
 # Provider A 部署与维护
 
+无账号的容器部署与已复现的初始化注意事项见 [Docker 演练记录](./DOCKER_REHEARSAL.md)。这不代替真实 IMA 验收。
+
 首次部署或升级版本后的检查、真实 IMA 单账号验收和可选并发演练见[部署与真实验收指南](./ACCEPTANCE_TESTING.md)。请先在独立目录和端口验证，不要让测试实例与生产实例共用 `runtime/`。
 
 ## 运行模型

@@ -42,7 +42,8 @@ async function main() {
     console.log(`\n已创建私有配置：${envPath}`);
     console.log('下一步：');
     console.log('1. 启动服务：docker compose up -d --build，或 npm start。');
-    console.log('2. 接入首个账号：npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:3117');
+    console.log(`2. Docker 接入首个账号：npm run admin:enroll -- --name account-a --server-url http://127.0.0.1:${args.hostPort || '3117'}`);
+    console.log(`   npm start 直接运行时使用容器内服务端口：http://127.0.0.1:${args.port || '3000'}`);
     console.log('扫码完成后，浏览器会自动关闭；凭证只会写入 runtime/ 私有目录。');
   } finally {
     rl.close();
@@ -63,7 +64,7 @@ function parseArgs(values) {
       continue;
     }
     const next = values[index + 1];
-    if (!next || next.startsWith('--')) {
+    if (next === undefined || next.startsWith('--')) {
       result[key] = true;
       continue;
     }
