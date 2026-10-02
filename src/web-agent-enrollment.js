@@ -6,6 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright-core');
 const { IMAWebAgentClient, getBkn, stringifyCookie } = require('./ima-web-agent-client');
 const { normalizeAccountId } = require('./web-agent-account-directory');
+const { connectEnrollmentBrowser } = require('./enrollment-browser-bridge');
 
 const DEFAULT_ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_SCREENSHOT_INTERVAL_MS = 900;
@@ -38,7 +39,9 @@ class WebAgentEnrollmentManager {
     this.onEnrolled = options.onEnrolled || null;
     this.onCancelVerification = options.onCancelVerification || null;
     this.clientFactory = options.clientFactory || ((config) => new IMAWebAgentClient(config));
-    this.browserLauncher = options.browserLauncher || launchVisibleBrowserContext;
+    this.browserLauncher = options.browserLauncher || (this.config.webAgent?.enrollmentBrowserEndpoint
+      ? () => connectEnrollmentBrowser(this.config.webAgent.enrollmentBrowserEndpoint)
+      : launchVisibleBrowserContext);
     this.fetch = options.fetch || globalThis.fetch;
     this.captureAuth = options.captureAuth || captureAuthFromContext;
     this.now = options.now || Date.now;
@@ -754,6 +757,7 @@ class WebAgentEnrollmentManager {
   }
 
   _resolveBrowserPath() {
+    if (this.config.webAgent?.enrollmentBrowserEndpoint) return 'maintenance-browser';
     const candidates = [
       this.config.webAgent?.browserPath,
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
