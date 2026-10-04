@@ -196,7 +196,9 @@ function coupleCookieVersion(cookie, version) {
     return `WEB-VERSION=${version}`;
   });
   if (!replaced) {
-    throw new IMAKnowledgeAgentContractError('knowledge_agent_cookie_version_missing');
+    // This is client metadata, not an authentication credential. Fresh browser
+    // enrollments can omit it; couple it to the request's extension_version.
+    normalized.push(`WEB-VERSION=${version}`);
   }
   return normalized.join('; ');
 }

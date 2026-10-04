@@ -490,6 +490,7 @@ function getConfig(env = process.env) {
         readEnv(env, 'IMA_WEB_AGENT_ACCOUNT_STORE_KEY_PATH') ||
         DEFAULT_WEB_AGENT_ACCOUNT_STORE_KEY_PATH,
       browserPath: readEnv(env, 'IMA_WEB_AGENT_BROWSER_PATH') || DEFAULT_WEB_AGENT_BROWSER_PATH,
+      enrollmentBrowserEndpoint: readEnv(env, 'IMA_ENROLLMENT_BROWSER_ENDPOINT'),
       enrollmentTimeoutMs: parseIntegerWithDefault(
         readEnv(env, 'IMA_WEB_AGENT_ENROLLMENT_TIMEOUT_MS'),
         'IMA_WEB_AGENT_ENROLLMENT_TIMEOUT_MS',
