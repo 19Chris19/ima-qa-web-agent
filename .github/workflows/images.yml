@@ -1,0 +1,79 @@
+name: Versioned container images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing merged release tag (for retry only)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.version || github.ref_name }}
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Validate merged tag and package version
+        env:
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$VERSION" = "v$(node -p 'require("./package.json").version')"
+          git merge-base --is-ancestor HEAD origin/main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "$VERSION^{commit}")"
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm test
+      - run: npm pack --dry-run
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          build-args: |
+            SOURCE_REVISION=${{ env.REVISION }}
+            RELEASE_VERSION=${{ env.VERSION }}
+          provenance: mode=max
+          sbom: true
+      - name: Verify published images without IMA access
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          node scripts/image-smoke.cjs "$IMAGE@$DIGEST" linux/amd64
+          node scripts/image-smoke.cjs "$IMAGE@$DIGEST" linux/arm64
+          node -e 'require("fs").writeFileSync("release-manifest.json", JSON.stringify({schemaVersion:1,version:process.env.VERSION,revision:process.env.REVISION,image:process.env.IMAGE,digest:process.env.DIGEST,platforms:["linux/amd64","linux/arm64"],acceptance:"synthetic startup; no real IMA question",visibility:"verify public anonymous pull before Release"},null,2)+"\n")'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-manifest
+          path: release-manifest.json

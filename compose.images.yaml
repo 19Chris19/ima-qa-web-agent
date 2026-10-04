@@ -1,0 +1,3 @@
+services:
+  ima-qa-web:
+    image: ${PROVIDER_IMAGE:-ghcr.io/19chris19/ima-qa-web-agent:v0.4.1}

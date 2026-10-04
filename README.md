@@ -96,6 +96,10 @@ docker compose up -d --build
 
 Docker 镜像只包含 Provider A 服务，不包含 Chrome、Chromium、Ego Lite 或桌面环境。不要因为容器能启动就以为它能自动弹出二维码窗口；远程服务器请按 [远程服务器 + 本机扫码](./docs/DEPLOYMENT.md#远程服务器--本机扫码) 操作。两条路径最终都把登录态加密写入服务端账号库，运行期问答不依赖扫码窗口。
 
+v0.4.1 提供 [固定版本镜像与免宿主机 Node 初始化](./docs/VERSIONED_IMAGES.md)。
+在 Mac Docker 上希望管理页直接打开扫码窗口时，可额外配置
+[私有维护浏览器助手](./docs/DOCKER_BROWSER_ENROLLMENT.md)；它不随镜像自动启动。
+
 桌面维护机原生运行的最短路径是：
 
 ```bash

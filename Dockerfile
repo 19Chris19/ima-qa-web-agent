@@ -1,5 +1,11 @@
 FROM node:22-bookworm-slim
 
+ARG SOURCE_REVISION=local-dev
+ARG RELEASE_VERSION=local-dev
+LABEL org.opencontainers.image.source="https://github.com/19Chris19/ima-qa-web-agent" \
+      org.opencontainers.image.revision=$SOURCE_REVISION \
+      org.opencontainers.image.version=$RELEASE_VERSION
+
 ENV NODE_ENV=production
 WORKDIR /app
 
