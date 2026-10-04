@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import deployment from '../src/guided-deployment.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 try {
-  await deployment.guided(root, process.argv[2] || 'doctor', deployment.parseOptions(process.argv.slice(3)));
+  if (process.argv[2] === 'runtime') console.log(process.execPath);
+  else await deployment.guided(root, process.argv[2] || 'doctor', deployment.parseOptions(process.argv.slice(3)));
 } catch (error) {
   const code = /^[a-z_]+$/.test(error.code || '') ? error.code : 'guided_operation_failed';
   console.error(JSON.stringify({ stage: 'blocked', code, credentialsPrinted: false,

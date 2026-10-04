@@ -28,5 +28,5 @@ fi
 PATH="$(dirname "$NODE"):$PATH"
 export PATH
 cd "$ROOT"
-if ! "$NODE" -e 'require("playwright-core");require("parse5")' >/dev/null 2>&1; then npm ci --omit=dev; fi
+if ! "$NODE" -e 'require("playwright-core");require("parse5")' >/dev/null 2>&1; then npm ci --omit=dev >&2; fi
 exec "$NODE" scripts/onboard.mjs "$@"

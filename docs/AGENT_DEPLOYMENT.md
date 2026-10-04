@@ -1,0 +1,107 @@
+# Agent 部署与扫码接入
+
+## 当前交付状态
+
+本流程属于 **v0.4.2 候选**。候选尚未发布；公开 v0.4.1 没有这套统一引导入口。发布前，使用经审查的候选源码和候选镜像演练，不能把不存在的 tag 当作已发布版本。
+
+Agent 必须先查 Releases，选择最新已发布稳定 tag 和对应镜像。不要直接部署浮动 main，不混用 tag 的工具和其他版本镜像。不要求人手工寻找知识库数字 ID。
+
+## 给 Agent 的提示词
+
+> 请部署此仓库的最新已发布稳定版本，并先阅读 README 与 docs/AGENT_DEPLOYMENT.md。目标知识库为我提供的官方分享链接。检查操作系统、Docker、端口和已有安装，使用仓库提供的引导工具完成配置及扫码通路检查。若目标是 Linux 服务器，通过我的维护电脑和 SSH 完成操作。不要输出或提交任何凭证，不覆盖已有数据，不开放管理接口。打开官方 IMA 窗口前提醒我：接入账号必须加入目标知识库；需要扫码、手机确认或加入时暂停。完成后继续验证，最终报告版本、访问地址、接入状态、未通过项目及恢复方式。不要仅凭健康检查宣布问答成功。没有服务器地址、仓库权限或系统授权时先询问，不绕过权限提示。不自动加入知识库。真实问答探针先说明并征得授权，普通检查不提问。
+
+适用于具备终端能力的 Codex、Claude Code 等 Agent，不依赖厂商插件。
+
+## 预检与首次安装
+
+需要 Docker Engine/Desktop、Compose v2、Git、联网下载权限；Shell 引导还需要 curl、tar 和 SHA-256 工具。缺少 Docker 或系统授权时，由 Agent 明确告知并等待安装许可，不能绕过系统提示。Windows 尊重 PowerShell 执行策略，不自动使用 Bypass。
+
+Mac/Linux:
+
+```sh
+sh onboard.sh doctor
+sh onboard.sh resolve --share-url '你提供的官方 IMA 分享链接'
+sh onboard.sh install --share-url '你提供的官方 IMA 分享链接' --project my-ima-qa --port 3117
+sh onboard.sh check
+```
+
+Windows PowerShell:
+
+```powershell
+.\onboard.ps1 doctor
+.\onboard.ps1 install --share-url '你提供的官方 IMA 分享链接' --project my-ima-qa --port 3117
+.\onboard.ps1 check
+```
+
+引导器按需下载校验过的用户级 Node 22，不改全局 Node。桌面端下载与容器 Playwright 相同版本的专用 Chromium，创建独立私有连接密钥：Mac 使用用户 LaunchAgent，Windows 使用用户登录计划任务。不会接管日常 Chrome/Ego 或本机微信账号。服务器模式不安装 Chromium。
+
+配置写入 `.onboarding/`，权限私有，必须在 Git 和备份分享中排除。初始化会检查已有配置、端口、Compose 项目、镜像摘要和 Playwright 协议版本。检测到旧安装时停止，不生成新密钥覆盖它。维护源码目录及依赖必须保持固定，不能移走正在使用的助手脚本。
+
+`install` 开始启动时使用固定镜像摘要、独立数据卷、loopback 管理端口，不使用 host 网络。安装中断后执行 `resume`；不要删除配置重新 init。
+
+## 桌面扫码与知识库授权
+
+1. 工具报告管理页地址后，Agent 用私有配置中的管理员凭证在管理页登录，但不把凭证写进对话、日志或代码。普通、服务和管理员凭证分离。
+2. 点击接入账号前显示：**请使用已加入目标知识库的 IMA 账号**，附目标官方分享链接。管理页明确说明接入可能执行一次知识库问答验证；这不是普通健康轮询。
+3. 添加账号会先检查扫码通路，再打开独立官方 IMA 登录窗口。人完成微信扫码和手机确认。Agent 不代替扫描、不使用快捷登录。
+4. 授权尚未证实时不会写入可用账号池。已明确未加入或等待批准时显示“等待加入知识库”；网络或结构变化时显示“无法确认访问权限”。在同一官方窗口人工处理后，点“已处理，继续验证”。有效登录态不必重新扫码。
+5. 只有授权通过后才保存到服务端加密账号库。取消、超时、失败会关闭本任务浏览器并清理临时资料，不新增可调度容量。问答资格和一次真实首问/追问验收另行记录，不能由创建会话成功代替。
+
+分享链接识别失败时，先在独立官方窗口检查链接是否有效或需要登录。现有解析器只接受已经确认的官方 JSON 结构；无法识别时停止，由维护者修正解析，不猜 ID、不把 shareId 当数字 ID。
+
+## Linux 服务器与维护电脑
+
+Linux 安装同一 Docker 版本，自动选择 server 模式。没有桌面浏览器是预期状态，不承诺服务器能弹出本地窗口。
+
+在有桌面的 Mac/Windows 维护电脑拉取同一 Provider tag，然后用 SSH 配置别名（主机密钥由人确认，不关闭校验）：
+
+```sh
+sh onboard.sh remote-prepare --ssh my-server --remote-env /absolute/path/to/provider/.onboarding/provider.env
+# 此命令只在私有目录保存维护所需管理员凭证，不输出值，不复制账号库。
+sh onboard.sh tunnel --ssh my-server --remote-port 3117 --local-port 13317
+```
+
+隧道保持运行，在另一个终端：
+
+```sh
+sh onboard.sh enroll --env .onboarding/remote-admin.env --server-url http://127.0.0.1:13317 --name account-a
+```
+
+Windows 将 `sh onboard.sh` 换为 `.\onboard.ps1`。CLI 打开新的临时官方窗口，人工扫码/加入后按 Enter 继续验证，输入 cancel 取消；账号最终只保存到服务器。服务器收到账号时再次检查目标知识库权限。CLI 不自动执行真实问答，接入成功后需单独授权验证。私有维护凭证仍有管理权限，请妥善保管，用后可删除维护电脑上的这一份。
+
+## 检查、修复、卸载与回退
+
+```sh
+sh onboard.sh check
+sh onboard.sh repair --env .onboarding/provider.env
+sh onboard.sh resume
+sh onboard.sh uninstall
+```
+
+`repair` 仅补齐本工具创建的助手，不重新初始化账号和会话；给现有服务补连接配置不会自动重启 Provider，必须申请空闲维护窗口。`uninstall` 只撤销本项目的助手任务及其私有连接文件，**不删除 Provider 配置、账号或数据卷**；卸载后扫码不可用，需要重新安装助手。旧连接配置的清理也必须在维护窗口完成。
+
+升级前保留 `deployment.json` 中镜像摘要和整个私有运行卷的加密备份；先测候选，再在空闲窗口切代码。回退使用旧镜像和**当前**数据，不能拿旧备份覆盖新账号/会话。不要执行 `down -v` 或删除运行目录。现有 Node 部署继续支持，维护工具推荐 Node 22；服务的公开 Node 支持范围未变。
+
+## 验收用语
+
+开发候选可运行无网络、空账号池检查；脚本只创建并删除自己的临时容器，不挂载既有数据，不访问 IMA：
+
+```sh
+node scripts/verify-onboarding-container.mjs YOUR_REVIEWED_IMAGE
+node scripts/check-onboarding-helper.mjs --directory YOUR_PRIVATE_HELPER_DIRECTORY --image YOUR_REVIEWED_IMAGE
+```
+
+第二条只验证容器到桌面助手的 Playwright 连接，不创建网页或发起登录。
+
+| 阶段 | 可以报告 | 不代表 |
+|---|---|---|
+| service_started | 服务与管理鉴权通过 | 可问答 |
+| browser_ready | 专用浏览器通路通过 | 扫码完成 |
+| waiting_for_scan | 等待人扫码 | 已登录 |
+| waiting_for_membership / access_unverified | 尚未保存，需处理或重试 | 一定没有加入 |
+| authorizationStatus=joined | 目标权限已核验 | 真实问答通过 |
+| 真实一问一追问 | 本次已验证流式、来源及会话连续性 | 长期生产稳定性 |
+
+目前合成测试不接 IMA。Windows 真机、远程 Linux、新账号扫码、登录态续期及真实 QA 均须单独验收；参见 [候选验收记录](ONBOARDING_ACCEPTANCE.md)。
+
+[Playwright 版本匹配要求](https://playwright.dev/docs/api/class-browsertype#browser-type-connect) · [Docker Desktop 宿主机连接](https://docs.docker.com/desktop/features/networking/)
