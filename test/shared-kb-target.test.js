@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseShareUrl, parseShareHtml, resolveSharedTarget, verifySharedMembership } = require('../src/shared-kb-target');
+const { parseShareUrl, parseShareHtml, resolveSharedTarget, resolveSharedTargetWithLogin, verifySharedMembership } = require('../src/shared-kb-target');
 const { fixture } = require('./helpers/share-metadata');
 
 const shareId = 'a'.repeat(64);
@@ -43,4 +43,25 @@ test('authenticated membership is bound to the configured target and fails close
   assert.equal((await verifySharedMembership(url, { ...options, fetchImpl: fetchImpl(0) })).membership, 'unknown');
   await assert.rejects(verifySharedMembership(url, { ...options, expectedId: '456', fetchImpl: fetchImpl(100) }), /membership_unverified/);
   await assert.rejects(verifySharedMembership(url, { ...options, fetchImpl: async () => { throw new Error('synthetic offline'); } }), /synthetic offline/);
+});
+test('login-gated metadata uses an isolated official window and never emits auth', async () => {
+  let closed = false; const events = [];
+  const result = await resolveSharedTargetWithLogin(url, {
+    fetchImpl: async (_, options) => options.headers.cookie ? new Response(fixture()) : new Response('<html>login required</html>'),
+    openOfficial: async target => { assert.equal(target, url); return { captureAuth: async () => ({ headers: { 'x-ima-cookie': 'synthetic-cookie' } }), close: async () => { closed = true; } }; },
+    emit: event => events.push(event),
+  });
+  assert.equal(result.knowledgeBaseId, '123456789'); assert.equal(closed, true);
+  assert.ok(!JSON.stringify(events).includes('synthetic-cookie'));
+});
+test('invalid links and network failures never open a login window; unresolved login closes safely', async () => {
+  let opened = false; let closed = false; let time = 0;
+  const openOfficial = async () => { opened = true; return { captureAuth: async () => null, close: async () => { closed = true; } }; };
+  await assert.rejects(resolveSharedTargetWithLogin(url, { openOfficial, fetchImpl: async () => { throw Error('synthetic offline'); } }), /synthetic offline/);
+  assert.equal(opened, false);
+  await assert.rejects(resolveSharedTargetWithLogin('https://invalid.example/', { openOfficial }), /official_share_url_required/);
+  assert.equal(opened, false);
+  await assert.rejects(resolveSharedTargetWithLogin(url, { openOfficial, fetchImpl: async () => new Response('<html>login</html>'),
+    timeoutMs: 1000, now: () => time, pause: async () => { time += 500; } }), /share_login_or_metadata_unverified/);
+  assert.equal(closed, true);
 });

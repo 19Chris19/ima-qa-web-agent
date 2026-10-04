@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { maintenanceSpec, composeSpec, privateWrite, parseOptions, guided, finishHelperFiles, validateHelperState } = require('../src/guided-deployment');
+const { maintenanceSpec, composeSpec, privateWrite, parseOptions, guided, resolveGuidedTarget, finishHelperFiles, validateHelperState } = require('../src/guided-deployment');
 const { fixture } = require('./helpers/share-metadata');
 
 test('desktop helpers are user scoped and preserve spaces in executable paths', () => {
@@ -115,5 +115,18 @@ test('SSH preparation keeps only maintenance credentials locally and never print
     assert.ok(!text.includes('synthetic-internal') && !text.includes('synthetic-ordinary'));
     assert.ok(!JSON.stringify(events).includes('synthetic-admin'));
     await assert.rejects(guided(root, 'remote-prepare', { ssh: '-oProxyCommand=evil', remoteEnv: '/private/provider.env' }, () => {}, deps), /ssh_alias/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+test('a desktop-resolved manifest carries only target metadata to server installation', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'target-manifest-'));
+  const file = path.join(root, '.onboarding/target.json');
+  const shareUrl = 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64);
+  try {
+    await resolveGuidedTarget(root, { shareUrl, targetFile: file, mode: 'server' }, () => {}, { fetch: async () => new Response(fixture()) });
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file))), ['schemaVersion', 'shareUrl', 'knowledgeBaseId', 'name']);
+    assert.equal((await resolveGuidedTarget(root, { shareUrl, targetFile: file, mode: 'server' }, () => {}, { fetch: async () => { throw Error('should not fetch'); } })).knowledgeBaseId, '123456789');
+    await assert.rejects(resolveGuidedTarget(root, { shareUrl: shareUrl.replace(/a/g, 'b'), targetFile: file }, () => {}), /target_manifest_invalid|official_share_url_required/);
+    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, shareUrl, knowledgeBaseId: 'a'.repeat(64), name: 'Synthetic' }));
+    await assert.rejects(resolveGuidedTarget(root, { shareUrl, targetFile: file }, () => {}), /target_manifest_invalid/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

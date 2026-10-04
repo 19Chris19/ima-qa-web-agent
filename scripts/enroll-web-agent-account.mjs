@@ -14,7 +14,7 @@ import targetModule from '../src/shared-kb-target.js';
 const { WebAgentAccountDirectory, defaultAccountStoreKeyPath, defaultAccountStorePath } =
   accountDirectoryModule;
 const { IMAWebAgentClient, getBkn, stringifyCookie } = imaWebAgentModule;
-const { resolveSharedTarget, verifySharedMembership } = targetModule;
+const { parseShareUrl, resolveSharedTarget, verifySharedMembership } = targetModule;
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 dotenv.config({ path: path.join(appDir, '.env') });
@@ -38,7 +38,9 @@ async function main() {
   try {
     const name = cleanAccountName(args.name || (await rl.question('账号名称，如 account-a: ')));
     let shareUrl = args.shareUrl || process.env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL;
-    const target = shareUrl ? await resolveSharedTarget(shareUrl) : null;
+    if (shareUrl) shareUrl = parseShareUrl(shareUrl).url;
+    const knownTarget = args.kb || args.knowledgeBaseId || process.env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID || process.env.IMA_WEB_KNOWLEDGE_BASE_ID;
+    const target = shareUrl && !knownTarget ? await resolveSharedTarget(shareUrl) : null;
     const knowledgeBaseId = cleanRequired(
       args.kb ||
         args.knowledgeBaseId ||
@@ -76,7 +78,7 @@ async function main() {
         replace: Boolean(args.replace),
       });
       shareUrl ||= bootstrap.enrollment?.shareUrl;
-      if (shareUrl) await resolveSharedTarget(shareUrl, { expectedId: knowledgeBaseId });
+      if (shareUrl) shareUrl = parseShareUrl(shareUrl).url;
     } else if (!args.replace) {
       const existing = store.listAccounts().find((account) =>
         normalizeAccountKey(account.id) === normalizeAccountKey(name) ||

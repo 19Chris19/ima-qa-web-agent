@@ -7,12 +7,12 @@ const { spawn } = require('node:child_process');
 const dotenv = require('dotenv');
 const { chromium } = require('playwright-core');
 const { buildProviderAEnv, createSecret } = require('./provider-a-release');
-const { resolveSharedTarget } = require('./shared-kb-target');
+const { resolveSharedTargetWithLogin, parseShareUrl } = require('./shared-kb-target');
 
 const fail = code => Object.assign(new Error(code), { code });
 function parseOptions(args) {
   const options = {};
-  const names = new Set(['share-url', 'env', 'project', 'port', 'mode', 'image', 'name', 'server-url', 'ssh', 'remote-env', 'remote-port', 'local-port', 'directory']);
+  const names = new Set(['share-url', 'target-file', 'env', 'project', 'port', 'mode', 'image', 'name', 'server-url', 'ssh', 'remote-env', 'remote-port', 'local-port', 'directory']);
   for (let i = 0; i < args.length; i++) {
     const key = args[i]?.replace(/^--/, '');
     if (!args[i]?.startsWith('--') || !names.has(key) || !args[i + 1] || args[i + 1].startsWith('--')) throw fail('invalid_arguments');
@@ -96,6 +96,14 @@ async function helperProbe(config) {
   } catch { return false; }
   finally { await browser?.close().catch(() => {}); }
 }
+async function waitForHelper(config) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    if (await helperProbe(config)) return;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  throw fail('browser_helper_not_ready_use_repair');
+}
 function validateHelperState(state, root, directory, platform = process.platform) {
   const config = path.join(directory, 'browser.json');
   const spec = maintenanceSpec(platform, { project: projectName(state.project), node: process.execPath,
@@ -123,8 +131,7 @@ async function configureBrowser(root, options, emit) {
     finishHelperFiles(state);
     const config = JSON.parse(fs.readFileSync(state.config, 'utf8'));
     if (!await helperProbe(config)) await startHelper(state);
-    for (let i = 0; i < 15 && !await helperProbe(config); i++) await new Promise(resolve => setTimeout(resolve, 500));
-    if (!await helperProbe(config)) throw fail('browser_helper_not_ready_use_repair');
+    await waitForHelper(config);
     emit({ stage: 'browser_ready', configured: true, ready: true });
     return state;
   }
@@ -149,8 +156,7 @@ async function configureBrowser(root, options, emit) {
   finishHelperFiles(state);
   try {
     await startHelper(state);
-    for (let i = 0; i < 15 && !await helperProbe(JSON.parse(fs.readFileSync(configPath, 'utf8'))); i++) await new Promise(resolve => setTimeout(resolve, 500));
-    if (!await helperProbe(JSON.parse(fs.readFileSync(configPath, 'utf8')))) throw fail('browser_helper_not_ready');
+    await waitForHelper(JSON.parse(fs.readFileSync(configPath, 'utf8')));
   } catch { throw fail('browser_helper_not_ready_use_repair'); }
   emit({ stage: 'browser_ready', configured: true, ready: true });
   return state;
@@ -168,6 +174,41 @@ async function startHelper(state) {
       await run('launchctl', ['kickstart', `gui/${process.getuid()}/${state.label}`]);
     });
   } else await run('powershell.exe', ['-NoProfile', '-File', state.definition]);
+}
+async function resolveGuidedTarget(root, options, emit, dependencies = {}) {
+  const fetchImpl = dependencies.fetch || fetch;
+  if (options.targetFile && fs.existsSync(path.resolve(options.targetFile))) {
+    const text = fs.readFileSync(path.resolve(options.targetFile), 'utf8');
+    if (text.length > 4096) throw fail('target_manifest_invalid');
+    const saved = JSON.parse(text);
+    if (saved.schemaVersion !== 1 || saved.shareUrl !== parseShareUrl(options.shareUrl).url
+      || !/^[1-9][0-9]{0,29}$/.test(saved.knowledgeBaseId || '') || typeof saved.name !== 'string') throw fail('target_manifest_invalid');
+    return { shareUrl: saved.shareUrl, knowledgeBaseId: saved.knowledgeBaseId, name: saved.name.slice(0, 160) };
+  }
+  const desktop = (options.mode || (process.platform === 'linux' ? 'server' : 'desktop')) === 'desktop';
+  const openOfficial = dependencies.openOfficial || (desktop ? async url => {
+    const state = await configureBrowser(root, options, emit);
+    const config = JSON.parse(fs.readFileSync(state.config, 'utf8'));
+    const browser = await chromium.connect(`ws://127.0.0.1:${config.port}/${config.key}`, { timeout: 5000 });
+    let context;
+    const close = async () => {
+      process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
+      await context?.close().catch(() => {}); await browser.close().catch(() => {});
+    };
+    const stop = async () => { await close(); process.exit(130); };
+    try {
+      context = await browser.newContext();
+      const page = await context.newPage();
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.bringToFront();
+      process.once('SIGINT', stop); process.once('SIGTERM', stop);
+      return { captureAuth: () => require('./web-agent-enrollment').captureAuthFromContext(context), close };
+    } catch { await close(); throw fail('share_login_window_unavailable'); }
+  } : undefined);
+  const target = await resolveSharedTargetWithLogin(options.shareUrl, { fetchImpl, openOfficial, emit });
+  if (options.targetFile) privateWrite(path.resolve(options.targetFile), JSON.stringify({ schemaVersion: 1,
+    shareUrl: target.shareUrl, knowledgeBaseId: target.knowledgeBaseId, name: target.name || '' }));
+  return target;
 }
 async function guided(root, command, options, emit = value => console.log(JSON.stringify(value)), dependencies = {}) {
   const execute = dependencies.run || run;
@@ -197,7 +238,7 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     if (fs.existsSync(journal)) fs.unlinkSync(journal);
   }
   if (command === 'resolve') {
-    const target = await resolveSharedTarget(options.shareUrl, { fetchImpl });
+    const target = await resolveGuidedTarget(root, options, emit, dependencies);
     emit({ stage: 'target_resolved', ...target }); return target;
   }
   if (command === 'doctor') {
@@ -250,7 +291,6 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     const mode = options.mode || (process.platform === 'linux' ? 'server' : 'desktop');
     if (!['server', 'desktop'].includes(mode)) throw fail('invalid_mode');
     await guided(root, 'doctor', options, emit, dependencies);
-    const target = await resolveSharedTarget(options.shareUrl, { fetchImpl });
     const project = projectName(options.project); const hostPort = port(options.port, 3117);
     if (await readCommand('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`])) throw fail('existing_compose_project_protected');
     await (dependencies.portAvailable || portAvailable)(hostPort);
@@ -264,6 +304,7 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     // Check the maintenance protocol before writing configuration or starting services.
     await execute('docker', ['run', '--rm', '--network', 'none', '--entrypoint', 'node', pinned, '-e',
       `if(require('playwright-core/package.json').version!==${JSON.stringify(require('playwright-core/package.json').version)}||!require('node:fs').existsSync('scripts/onboard.mjs'))process.exit(1)`], { code: 'browser_protocol_version_mismatch' });
+    const target = await resolveGuidedTarget(root, { ...options, mode, project }, emit, dependencies);
     const env = path.join(directory, 'provider.env');
     const compose = path.join(directory, 'compose.json');
     const state = { schemaVersion: 1, root, image: pinned, project, env, compose, mode, hostPort,
@@ -330,8 +371,9 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
       || !/^\/[a-zA-Z0-9_./-]+$/.test(options.remoteEnv || '')) throw fail('ssh_alias_and_absolute_private_env_required');
     const env = dotenv.parse(await readCommand('ssh', [options.ssh, 'cat', options.remoteEnv]));
     if (!env.IMA_QA_ADMIN_TOKEN || !env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID || !env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL) throw fail('server_configuration_incomplete');
-    const target = await resolveSharedTarget(env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL, {
-      fetchImpl, expectedId: env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID });
+    const target = { knowledgeBaseId: env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID,
+      shareUrl: parseShareUrl(env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL).url };
+    if (!/^[1-9][0-9]{0,29}$/.test(target.knowledgeBaseId)) throw fail('server_configuration_incomplete');
     const file = path.join(directory, 'remote-admin.env');
     privateWrite(file, `IMA_QA_ADMIN_TOKEN=${env.IMA_QA_ADMIN_TOKEN}\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID=${target.knowledgeBaseId}\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL=${target.shareUrl}\n`);
     emit({ stage: 'maintenance_configured', privateEnv: file, credentialsConfigured: true,
@@ -339,4 +381,4 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
   }
   throw fail('unknown_command');
 }
-module.exports = { guided, parseOptions, privateWrite, maintenanceSpec, composeSpec, helperProbe, finishHelperFiles, validateHelperState };
+module.exports = { guided, resolveGuidedTarget, parseOptions, privateWrite, maintenanceSpec, composeSpec, helperProbe, finishHelperFiles, validateHelperState };

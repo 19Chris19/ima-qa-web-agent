@@ -59,6 +59,7 @@ async function resolveSharedTarget(input, options = {}) {
   const response = await (options.fetchImpl || fetch)(url, { redirect: 'manual',
     headers: options.cookie ? { cookie: options.cookie } : {},
     signal: options.signal || AbortSignal.timeout(15000) });
+  if ([401, 403].includes(response.status)) throw failure('share_login_required');
   if (!response.ok || (response.url && response.url !== url)) throw failure('share_unavailable');
   const reader = response.body?.getReader();
   const chunks = []; let size = 0;
@@ -75,6 +76,33 @@ async function resolveSharedTarget(input, options = {}) {
   const target = parseShareHtml(Buffer.concat(chunks).toString('utf8'), url);
   if (options.expectedId && target.knowledgeBaseId !== String(options.expectedId)) throw failure('knowledge_base_mismatch');
   return target;
+}
+async function resolveSharedTargetWithLogin(input, options = {}) {
+  const { url } = parseShareUrl(input);
+  try { return await resolveSharedTarget(url, options); }
+  catch (error) {
+    if (!['share_metadata_unverified', 'share_login_required'].includes(error.code)) throw error;
+    if (!options.openOfficial) throw failure('share_requires_maintenance_login');
+  }
+  options.emit?.({ stage: 'human_action_required', shareUrl: url,
+    action: 'Resolve target in an isolated official IMA window. Scan/confirm manually; do not join automatically.', credentialsPrinted: false });
+  const window = await options.openOfficial(url);
+  const now = options.now || Date.now;
+  const pause = options.pause || (async () => new Promise(resolve => setTimeout(resolve, 500)));
+  const deadline = now() + (options.timeoutMs || 300000);
+  try {
+    while (now() < deadline) {
+      const auth = await window.captureAuth();
+      if (auth?.headers?.['x-ima-cookie']) {
+        try { return await resolveSharedTarget(url, { ...options, cookie: auth.headers['x-ima-cookie'] }); }
+        catch (error) {
+          if (error.code === 'knowledge_base_mismatch' || error.code === 'share_too_large') throw error;
+        }
+      }
+      await pause();
+    }
+    throw failure('share_login_or_metadata_unverified');
+  } finally { await window.close().catch(() => {}); }
 }
 async function verifySharedMembership(input, options = {}) {
   const { url, shareId } = parseShareUrl(input);
@@ -110,4 +138,4 @@ async function verifySharedMembership(input, options = {}) {
     : data.is_in_apply_list === true ? 'awaiting_approval'
       : role === 0 && identityConfirmed ? 'not_joined' : 'unknown' };
 }
-module.exports = { parseShareUrl, parseShareHtml, resolveSharedTarget, verifySharedMembership };
+module.exports = { parseShareUrl, parseShareHtml, resolveSharedTarget, resolveSharedTargetWithLogin, verifySharedMembership };
