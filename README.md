@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="#五分钟跑通"><strong>开始部署</strong></a>
+  <a href="#推荐安装入口"><strong>开始部署</strong></a>
   &nbsp;·&nbsp;
   <a href="#账号接入"><strong>接入账号</strong></a>
   &nbsp;·&nbsp;
@@ -70,53 +70,23 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 服务端会为每个客户的会话固定 IMA 账号和 IMA session。后续追问仍走同一个上游 session，因此能延续上下文；不同客户的会话、历史、来源和上游 session 不会互相混用。
 
-## 五分钟跑通
+## 推荐安装入口
 
-### 你要先准备
+**本候选的新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
 
-1. 一个 IMA Web 共享知识库的**数字 ID**。从网页地址里的 `knowledgeBaseId=` 获取；它不是 IMA OpenAPI 的 Base64 ID。
-2. 一个或多个已合法加入该共享知识库的 IMA 账号。
-3. 一台运行服务的服务器，以及一台能打开 Chrome、Chromium 或 Ego Lite 的维护机。两者可以是同一台电脑。
-4. Docker Compose，或 Node.js 18.18 及以上版本。
+v0.4.2 尚未发布，候选仅供显式指定已审查源码/镜像的隔离演练。部署已发布 v0.4.1 时使用其 tag 内的说明，不混用候选命令。
 
-### 初始化并启动
+| 场景 | 推荐路径 |
+| --- | --- |
+| Mac / Windows 桌面 Docker | 引导器准备专用浏览器，管理页“接入账号”打开官方 IMA 窗口 |
+| 无桌面 Linux 服务器 | 服务端 Docker；维护电脑通过受保护的 SSH 通路扫码 |
+| 已安装的 Node / Docker 服务 | 保留配置，按[高级手工部署](./docs/DEPLOYMENT.md)维护，不重新初始化 |
 
-```bash
-git clone https://github.com/19Chris19/ima-qa-web-agent.git
-cd ima-qa-web-agent
-npm ci
-npm run setup:provider-a
-docker compose up -d --build
-```
+容器只运行服务，专用浏览器在维护电脑上。登录验证通过后凭证加密存入服务端账号库，普通问答不依赖浏览器窗口。Windows 真机、远程 Linux 与新账号端到端验收状态见[候选记录](./docs/ONBOARDING_ACCEPTANCE.md)，不要把方案支持等同于已经验收。
 
-初始化向导只会询问共享知识库 ID 和可选的业务网页域名，并创建私有 `.env`、管理员 token 与 `runtime/` 数据目录。账号登录态不会随仓库下载。
+Provider A 可以独立提供通用问答页，也能作为品牌网站和机器人的后端。部署知天下等完整网站产品，应从对应网站仓库的整套部署入口开始，由其选择配套 Provider，不必先手工部署两个项目。两仓不共享运行目录；网站的普通、服务和管理员凭证用途分开。
 
-生产环境不要直接公开 `:3117` 或服务器 IP。容器默认只监听服务器本机，由 Nginx 提供 HTTPS 域名和公网入口。完整反向代理配置见 [部署文档](./docs/DEPLOYMENT.md#nginx)。
-
-### 先选对部署路径
-
-首次部署时，服务运行位置和扫码维护机不一定相同。按你的环境选择下面一条路径：
-
-| 环境 | 服务怎么跑 | 第一个账号怎么接入 |
-| --- | --- | --- |
-| 有桌面的维护机，追求最直接的体验 | 在同一台机器原生运行 Node | 打开 `/admin.html`，页面生成二维码并扫码 |
-| Docker、纯 Linux 或远程服务器 | 服务在服务器运行，服务器不需要桌面浏览器 | 维护机建立 SSH 隧道，再用 CLI 在维护机弹出独立浏览器扫码 |
-
-Docker 镜像只包含 Provider A 服务，不包含 Chrome、Chromium、Ego Lite 或桌面环境。不要因为容器能启动就以为它能自动弹出二维码窗口；远程服务器请按 [远程服务器 + 本机扫码](./docs/DEPLOYMENT.md#远程服务器--本机扫码) 操作。两条路径最终都把登录态加密写入服务端账号库，运行期问答不依赖扫码窗口。
-
-v0.4.1 提供 [固定版本镜像与免宿主机 Node 初始化](./docs/VERSIONED_IMAGES.md)。
-在 Mac Docker 上希望管理页直接打开扫码窗口时，可额外配置
-[私有维护浏览器助手](./docs/DOCKER_BROWSER_ENROLLMENT.md)；它不随镜像自动启动。
-
-桌面维护机原生运行的最短路径是：
-
-```bash
-npm ci
-npm run setup:provider-a
-npm start
-```
-
-然后打开 `http://127.0.0.1:3117/admin.html`，输入初始化向导生成的管理员 token，逐个点击“接入账号”。
+生产环境不直接开放管理端口，域名和 HTTPS 见 [反向代理说明](./docs/DEPLOYMENT.md#nginx)。手工 Node、数字 ID 初始化和旧版镜像路径属于高级部署，不是引导流程缺少的必做步骤。
 
 ## 账号接入
 
@@ -126,7 +96,7 @@ npm start
 
 账号池按扫码后取得的 IMA 登录身份做服务端不可逆指纹去重，不以维护者填写的名称作为身份依据。同一 IMA 账号不能通过更换名称占用额外并发；旧账号库中发现的重复身份会自动停用并在管理页标记，保留原记录供维护者确认后删除。
 
-页面二维码接入需要 **运行 Node 服务的维护机** 能访问 Chrome、Chromium 或 Ego Lite；可以用 `IMA_WEB_AGENT_BROWSER_PATH` 指定可执行文件。Docker 或纯 Linux 服务端没有桌面浏览器，因此不要在服务器上等待管理页弹窗；请在有图形界面的维护机使用下方 CLI + SSH 隧道方式，或把 Provider A 原生运行在维护机上。
+引导安装的桌面 Docker 通过专用助手打开官方窗口；纯 Linux 在维护电脑上扫码。旧的原生 Node 方式仍可通过 `IMA_WEB_AGENT_BROWSER_PATH` 配置浏览器，但不是新安装的默认路线。未通过扫码通路预检时先修复，不因服务启动就认为账号接入已可用。
 
 CLI 是兼容兜底方式：
 
@@ -141,7 +111,7 @@ npm run admin:enroll -- \
 1. 校验管理员 token、账号名称和目标共享知识库。
 2. 打开与其他账号隔离的临时浏览器窗口。
 3. 由维护者只使用待接入账号扫描二维码，并确认账号已经加入目标共享库。
-4. 服务端调用 IMA session 初始化接口验证访问权限。
+4. 核验目标共享知识库的明确成员授权；session 初始化成功不能代替权限证明。未加入时由人在官方页面处理，再继续验证；网络故障显示无法确认，不猜测权限。
 5. 验证成功后加密保存登录态，关闭浏览器；失败时不写入账号池。
 
 继续增加账号时，只换一个未使用的名称：
