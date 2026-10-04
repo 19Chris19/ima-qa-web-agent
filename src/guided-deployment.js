@@ -96,13 +96,30 @@ async function helperProbe(config) {
   } catch { return false; }
   finally { await browser?.close().catch(() => {}); }
 }
+function validateHelperState(state, root, directory, platform = process.platform) {
+  const config = path.join(directory, 'browser.json');
+  const spec = maintenanceSpec(platform, { project: projectName(state.project), node: process.execPath,
+    script: path.join(root, 'scripts/enrollment-browser-helper.mjs'), config });
+  const definition = platform === 'darwin' ? path.join(os.homedir(), 'Library/LaunchAgents', `${spec.label}.plist`)
+    : path.join(directory, 'register-helper.ps1');
+  if (state.root !== root || state.platform !== platform || state.config !== config
+    || state.definition !== definition || state.label !== spec.label || state.document !== spec.document
+    || state.playwrightVersion !== require('playwright-core/package.json').version
+    || !/^[a-f0-9]{64}$/.test(state.configuration?.key || '')
+    || !Number.isInteger(state.configuration?.port) || state.configuration.port < 1 || state.configuration.port > 65535) {
+    throw fail('helper_version_or_owner_mismatch');
+  }
+  for (const [file, content] of [[config, JSON.stringify(state.configuration)], [definition, spec.document]]) {
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') !== content) throw fail('existing_helper_protected');
+  }
+}
 async function configureBrowser(root, options, emit) {
   if (!['darwin', 'win32'].includes(process.platform)) throw fail('maintenance_desktop_required');
   const directory = path.resolve(options.directory || path.join(root, '.onboarding'));
   const statePath = path.join(directory, 'helper-state.json');
   if (fs.existsSync(statePath)) {
     const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    if (state.root !== root || state.platform !== process.platform || state.config !== path.join(directory, 'browser.json') || state.playwrightVersion !== require('playwright-core/package.json').version) throw fail('helper_version_or_owner_mismatch');
+    validateHelperState(state, root, directory);
     finishHelperFiles(state);
     const config = JSON.parse(fs.readFileSync(state.config, 'utf8'));
     if (!await helperProbe(config)) await startHelper(state);
@@ -124,7 +141,7 @@ async function configureBrowser(root, options, emit) {
   const definition = process.platform === 'darwin' ? path.join(os.homedir(), 'Library/LaunchAgents', `${spec.label}.plist`)
     : path.join(directory, 'register-helper.ps1');
   if (fs.existsSync(definition) || fs.existsSync(configPath)) throw fail('existing_helper_protected');
-  const state = { schemaVersion: 1, root, config: configPath, definition, label: spec.label,
+  const state = { schemaVersion: 1, root, project: projectName(options.project), config: configPath, definition, label: spec.label,
     platform: process.platform, playwrightVersion: require('playwright-core/package.json').version,
     configuration, document: spec.document };
   // Reserve ownership before creating files, so an interrupted install is resumable.
@@ -217,10 +234,14 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
   }
   if (command === 'uninstall') {
     const state = JSON.parse(fs.readFileSync(path.join(directory, 'helper-state.json'), 'utf8'));
-    if (state.root !== root || state.platform !== process.platform) throw fail('helper_owner_mismatch');
+    validateHelperState(state, root, directory);
     if (process.platform === 'darwin') await run('launchctl', ['bootout', `gui/${process.getuid()}/${state.label}`]).catch(() => {});
-    else await run('powershell.exe', ['-NoProfile', '-Command', `Stop-ScheduledTask -TaskName '${state.label}'; Unregister-ScheduledTask -TaskName '${state.label}' -Confirm:$false`]);
-    fs.unlinkSync(state.definition); fs.unlinkSync(state.config); fs.unlinkSync(path.join(directory, 'helper-state.json'));
+    else {
+      const quote = value => `'${String(value).replaceAll("'", "''")}'`;
+      const args = [path.join(root, 'scripts/enrollment-browser-helper.mjs'), state.config].map(a => `"${a.replaceAll('"', '')}"`).join(' ');
+      await run('powershell.exe', ['-NoProfile', '-Command', `$ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName '${state.label}' -ErrorAction SilentlyContinue; if($task){if($task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ne ${quote(process.execPath)} -or $task.Actions[0].Arguments -ne ${quote(args)}){throw 'Foreign helper task'}; Stop-ScheduledTask -TaskName '${state.label}'; Unregister-ScheduledTask -TaskName '${state.label}' -Confirm:$false}`]);
+    }
+    for (const file of [state.definition, state.config, path.join(directory, 'helper-state.json')]) if (fs.existsSync(file)) fs.unlinkSync(file);
     emit({ stage: 'helper_removed', providerDataPreserved: true, next: 'Enrollment is now unavailable; the Provider configuration and account data were not changed.' }); return;
   }
   if (command === 'install') {
@@ -269,9 +290,17 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
       headers: { authorization: `Bearer ${env.IMA_QA_ADMIN_TOKEN}` }, signal: AbortSignal.timeout(10000) });
     const data = await response.json();
     if (!response.ok || data.provider !== 'ima-web-agent') throw fail('provider_authentication_failed');
+    if (String(data.sharedKnowledgeBaseId) !== state.target.knowledgeBaseId || data.enrollment?.authorizationProtocol !== 'shared_library_membership_v1') throw fail('provider_onboarding_contract_mismatch');
+    let browserReady = false;
+    if (state.mode === 'desktop') {
+      const probe = await fetchImpl(`http://127.0.0.1:${state.hostPort}/api/admin/enrollment-preflight`, {
+        method: 'POST', headers: { authorization: `Bearer ${env.IMA_QA_ADMIN_TOKEN}` }, signal: AbortSignal.timeout(10000) });
+      browserReady = probe.ok && (await probe.json()).enrollment?.ready === true;
+      if (!browserReady) throw fail('browser_helper_not_ready_use_repair');
+    }
     emit({ stage: 'service_started', version: state.version, adminUrl: `http://127.0.0.1:${state.hostPort}/admin.html`,
       enrollmentMode: state.mode === 'desktop' ? 'desktop_helper' : 'remote_cli',
-      credentialsConfigured: true, realQaVerified: false, next: 'Human scan and knowledge-base authorization required.' }); return;
+      browserReady, credentialsConfigured: true, realQaVerified: false, next: 'Human scan and knowledge-base authorization required.' }); return;
   }
   if (command === 'enroll') {
     let envPath = options.env; let serverUrl = options.serverUrl;
@@ -310,4 +339,4 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
   }
   throw fail('unknown_command');
 }
-module.exports = { guided, parseOptions, privateWrite, maintenanceSpec, composeSpec, helperProbe, finishHelperFiles };
+module.exports = { guided, parseOptions, privateWrite, maintenanceSpec, composeSpec, helperProbe, finishHelperFiles, validateHelperState };

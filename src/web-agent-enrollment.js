@@ -6,7 +6,7 @@ const path = require('node:path');
 const { chromium } = require('playwright-core');
 const { IMAWebAgentClient, getBkn, stringifyCookie } = require('./ima-web-agent-client');
 const { normalizeAccountId } = require('./web-agent-account-directory');
-const { connectEnrollmentBrowser } = require('./enrollment-browser-bridge');
+const { connectEnrollmentBrowser, validateEndpoint } = require('./enrollment-browser-bridge');
 const { parseShareUrl, verifySharedMembership } = require('./shared-kb-target');
 
 const DEFAULT_ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -303,7 +303,7 @@ class WebAgentEnrollmentManager {
     if (!endpoint) return { ready: true, mode: 'local_browser', configured: true };
     let browser;
     try {
-      browser = await chromium.connect(endpoint, { timeout: 3000 });
+      browser = await chromium.connect(validateEndpoint(endpoint), { timeout: 3000 });
       return { ready: true, mode: 'desktop_helper', configured: true };
     } catch { return { ready: false, mode: 'desktop_helper', configured: true, code: 'browser_helper_unavailable_or_incompatible' }; }
     finally { await browser?.close().catch(() => {}); }

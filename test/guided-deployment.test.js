@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { maintenanceSpec, composeSpec, privateWrite, parseOptions, guided, finishHelperFiles } = require('../src/guided-deployment');
+const { maintenanceSpec, composeSpec, privateWrite, parseOptions, guided, finishHelperFiles, validateHelperState } = require('../src/guided-deployment');
 const { fixture } = require('./helpers/share-metadata');
 
 test('desktop helpers are user scoped and preserve spaces in executable paths', () => {
@@ -51,12 +51,32 @@ test('interrupted helper file preparation resumes without overwriting foreign fi
     assert.throws(() => finishHelperFiles(state), /existing_helper_protected/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+test('helper ownership validates paths and definitions before repair or uninstall', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'helper-owner-'));
+  const directory = path.join(root, '.onboarding');
+  const platform = 'darwin';
+  const spec = maintenanceSpec(platform, { project: 'synthetic-owner', node: process.execPath,
+    script: path.join(root, 'scripts/enrollment-browser-helper.mjs'), config: path.join(directory, 'browser.json') });
+  const state = { root, project: 'synthetic-owner', platform,
+    playwrightVersion: require('playwright-core/package.json').version, config: path.join(directory, 'browser.json'),
+    definition: path.join(os.homedir(), 'Library/LaunchAgents', `${spec.label}.plist`),
+    label: spec.label, document: spec.document, configuration: { port: 12345, key: 'a'.repeat(64), browserPath: '/synthetic/chromium' } };
+  try {
+    assert.doesNotThrow(() => validateHelperState(state, root, directory, platform));
+    for (const changed of [{ config: '/foreign/config.json' }, { definition: '/foreign/task' },
+      { label: 'foreign.task' }, { document: 'foreign task definition' }]) {
+      assert.throws(() => validateHelperState({ ...state, ...changed }, root, directory, platform), /helper_version_or_owner_mismatch/);
+    }
+    privateWrite(state.config, 'foreign contents');
+    assert.throws(() => validateHelperState(state, root, directory, platform), /existing_helper_protected/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 test('synthetic server install pins the image, pauses for human authorization and can safely resume', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guided-install-')); const events = []; const commands = [];
   const deps = { run: async (bin, args) => commands.push([bin, ...args]),
     capture: async (bin, args) => args[0] === 'ps' ? '' : JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]),
     portAvailable: async () => {}, fetch: async url => url.includes('/bootstrap')
-      ? Response.json({ provider: 'ima-web-agent', enrollment: { supportsAdminPageQr: false } }) : new Response(fixture()) };
+      ? Response.json({ provider: 'ima-web-agent', sharedKnowledgeBaseId: '123456789', enrollment: { supportsAdminPageQr: false, authorizationProtocol: 'shared_library_membership_v1' } }) : new Response(fixture()) };
   const options = { mode: 'server', image: 'synthetic/provider:fixture', shareUrl: 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64) };
   try {
     await guided(root, 'install', options, e => events.push(e), deps);

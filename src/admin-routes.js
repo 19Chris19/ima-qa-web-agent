@@ -84,6 +84,7 @@ function registerAdminRoutes(app, options = {}) {
       provider: options.config?.qaProvider || 'ima-web-agent',
       sharedKnowledgeBaseId: sharedKnowledgeBaseId || null,
       enrollment: {
+        authorizationProtocol: 'shared_library_membership_v1',
         requiresGuiMaintenanceMachine: true,
         accountStoreManagedByServer: true,
         supportsAdminPageQr: Boolean(enrollmentManager?.isAvailable?.()),

@@ -23,11 +23,13 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let context;
+  let browser;
   let userDataDir = '';
   let interrupted = false;
   const stop = async () => {
     interrupted = true;
     await context?.close().catch(() => {});
+    await browser?.close().catch(() => {});
     if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
     rl.close(); process.exit(130);
   };
@@ -91,12 +93,12 @@ async function main() {
     console.log('登录完成后脚本会自动捕获登录态，不会输出 token 原文。\n');
     if (shareUrl) console.log(`请使用已加入目标知识库的 IMA 账号。官方链接：${shareUrl}`);
 
-    context = await chromium.launchPersistentContext(userDataDir, {
+    browser = await chromium.launch({
       executablePath: browserPath,
       headless: false,
-      viewport: { width: 1280, height: 860 },
       args: ['--no-first-run', '--no-default-browser-check'],
     });
+    context = await browser.newContext({ viewport: { width: 1280, height: 860 } });
     const page = context.pages()[0] || (await context.newPage());
     await page.goto(
       `https://ima.qq.com/wikis?knowledgeBaseId=${encodeURIComponent(
@@ -167,6 +169,7 @@ async function main() {
     if (context) {
       await context.close().catch(() => {});
     }
+    await browser?.close().catch(() => {});
     if (userDataDir) {
       fs.rmSync(userDataDir, { recursive: true, force: true });
     }
