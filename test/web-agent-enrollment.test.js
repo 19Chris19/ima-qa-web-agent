@@ -98,6 +98,43 @@ function makeManager(overrides = {}) {
   return { tempDir, accountDirectory, fakeBrowser, manager, poolCalls, state };
 }
 
+test('share authorization waits in memory and resumes in the same window after joining', async () => {
+  let permission = 'not_joined';
+  const setup = makeManager({ membershipVerifier: async () => ({ membership: permission }) });
+  const { manager, state, accountDirectory, fakeBrowser, poolCalls } = setup;
+  manager.config.webAgent.sharedKnowledgeBaseShareUrl = 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64);
+  const started = await manager.start({ name: 'synthetic-member' });
+  await waitFor(() => Boolean(state.wake));
+  state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic', 'x-ima-bkn': '123' } };
+  state.wake();
+  await waitFor(() => manager.get(started.taskId).state === 'waiting_for_membership');
+  assert.equal(accountDirectory.listAccounts().length, 0);
+  assert.equal(poolCalls.length, 0);
+  assert.equal(fakeBrowser.context.closed, false);
+  assert.equal(state.initCalls, 0);
+  permission = 'joined';
+  await manager.continueVerification(started.taskId);
+  assert.equal(manager.get(started.taskId).state, 'completed');
+  assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.equal(fakeBrowser.context.closed, true);
+  await assert.rejects(manager.continueVerification(started.taskId), /不在等待/);
+  await manager.shutdown();
+});
+
+test('permission network failures do not assert non-membership; cancelling never stores auth', async () => {
+  const { manager, state, accountDirectory, fakeBrowser } = makeManager({ membershipVerifier: async () => { throw new Error('synthetic network failure'); } });
+  manager.config.webAgent.sharedKnowledgeBaseShareUrl = 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64);
+  const started = await manager.start({ name: 'synthetic-unknown' });
+  await waitFor(() => Boolean(state.wake));
+  state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic', 'x-ima-bkn': '123' } }; state.wake();
+  await waitFor(() => manager.get(started.taskId).state === 'access_unverified');
+  assert.equal(manager.get(started.taskId).authorizationStatus, 'unknown');
+  await manager.cancel(started.taskId);
+  assert.equal(accountDirectory.listAccounts().length, 0);
+  assert.equal(fakeBrowser.context.closed, true);
+  await manager.shutdown();
+});
+
 test('QR enrollment keeps screenshot in memory and stores credentials only after session verification', async () => {
   const { accountDirectory, fakeBrowser, manager, poolCalls, state } = makeManager();
   const started = await manager.start({ name: 'account-c' });

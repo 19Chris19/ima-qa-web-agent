@@ -45,7 +45,7 @@ function parseShareHtml(html, input) {
       const permissions = field(info, 'userPermissionInfo');
       const role = graph[field(permissions, 'roleType')];
       const applying = graph[field(permissions, 'isInApplyList')] === true;
-      const name = graph[field(field(info, 'basicInfo'), 'title')];
+      const name = graph[field(field(info, 'basicInfo'), 'name')] || graph[field(field(info, 'basicInfo'), 'title')];
       return { shareUrl: url, knowledgeBaseId: id,
         name: typeof name === 'string' ? name.slice(0, 160) : '',
         membership: [100, 1000, 9000, 10000].includes(role) ? 'joined'
@@ -76,4 +76,38 @@ async function resolveSharedTarget(input, options = {}) {
   if (options.expectedId && target.knowledgeBaseId !== String(options.expectedId)) throw failure('knowledge_base_mismatch');
   return target;
 }
-module.exports = { parseShareUrl, parseShareHtml, resolveSharedTarget };
+async function verifySharedMembership(input, options = {}) {
+  const { url, shareId } = parseShareUrl(input);
+  const auth = options.headers || {};
+  if (!auth['x-ima-cookie'] || !auth['x-ima-bkn']) throw failure('membership_auth_required');
+  const response = await (options.fetchImpl || fetch)('https://ima.qq.com/cgi-bin/knowledge_share_get/get_share_info', {
+    method: 'POST', redirect: 'manual', signal: options.signal || AbortSignal.timeout(15000),
+    headers: { 'content-type': 'application/json', 'x-ima-cookie': auth['x-ima-cookie'],
+      'x-ima-bkn': auth['x-ima-bkn'], cookie: auth['x-ima-cookie'], origin: 'https://ima.qq.com',
+      referer: url, from_browser_ima: '1', extension_version: '3.0.0' },
+    body: JSON.stringify({ share_id: shareId, cursor: '', limit: 1, folder_id: '' }),
+  });
+  if (!response.ok) throw failure('membership_unverified');
+  const chunks = []; let size = 0;
+  const reader = response.body?.getReader();
+  if (!reader) throw failure('membership_unverified');
+  try {
+    while (true) {
+      const { done, value } = await reader.read(); if (done) break;
+      size += value.byteLength; if (size > MAX_BYTES) throw failure('membership_unverified');
+      chunks.push(Buffer.from(value));
+    }
+  } finally { await reader.cancel().catch(() => {}); }
+  const bytes = Buffer.concat(chunks).toString('utf8');
+  let data; try { data = JSON.parse(bytes); } catch { throw failure('membership_unverified'); }
+  const info = data.knowledge_base_info || data.intro_rsp?.knowledge_base_info;
+  if (data.code !== 0 || String(info?.id || '') !== String(options.expectedId || '')) throw failure('membership_unverified');
+  const role = info.user_permission_info?.role_type;
+  // Positive roles prove access. A visitor result without identity evidence may be anonymous.
+  const uid = /(?:^|;\s*)IMA-UID=([^;]+)/.exec(auth['x-ima-cookie'])?.[1];
+  const identityConfirmed = uid && String(data.user_id || '') === uid;
+  return { membership: [100, 1000, 9000, 10000].includes(role) ? 'joined'
+    : data.is_in_apply_list === true ? 'awaiting_approval'
+      : role === 0 && identityConfirmed ? 'not_joined' : 'unknown' };
+}
+module.exports = { parseShareUrl, parseShareHtml, resolveSharedTarget, verifySharedMembership };

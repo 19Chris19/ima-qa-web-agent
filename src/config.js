@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { parseShareUrl } = require('./shared-kb-target');
 
 const DEFAULT_MIMO_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const DEFAULT_MIMO_MODEL = 'mimo-v2.5';
@@ -485,6 +486,8 @@ function getConfig(env = process.env) {
       ...primaryWebAgentAccount,
       accounts: webAgentAccounts,
       sharedKnowledgeBaseId: webAgentSharedKnowledgeBaseId,
+      sharedKnowledgeBaseShareUrl: readEnv(env, 'IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL')
+        ? parseShareUrl(readEnv(env, 'IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL')).url : '',
       accountStorePath,
       accountStoreKeyPath:
         readEnv(env, 'IMA_WEB_AGENT_ACCOUNT_STORE_KEY_PATH') ||

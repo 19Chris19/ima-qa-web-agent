@@ -7,6 +7,7 @@ const { chromium } = require('playwright-core');
 const { IMAWebAgentClient, getBkn, stringifyCookie } = require('./ima-web-agent-client');
 const { normalizeAccountId } = require('./web-agent-account-directory');
 const { connectEnrollmentBrowser } = require('./enrollment-browser-bridge');
+const { parseShareUrl, verifySharedMembership } = require('./shared-kb-target');
 
 const DEFAULT_ENROLLMENT_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_SCREENSHOT_INTERVAL_MS = 900;
@@ -25,6 +26,8 @@ const SAFE_ENROLLMENT_STAGES = new Set([
   'waiting_for_scan',
   'browser_fallback',
   'verifying',
+  'waiting_for_membership',
+  'access_unverified',
   'completed',
   'failed',
   'cancelled',
@@ -44,6 +47,7 @@ class WebAgentEnrollmentManager {
       : launchVisibleBrowserContext);
     this.fetch = options.fetch || globalThis.fetch;
     this.captureAuth = options.captureAuth || captureAuthFromContext;
+    this.membershipVerifier = options.membershipVerifier || verifySharedMembership;
     this.now = options.now || Date.now;
     this.idFactory = options.idFactory || (() => crypto.randomUUID());
     this.sleep = options.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -76,6 +80,8 @@ class WebAgentEnrollmentManager {
     if (!knowledgeBaseId) {
       throw enrollmentError('服务尚未配置 IMA 共享知识库 ID', 503);
     }
+    const shareUrl = this.config.webAgent?.sharedKnowledgeBaseShareUrl
+      ? parseShareUrl(this.config.webAgent.sharedKnowledgeBaseShareUrl).url : '';
     const existing = this.accountDirectory.listAccounts().find((account) =>
       normalizeAccountId(account.id) === id || normalizeAccountId(account.name) === normalizeAccountId(name),
     );
@@ -93,6 +99,8 @@ class WebAgentEnrollmentManager {
       accountId: id,
       testQuestion,
       knowledgeBaseId,
+      shareUrl,
+      authorizationStatus: shareUrl ? 'pending' : 'legacy_session_check',
       replace: Boolean(options.replace),
       reauthAccountId: reauthAccount?.id || '',
       state: 'launching_browser',
@@ -136,6 +144,76 @@ class WebAgentEnrollmentManager {
   getActive() {
     const job = this.jobs.get(this.activeJobId);
     return job ? publicJob(job) : null;
+  }
+
+  async continueVerification(jobId) {
+    const job = this.jobs.get(String(jobId || ''));
+    if (!job || !['waiting_for_membership', 'access_unverified'].includes(job.state)) {
+      throw enrollmentError('当前任务不在等待知识库授权验证', 409);
+    }
+    if (job.continuing) return publicJob(job);
+    if (this.now() >= job.expiresAt) {
+      await this._fail(job, enrollmentError('授权任务已超时，未保存账号', 408, { code: 'enrollment_expired' }));
+      return publicJob(job);
+    }
+    job.continuing = true;
+    try {
+      const auth = await this.captureAuth(job.context);
+      if (!auth) {
+        job.authorizationStatus = 'login_expired';
+        job.detail = '登录态已失效，请取消后重新扫码；尚未保存账号';
+        return publicJob(job);
+      }
+      if (await this._verifyMembership(job, auth)) await this._acceptAuth(job, auth);
+      return publicJob(job);
+    } catch (error) {
+      await this._fail(job, error); return publicJob(job);
+    } finally { job.continuing = false; }
+  }
+
+  async _verifyMembership(job, auth) {
+    if (!job.shareUrl) return true;
+    this._setState(job, 'verifying', '正在核验目标知识库权限；尚未保存账号');
+    let membership = 'unknown';
+    try {
+      membership = (await this.membershipVerifier(job.shareUrl, { headers: auth.headers,
+        expectedId: job.knowledgeBaseId, fetchImpl: this.fetch })).membership;
+    } catch { /* Keep the window and allow retry without guessing membership. */ }
+    if (!isPending(job)) return false;
+    job.authorizationStatus = membership;
+    if (membership === 'joined') return true;
+    const waiting = ['not_joined', 'awaiting_approval'].includes(membership);
+    this._setState(job, waiting ? 'waiting_for_membership' : 'access_unverified', waiting
+      ? '等待加入知识库或管理员批准。请在官方窗口完成后点击继续验证；不会自动加入。'
+      : '无法确认访问权限。请检查官方页面和网络后继续验证；尚未保存账号。');
+    job.qr = null;
+    try { await job.page.goto(job.shareUrl, { waitUntil: 'commit', timeout: IMA_NAVIGATION_TIMEOUT_MS }); }
+    catch { /* Navigation failure does not change permission classification. */ }
+    return false;
+  }
+
+  async _acceptAuth(job, auth) {
+    if (!isPending(job)) return;
+    this._setState(job, 'verifying', '知识库授权通过，正在检查会话能力');
+    const client = this.clientFactory({ id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
+      headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3 });
+    await client.initSession();
+    if (job.state !== 'verifying') return;
+    const capturedAccount = { id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
+      headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3,
+      tokenExpiresAt: auth.tokenExpiresAt, refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
+      source: 'admin-qr-enrollment', replace: job.replace };
+    job.account = job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
+      : this.accountDirectory.upsertCapturedAccount(capturedAccount);
+    this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
+    await this._cleanup(job);
+    if (this.onEnrolled) {
+      job.detail = '授权通过，正在执行已声明的一次知识库问答验证'; this._touch(job);
+      const result = await this.onEnrolled(job.account.id, job.testQuestion); this.onAccountsSynced?.();
+      if (job.state === 'cancelled') return;
+      this._setState(job, 'completed', result.success ? '账号已接入，可用于知识库问答' : '账号已接入，问答验证未通过，请在账号列表重试');
+    } else this._setState(job, 'completed', '账号已验证并同步到账号池');
+    this._releaseActive(job); this._scheduleRemoval(job);
   }
 
   getQr(jobId) {
@@ -217,6 +295,18 @@ class WebAgentEnrollmentManager {
 
   isAvailable() {
     return Boolean(this.accountDirectory && this.pool && this._resolveBrowserPath());
+  }
+
+  async preflight() {
+    if (!this.isAvailable()) return { ready: false, mode: 'remote_cli', code: 'maintenance_desktop_required' };
+    const endpoint = this.config.webAgent?.enrollmentBrowserEndpoint;
+    if (!endpoint) return { ready: true, mode: 'local_browser', configured: true };
+    let browser;
+    try {
+      browser = await chromium.connect(endpoint, { timeout: 3000 });
+      return { ready: true, mode: 'desktop_helper', configured: true };
+    } catch { return { ready: false, mode: 'desktop_helper', configured: true, code: 'browser_helper_unavailable_or_incompatible' }; }
+    finally { await browser?.close().catch(() => {}); }
   }
 
   async _launch(job, options = {}) {
@@ -455,50 +545,7 @@ class WebAgentEnrollmentManager {
             }));
             return;
           }
-          this._setState(job, 'verifying', '已检测到登录态，正在验证共享知识库访问权限');
-          job.qr = null;
-          const client = this.clientFactory({
-            id: job.accountId,
-            name: job.name,
-            knowledgeBaseId: job.knowledgeBaseId,
-            headers: auth.headers,
-            modelId: this.config.webAgent?.modelId || 'official_3',
-            modelType: this.config.webAgent?.modelType || 3,
-          });
-          await client.initSession();
-          if (job.state !== 'verifying') {
-            return;
-          }
-          const capturedAccount = {
-            id: job.accountId,
-            name: job.name,
-            knowledgeBaseId: job.knowledgeBaseId,
-            headers: auth.headers,
-            modelId: this.config.webAgent?.modelId || 'official_3',
-            modelType: this.config.webAgent?.modelType || 3,
-            tokenExpiresAt: auth.tokenExpiresAt,
-            refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
-            source: 'admin-qr-enrollment',
-            replace: job.replace,
-          };
-          job.account = job.reauthAccountId
-            ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
-            : this.accountDirectory.upsertCapturedAccount(capturedAccount);
-          this.pool.syncAccounts(this.accountDirectory.getPoolAccounts());
-          this.onAccountsSynced?.();
-          await this._cleanup(job);
-          if (this.onEnrolled) {
-            job.detail = '登录完成，正在执行一次知识库问答验证';
-            this._touch(job);
-            const result = await this.onEnrolled(job.account.id, job.testQuestion);
-            this.onAccountsSynced?.();
-            if (job.state === 'cancelled') return;
-            this._setState(job, 'completed', result.success ? '账号已接入，可用于知识库问答' : '账号已接入，问答验证未通过，请在账号列表重试');
-          } else {
-            this._setState(job, 'completed', '账号已验证并同步到账号池');
-          }
-          this._releaseActive(job);
-          this._scheduleRemoval(job);
+          if (await this._verifyMembership(job, auth)) await this._acceptAuth(job, auth);
           return;
         }
         if (job.diagnostics.scanDetected) {
@@ -1306,6 +1353,9 @@ function publicJob(job, now = Date.now()) {
     taskId: job.id,
     name: job.name,
     mode: job.reauthAccountId ? 'reauth' : 'enroll',
+    authorizationStatus: job.authorizationStatus,
+    shareUrl: job.shareUrl || null,
+    canContinue: ['waiting_for_membership', 'access_unverified'].includes(job.state) && !job.continuing,
     state: job.state,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt || job.createdAt).toISOString(),
@@ -1342,7 +1392,7 @@ function publicJob(job, now = Date.now()) {
 }
 
 function isPending(job) {
-  return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying'].includes(job.state);
+  return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified'].includes(job.state);
 }
 
 function enrollmentError(message, statusCode = 400, details = {}) {

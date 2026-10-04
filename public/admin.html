@@ -142,6 +142,8 @@
           </header>
 
           <form class="admin-enrollment-form" id="enrollmentForm">
+            <p>请使用已加入目标知识库的 IMA 账号。扫码后可能执行上方声明的一次知识库问答验证。</p>
+            <a id="enrollmentShareLink" target="_blank" rel="noopener noreferrer" hidden>查看目标官方知识库</a>
             <label for="enrollmentName">账号名称</label>
             <input id="enrollmentName" maxlength="80" autocomplete="off" placeholder="account-c" required />
             <label for="enrollmentTestQuestion">知识库验证问题</label>
@@ -168,6 +170,7 @@
             </section>
             <div class="admin-enrollment-result" id="enrollmentResult" hidden></div>
             <button id="focusEnrollmentWindowButton" type="button" hidden>打开受控登录窗口</button>
+            <button id="continueEnrollmentButton" type="button" hidden>已处理，继续验证</button>
             <button id="cancelEnrollmentButton" type="button">取消接入</button>
           </section>
           <p class="admin-feedback" id="enrollmentDialogFeedback" role="status"></p>

@@ -87,6 +87,9 @@ function registerAdminRoutes(app, options = {}) {
         requiresGuiMaintenanceMachine: true,
         accountStoreManagedByServer: true,
         supportsAdminPageQr: Boolean(enrollmentManager?.isAvailable?.()),
+        shareUrl: options.config?.webAgent?.sharedKnowledgeBaseShareUrl || null,
+        mode: options.config?.webAgent?.enrollmentBrowserEndpoint ? 'desktop_helper' : enrollmentManager?.isAvailable?.() ? 'local_browser' : 'remote_cli',
+        repairCommand: 'onboard repair --env <private-provider-env>',
         timeoutSeconds: Math.round(Number(options.config?.webAgent?.enrollmentTimeoutMs || 0) / 1000) || 300,
         activeEnrollment: enrollmentManager?.getActive?.() || null,
       },
@@ -177,6 +180,14 @@ function registerAdminRoutes(app, options = {}) {
   }
 
   if (enrollmentManager) {
+    app.post('/api/admin/enrollment-preflight', auth, async (_req, res) => {
+      try { res.json({ success: true, enrollment: await enrollmentManager.preflight() }); }
+      catch { res.status(503).json({ success: false, code: 'enrollment_preflight_failed', error: '扫码通路未就绪，请运行 onboard repair 检查维护助手' }); }
+    });
+    app.post('/api/admin/enrollments/:enrollmentId/continue', auth, async (req, res) => {
+      try { res.json({ success: true, enrollment: await enrollmentManager.continueVerification(req.params.enrollmentId) }); }
+      catch (error) { sendAdminError(res, error); }
+    });
     app.post('/api/admin/enrollments', auth, async (req, res) => {
       try {
         const enrollment = await enrollmentManager.start({
@@ -233,9 +244,19 @@ function registerAdminRoutes(app, options = {}) {
     });
   }
 
-  app.post('/api/admin/accounts', auth, (req, res) => {
+  app.post('/api/admin/accounts', auth, async (req, res) => {
     try {
       rejectDuplicateAccount(accountDirectory, req.body, Boolean(req.body?.replace));
+      const shareUrl = options.config?.webAgent?.sharedKnowledgeBaseShareUrl;
+      if (shareUrl) {
+        const { verifySharedMembership } = require('./shared-kb-target');
+        const status = await (options.membershipVerifier || verifySharedMembership)(shareUrl, {
+          headers: req.body?.headers, expectedId: sharedKnowledgeBaseId,
+        });
+        if (status.membership !== 'joined') {
+          return res.status(409).json({ success: false, code: 'membership_unverified', error: '尚未确认目标知识库访问权限；不会保存账号，请加入后继续验证' });
+        }
+      }
       const account = accountDirectory.upsertCapturedAccount({
         name: req.body?.name,
         id: req.body?.id,

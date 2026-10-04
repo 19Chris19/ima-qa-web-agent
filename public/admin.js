@@ -27,6 +27,7 @@
   const enrollmentResult = document.querySelector('#enrollmentResult');
   const focusEnrollmentWindowButton = document.querySelector('#focusEnrollmentWindowButton');
   const cancelEnrollmentButton = document.querySelector('#cancelEnrollmentButton');
+  const continueEnrollmentButton = document.querySelector('#continueEnrollmentButton');
   const enrollmentDialogFeedback = document.querySelector('#enrollmentDialogFeedback');
   const exercisePanel = document.querySelector('#exercisePanel');
   const exerciseCapacityLabel = document.querySelector('#exerciseCapacityLabel');
@@ -92,6 +93,14 @@
   enrollmentForm.addEventListener('submit', startEnrollment);
   focusEnrollmentWindowButton.addEventListener('click', focusEnrollmentWindow);
   cancelEnrollmentButton.addEventListener('click', cancelEnrollment);
+  continueEnrollmentButton.addEventListener('click', async () => {
+    continueEnrollmentButton.disabled = true;
+    try {
+      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}/continue`, { method: 'POST' });
+      enrollment = payload.enrollment; renderEnrollment();
+    } catch { setFeedback(enrollmentDialogFeedback, '暂时无法继续验证，请检查网络后重试', true); }
+    finally { continueEnrollmentButton.disabled = false; }
+  });
   exerciseProfile.addEventListener('change', () => void loadExerciseTemplates());
   loadExerciseTemplatesButton.addEventListener('click', () => void loadExerciseTemplates());
   expandExerciseScriptButton.addEventListener('click', () => setDisclosureState(exerciseScript, true));
@@ -130,7 +139,7 @@
       login.hidden = true;
       panel.hidden = false;
       renderSummary(accountPayload.summary, accountPayload.queue);
-      startEnrollmentButton.disabled = !bootstrap?.enrollment?.supportsAdminPageQr;
+      startEnrollmentButton.disabled = false;
       startEnrollmentButton.title = bootstrap?.enrollment?.supportsAdminPageQr
         ? ''
         : '当前服务未启用页面二维码接入';
@@ -203,7 +212,7 @@
 
   function openEnrollmentDialog() {
     if (!bootstrap?.enrollment?.supportsAdminPageQr) {
-      setFeedback(enrollFeedback, '当前服务未启用页面二维码接入', true);
+      setFeedback(enrollFeedback, '扫码助手未就绪。维护电脑运行 onboard repair --env <私有配置文件>；Linux 服务器请使用 onboard tunnel 和 onboard enroll。详见 Agent 部署说明。', true);
       return;
     }
     const activeEnrollment = bootstrap?.enrollment?.activeEnrollment;
@@ -215,6 +224,11 @@
     } else {
       resetEnrollmentDialog();
     }
+    const shareLink = document.querySelector('#enrollmentShareLink');
+    const shareUrl = bootstrap?.enrollment?.shareUrl;
+    shareLink.hidden = !shareUrl;
+    if (shareUrl && /^https:\/\/ima\.qq\.com\/wiki\/?\?shareId=[a-f0-9]{64}$/i.test(shareUrl)) shareLink.href = shareUrl;
+    else shareLink.hidden = true;
     enrollmentDialog.showModal();
     if (enrollment) {
       void refreshEnrollment();
@@ -236,6 +250,8 @@
     setFeedback(enrollmentDialogFeedback, '');
     createEnrollmentButton.disabled = true;
     try {
+      const preflight = await request('/api/admin/enrollment-preflight', { method: 'POST' });
+      if (!preflight.enrollment?.ready) throw new Error('扫码助手离线或版本不兼容。请在维护电脑运行 onboard repair --env <私有配置文件>，检查后重试；不会修改已有账号。');
       const payload = await request('/api/admin/enrollments', {
         method: 'POST',
         body: JSON.stringify({
@@ -318,6 +334,7 @@
     enrollmentState.textContent = enrollmentStateLabel(enrollment.state);
     enrollmentStatusText.textContent = enrollmentStatus(enrollment);
     cancelEnrollmentButton.hidden = !active;
+    continueEnrollmentButton.hidden = !enrollment.canContinue;
     enrollmentQr.hidden = !enrollment.qrAvailable || useVisibleBrowser;
     enrollmentQrNote.hidden = !enrollment.qrAvailable || useVisibleBrowser;
     enrollmentResult.hidden = !enrollment.account;
@@ -465,7 +482,7 @@
   }
 
   function isActiveEnrollmentState(state) {
-    return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying'].includes(state);
+    return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified'].includes(state);
   }
 
   function enrollmentStateLabel(state) {
@@ -477,6 +494,8 @@
       waiting_for_scan: '等待扫码登录',
       browser_fallback: '可在受控窗口继续登录',
       verifying: '正在验证共享知识库',
+      waiting_for_membership: '等待加入知识库或批准',
+      access_unverified: '无法确认访问权限',
       completed: '账号接入完成',
       failed: '账号接入失败',
       cancelled: '已取消接入',

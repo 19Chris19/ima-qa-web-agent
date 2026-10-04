@@ -85,3 +85,15 @@ test('foreign projects and protocol failures block before any secret is generate
     assert.equal(fs.existsSync(path.join(root, '.onboarding/provider.env')), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+test('SSH preparation keeps only maintenance credentials locally and never prints them', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-fixture-')); const events = [];
+  try {
+    const deps = { capture: async () => 'IMA_QA_ADMIN_TOKEN=synthetic-admin\nIMA_QA_API_TOKEN=synthetic-ordinary\nIMA_QA_INTERNAL_SERVICE_TOKEN=synthetic-internal\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID=123456789\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL=https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64), fetch: async () => new Response(fixture()) };
+    await guided(root, 'remote-prepare', { ssh: 'synthetic-server', remoteEnv: '/private/provider.env' }, e => events.push(e), deps);
+    const text = fs.readFileSync(path.join(root, '.onboarding/remote-admin.env'), 'utf8');
+    assert.ok(text.includes('synthetic-admin'));
+    assert.ok(!text.includes('synthetic-internal') && !text.includes('synthetic-ordinary'));
+    assert.ok(!JSON.stringify(events).includes('synthetic-admin'));
+    await assert.rejects(guided(root, 'remote-prepare', { ssh: '-oProxyCommand=evil', remoteEnv: '/private/provider.env' }, () => {}, deps), /ssh_alias/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

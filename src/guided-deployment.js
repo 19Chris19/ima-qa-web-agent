@@ -12,7 +12,7 @@ const { resolveSharedTarget } = require('./shared-kb-target');
 const fail = code => Object.assign(new Error(code), { code });
 function parseOptions(args) {
   const options = {};
-  const names = new Set(['share-url', 'env', 'project', 'port', 'mode', 'image', 'name', 'server-url', 'ssh', 'remote-port', 'local-port', 'directory']);
+  const names = new Set(['share-url', 'env', 'project', 'port', 'mode', 'image', 'name', 'server-url', 'ssh', 'remote-env', 'remote-port', 'local-port', 'directory']);
   for (let i = 0; i < args.length; i++) {
     const key = args[i]?.replace(/^--/, '');
     if (!args[i]?.startsWith('--') || !names.has(key) || !args[i + 1] || args[i + 1].startsWith('--')) throw fail('invalid_arguments');
@@ -295,6 +295,18 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     await run('ssh', ['-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
       '-L', `127.0.0.1:${port(options.localPort, 13317)}:127.0.0.1:${port(options.remotePort, 3117)}`, options.ssh],
     { interactive: true, timeout: 3600000, code: 'ssh_tunnel_failed' }); return;
+  }
+  if (command === 'remote-prepare') {
+    if (!options.ssh || !/^[a-zA-Z0-9][a-zA-Z0-9_.@-]{0,120}$/.test(options.ssh)
+      || !/^\/[a-zA-Z0-9_./-]+$/.test(options.remoteEnv || '')) throw fail('ssh_alias_and_absolute_private_env_required');
+    const env = dotenv.parse(await readCommand('ssh', [options.ssh, 'cat', options.remoteEnv]));
+    if (!env.IMA_QA_ADMIN_TOKEN || !env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID || !env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL) throw fail('server_configuration_incomplete');
+    const target = await resolveSharedTarget(env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL, {
+      fetchImpl, expectedId: env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID });
+    const file = path.join(directory, 'remote-admin.env');
+    privateWrite(file, `IMA_QA_ADMIN_TOKEN=${env.IMA_QA_ADMIN_TOKEN}\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID=${target.knowledgeBaseId}\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL=${target.shareUrl}\n`);
+    emit({ stage: 'maintenance_configured', privateEnv: file, credentialsConfigured: true,
+      next: 'Open the SSH tunnel, then onboard enroll --env <privateEnv> --server-url http://127.0.0.1:<local-port> --name <account-name>' }); return;
   }
   throw fail('unknown_command');
 }

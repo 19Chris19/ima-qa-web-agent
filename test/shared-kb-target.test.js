@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseShareUrl, parseShareHtml, resolveSharedTarget } = require('../src/shared-kb-target');
+const { parseShareUrl, parseShareHtml, resolveSharedTarget, verifySharedMembership } = require('../src/shared-kb-target');
 const { fixture } = require('./helpers/share-metadata');
 
 const shareId = 'a'.repeat(64);
@@ -31,4 +31,16 @@ test('reject redirects, oversized responses and mismatched bindings', async () =
   await assert.rejects(resolveSharedTarget(url, { fetchImpl: async () => new Response('', { status: 302 }) }), /share_unavailable/);
   await assert.rejects(resolveSharedTarget(url, { fetchImpl: async () => new Response('x'.repeat(1_048_577)) }), /share_too_large/);
   await assert.rejects(resolveSharedTarget(url, { fetchImpl: async () => new Response(fixture()), expectedId: '987' }), /knowledge_base_mismatch/);
+});
+test('authenticated membership is bound to the configured target and fails closed', async () => {
+  const options = { expectedId: '123', headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic', 'x-ima-bkn': '123' } };
+  const fetchImpl = role => async (target, request) => {
+    assert.equal(target, 'https://ima.qq.com/cgi-bin/knowledge_share_get/get_share_info');
+    assert.equal(JSON.parse(request.body).share_id, shareId);
+    return Response.json({ code: 0, knowledge_base_info: { id: '123', user_permission_info: { role_type: role } } });
+  };
+  assert.equal((await verifySharedMembership(url, { ...options, fetchImpl: fetchImpl(100) })).membership, 'joined');
+  assert.equal((await verifySharedMembership(url, { ...options, fetchImpl: fetchImpl(0) })).membership, 'unknown');
+  await assert.rejects(verifySharedMembership(url, { ...options, expectedId: '456', fetchImpl: fetchImpl(100) }), /membership_unverified/);
+  await assert.rejects(verifySharedMembership(url, { ...options, fetchImpl: async () => { throw new Error('synthetic offline'); } }), /synthetic offline/);
 });

@@ -2,16 +2,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import os from 'node:os';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { chromium } from 'playwright-core';
 import accountDirectoryModule from '../src/web-agent-account-directory.js';
 import imaWebAgentModule from '../src/ima-web-agent-client.js';
+import targetModule from '../src/shared-kb-target.js';
 
 const { WebAgentAccountDirectory, defaultAccountStoreKeyPath, defaultAccountStorePath } =
   accountDirectoryModule;
 const { IMAWebAgentClient, getBkn, stringifyCookie } = imaWebAgentModule;
+const { resolveSharedTarget, verifySharedMembership } = targetModule;
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 dotenv.config({ path: path.join(appDir, '.env') });
@@ -21,18 +24,29 @@ async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let context;
   let userDataDir = '';
-  let captured = false;
+  let interrupted = false;
+  const stop = async () => {
+    interrupted = true;
+    await context?.close().catch(() => {});
+    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
+    rl.close(); process.exit(130);
+  };
+  process.once('SIGINT', stop); process.once('SIGTERM', stop);
 
   try {
     const name = cleanAccountName(args.name || (await rl.question('账号名称，如 account-a: ')));
+    let shareUrl = args.shareUrl || process.env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL;
+    const target = shareUrl ? await resolveSharedTarget(shareUrl) : null;
     const knowledgeBaseId = cleanRequired(
       args.kb ||
         args.knowledgeBaseId ||
+        target?.knowledgeBaseId ||
         process.env.IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID ||
         process.env.IMA_WEB_KNOWLEDGE_BASE_ID ||
         (await rl.question('IMA Web 共享知识库 ID: ')),
       'knowledgeBaseId',
     );
+    if (target && target.knowledgeBaseId !== knowledgeBaseId) throw new Error('知识库分享链接与配置不一致');
     const serverUrl = String(args.serverUrl || process.env.IMA_QA_ADMIN_URL || '')
       .trim()
       .replace(/\/+$/, '');
@@ -47,21 +61,20 @@ async function main() {
       throw new Error('--runtime-env 只能用于直接写本地账号库；远程接入由服务端加密账号库保存凭证');
     }
     const runtimeEnvPath = args.runtimeEnv ? path.resolve(args.runtimeEnv) : '';
-    userDataDir =
-      args.userDataDir || path.join(path.dirname(storePath), 'browser-profiles', `ima-${name}`);
-    if (args.resetProfile) {
-      fs.rmSync(userDataDir, { recursive: true, force: true });
-    }
+    if (args.userDataDir || args.resetProfile || args.keepProfile) throw new Error('请使用全新的临时浏览器，不复用或保留登录资料');
+    userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ima-maintenance-enroll-'));
     const store = serverUrl ? null : new WebAgentAccountDirectory({ storePath, keyPath });
 
     if (serverUrl) {
-      await preflightServerEnrollment({
+      const bootstrap = await preflightServerEnrollment({
         serverUrl,
         adminToken: process.env.IMA_QA_ADMIN_TOKEN,
         name,
         knowledgeBaseId,
         replace: Boolean(args.replace),
       });
+      shareUrl ||= bootstrap.enrollment?.shareUrl;
+      if (shareUrl) await resolveSharedTarget(shareUrl, { expectedId: knowledgeBaseId });
     } else if (!args.replace) {
       const existing = store.listAccounts().find((account) =>
         normalizeAccountKey(account.id) === normalizeAccountKey(name) ||
@@ -76,6 +89,7 @@ async function main() {
     console.log(`浏览器: ${browserPath}`);
     console.log(`保存位置: ${serverUrl ? `服务端 ${serverUrl}` : store.storePath}`);
     console.log('登录完成后脚本会自动捕获登录态，不会输出 token 原文。\n');
+    if (shareUrl) console.log(`请使用已加入目标知识库的 IMA 账号。官方链接：${shareUrl}`);
 
     context = await chromium.launchPersistentContext(userDataDir, {
       executablePath: browserPath,
@@ -91,7 +105,23 @@ async function main() {
       { waitUntil: 'domcontentloaded' },
     );
 
-    const auth = await waitForLoginAuth(context, Number(args.timeoutMs || 10 * 60 * 1000));
+    let auth = await waitForLoginAuth(context, Number(args.timeoutMs || 10 * 60 * 1000));
+    if (shareUrl) {
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (true) {
+        if (Date.now() >= deadline) throw new Error('知识库授权验证超时，未保存账号');
+        let membership = 'unknown';
+        try { membership = (await verifySharedMembership(shareUrl, { expectedId: knowledgeBaseId, headers: auth.headers })).membership; }
+        catch { /* Do not classify network failures as non-membership. */ }
+        if (membership === 'joined') break;
+        console.log(membership === 'unknown' ? '无法确认访问权限，请检查官方页面和网络；尚未保存账号。' : '等待人工加入知识库或管理员批准；尚未保存账号。');
+        await page.goto(shareUrl, { waitUntil: 'commit', timeout: 15000 }).catch(() => {});
+        const answer = await Promise.race([rl.question('请在同一官方窗口处理后按 Enter 继续，输入 cancel 取消：'),
+          new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('授权等待超时')), Math.max(1, deadline - Date.now())); timer.unref(); })]);
+        if (answer.trim().toLowerCase() === 'cancel') throw new Error('已取消接入，未保存账号');
+        auth = await waitForLoginAuth(context, Math.max(1, deadline - Date.now()));
+      }
+    }
     const headers = auth.headers;
 
     const client = new IMAWebAgentClient({
@@ -104,6 +134,7 @@ async function main() {
       runtimeEnvPath,
     });
     await client.initSession();
+    if (interrupted) throw new Error('已取消接入');
 
     const accountInput = {
       id: args.id || name,
@@ -123,7 +154,6 @@ async function main() {
         replace: Boolean(args.replace),
       })
       : store.upsertCapturedAccount({ ...accountInput, replace: Boolean(args.replace) });
-    captured = true;
     console.log('\n账号接入成功：');
     console.log(JSON.stringify({
       id: account.id,
@@ -137,10 +167,11 @@ async function main() {
     if (context) {
       await context.close().catch(() => {});
     }
-    if (captured && userDataDir && !args.keepProfile) {
+    if (userDataDir) {
       fs.rmSync(userDataDir, { recursive: true, force: true });
     }
     rl.close();
+    process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
   }
 }
 
@@ -184,6 +215,7 @@ async function preflightServerEnrollment({ serverUrl, adminToken, name, knowledg
   if (existing && !replace) {
     throw new Error(`账号 ${existing.name} 已存在；如确认要重新绑定登录态，请显式使用 --replace`);
   }
+  return bootstrap;
 }
 
 async function getServerJson(url, headers) {
@@ -331,6 +363,7 @@ function normalizeAccountKey(value) {
 }
 
 main().catch((error) => {
-  console.error(`账号接入失败：${error.message}`);
+  const code = /^[a-z_]+$/.test(error.code || '') ? error.code : 'enrollment_failed';
+  console.error(`账号接入未完成（${code}）。请检查扫码、官方知识库访问和服务连接后重试；未输出凭证。`);
   process.exit(1);
 });
