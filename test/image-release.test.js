@@ -11,6 +11,8 @@ test('version image publication is gated and immutable', () => {
   assert.match(workflow, /npm test/);
   assert.match(workflow, /release-manifest\.json/);
   assert.match(workflow, /image-smoke/);
+  assert.match(workflow, /ubuntu-24\.04-arm/);
+  assert.match(workflow, /needs: \[publish, smoke\]/);
   assert.doesNotMatch(workflow, /tags:.*latest/);
   for (const line of workflow.split('\n').filter(line => line.includes('uses:'))) {
     assert.match(line, /@[a-f0-9]{40}/);
