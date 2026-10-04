@@ -51,3 +51,14 @@ after accounts have been added.
 
 This is a Docker Desktop maintenance workflow, not a remotely exposed browser
 service or a claim that a headless Linux host can open a Mac window by itself.
+
+## Publication candidate review (2026-10-04)
+
+This patch is compatible with the public v0.4.0 contract and does not require
+website UI changes. The helper now rejects malformed configuration, an invalid
+port or a non-absolute browser path with a generic message; its key cannot appear
+in a JSON parser error. The separate fresh-enrollment patch supplies the client
+version required by the current knowledge Agent request. This review does not
+repeat account login, alter existing account stores, or certify long-running
+cloud Linux operation. The earlier rehearsal result above is historical, not a
+statement about the reader's current deployment.

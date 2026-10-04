@@ -43,6 +43,8 @@ Provider A 有两种支持的首次接入方式。它们使用同一套加密账
 
 不要在无 GUI 的 Docker/纯 Linux 服务端期待自动弹出浏览器窗口，也不要为了扫码把管理 API 暴露到公网。
 
+Docker Desktop 维护机希望保留“管理页接入账号 → 官方 IMA 扫码窗口”的体验时，可配置[私有维护浏览器助手](./DOCKER_BROWSER_ENROLLMENT.md)。这是可选的本机维护路径，不是镜像默认携带 GUI，也不取代 Linux 的远程 CLI 接入。
+
 ### Docker 部署（服务器端）
 
 ```bash
