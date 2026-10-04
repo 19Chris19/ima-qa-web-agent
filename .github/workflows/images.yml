@@ -20,6 +20,8 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -66,12 +68,54 @@ jobs:
             RELEASE_VERSION=${{ env.VERSION }}
           provenance: mode=max
           sbom: true
-      - name: Verify published images without IMA access
+  smoke:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.version || github.ref_name }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Native image-smoke without IMA access
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          node scripts/image-smoke.cjs "$IMAGE@$DIGEST" linux/amd64
-          node scripts/image-smoke.cjs "$IMAGE@$DIGEST" linux/arm64
+          node scripts/image-smoke.cjs "ghcr.io/${GITHUB_REPOSITORY,,}@$DIGEST" "$PLATFORM"
+
+  manifest:
+    needs: [publish, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.version || github.ref_name }}
+      - name: Record accepted immutable image
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          export IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          export REVISION="$(git rev-parse HEAD)"
           node -e 'require("fs").writeFileSync("release-manifest.json", JSON.stringify({schemaVersion:1,version:process.env.VERSION,revision:process.env.REVISION,image:process.env.IMAGE,digest:process.env.DIGEST,platforms:["linux/amd64","linux/arm64"],acceptance:"synthetic startup; no real IMA question",visibility:"verify public anonymous pull before Release"},null,2)+"\n")'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
