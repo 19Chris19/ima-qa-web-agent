@@ -61,6 +61,12 @@ their first account write. New/previously enabled accounts use
 duplicate and unknown disable reasons are not silently released. Existing accounts
 are not mass-migrated or probed. Imported accounts do not start an automatic probe.
 
+This is not a universal new-proof requirement for every entrypoint. Startup
+`env-seed` in provider-a-server.js/server.js intentionally retains its legacy
+compatibility behavior; it does not request this new gate and can remain usable
+in classic mode without a new proof. Direct internal Directory callers must opt
+in with `requireQualification: true`; an existing pending marker is still honored.
+
 Only an explicit admin verify action or the declared enrollment callback starts
 one knowledge-agent probe. GET, startup and ordinary enable never do so. Pending
 accounts cannot be enabled through the normal enable API (409); paused credentials
@@ -83,9 +89,29 @@ Use **Verify QA capability** in the account list to retry without scanning again
 each retry authorizes one fresh question. Expired credentials still require login.
 Successful proof committed before cancellation wins: cancellation reports completed
 rather than claiming to undo an already committed activation. To pause it, use
-the explicit disable action. A successful proof with pool-sync failure is reported
-as `pool_sync_failed` and remains locally quarantined, not as ready; its disk proof
-may already be committed and requires reconciliation before service acceptance.
+the explicit disable action.
+
+Both the quarantine-stage sync and the post-commit sync fail closed locally,
+including throws before any pool update, partial updates and replacement objects.
+The target retains a maintenance admission lock; both classic and knowledge-agent
+capacity exclude it. A sync failure is not classified as an upstream probe error
+and never clears that lock in verification cleanup. No automatic repair/re-probe
+is performed; reconcile the failed pool before service acceptance or further use.
+
+Verification and cancel responses explicitly include `commitApplied` and `warning`:
+- Quarantine-stage sync failure returns `commitApplied: false`,
+  `warning: "pool_sync_failed"`, with no probe dispatch and a disabled disk account.
+- After successful atomic commit, sync failure returns `commitApplied: true`, the
+  same warning, and `success: false` because local scheduling did not recover.
+  `activated` describes the durable enable state, not local schedulability; local
+  capacity remains zero. Cancel/shutdown and the enrollment completion preserve
+  the committed outcome plus warning, never claim the enabled disk account was
+  cancelled back to disabled. The commit receipt is recorded immediately after
+  the atomic write succeeds, independently of final sync status.
+
+`commitApplied: false` alone does not prove zero requests: a generation conflict
+followed by recovery-sync failure can occur after a probe dispatched, without a
+proof commit. Do not automatically retry either case.
 
 | Phase/result | Durable account state | Next action |
 |---|---|---|
@@ -94,6 +120,8 @@ may already be committed and requires reconciliation before service acceptance.
 | Probe failed/cancelled/timed out | Saved and disabled | Explicit single-probe retry; no rescan unless auth expired |
 | Proof committed for pending account | Proof and enable committed together | Normal scheduling |
 | Proof committed for manual/migration pause | Proof saved; pause preserved | Explicit enable if desired |
+| Quarantine-stage sync failed | Disabled, no new proof; commitApplied=false | Reconcile local pool; no automatic probe |
+| Post-commit sync failed | Proof/enable already committed; commitApplied=true | Reconcile local pool; cancellation does not undo commit |
 
 ## Cancellation and Phase Deadlines
 

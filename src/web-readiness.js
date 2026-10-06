@@ -62,6 +62,8 @@ class WebReadiness {
         account.activeRequests === 0 && account.cooldownUntil <= this.pool.now() &&
         (this.mode === 'classic_knowledge' || qualified));
       return { id: row.id, qualified: Boolean(qualified), schedulable,
+        commitApplied: job?.commitApplied === true,
+        warning: job?.code === 'pool_sync_failed' ? 'pool_sync_failed' : null,
         verifiedAt: account?.webQualification?.verifiedAt || null,
         state: job?.running ? 'verifying' : needsLogin ? 'needs_login' : account?.disabled
           ? account.disabledReason === 'pending_enrollment_qualification' ? 'pending' : 'disabled' : account?.activeRequests ? 'busy' :
@@ -87,14 +89,14 @@ class WebReadiness {
       throw Object.assign(new Error('账号需要处于空闲且非冷却状态'), { statusCode: 409 });
     }
     const controller = new AbortController();
-    const job = { running: true, code: 'probe_in_progress', controller };
+    const job = { running: true, code: 'probe_in_progress', commitApplied: false, controller };
     this.jobs.set(id, job);
     account.maintenanceOperation = 'qualification';
     let timer;
     try {
       // Quarantine before dispatch, including revalidation in classic mode.
       this.directory.beginWebQualification(id);
-      this.sync();
+      try { this.sync(); } catch { throw new Error('pool_sync_failed'); }
       const config = this.directory.getPoolAccounts().find(a => a.id === id);
       if (!config) throw conflict();
       // sync can persist pool observations; bind only after those synchronous writes.
@@ -118,6 +120,7 @@ class WebReadiness {
       const proof = { contract: knowledgeAgentContractDigest(), principalFingerprint: config.principalFingerprint,
         scope: hash(config.knowledgeBaseId), verifiedAt: new Date().toISOString(), requests, terminals };
       this.directory.commitWebQualification(id, proof, expected);
+      job.commitApplied = true;
       try { this.sync(); } catch { job.code = 'pool_sync_failed'; throw new Error('pool_sync_failed'); }
       job.code = 'ok';
     } catch (error) {
@@ -131,21 +134,31 @@ class WebReadiness {
       clearTimeout(timer);
       controller.abort();
       job.running = false;
-      if (job.code !== 'pool_sync_failed') account.maintenanceOperation = '';
+      if (job.code === 'pool_sync_failed') {
+        // A partial sync may replace the pool object or leave an enabled stale one.
+        for (const target of new Set([account, ...this.pool.accounts.filter(row => row.id === id)])) {
+          target.maintenanceOperation = 'qualification';
+          if (!job.commitApplied) target.webQualification = null;
+        }
+      } else account.maintenanceOperation = '';
       this.pool._notifyAvailability();
     }
     return { success: job.code === 'ok', code: job.code,
-      activated: job.code === 'ok' && this.directory.getAccount(id)?.runtime.disabled === false,
+      commitApplied: job.commitApplied,
+      warning: job.code === 'pool_sync_failed' ? 'pool_sync_failed' : null,
+      activated: job.commitApplied && this.directory.getAccount(id)?.runtime.disabled === false,
       ...this.snapshot() };
   }
 
   cancel(id) {
     const job = this.jobs.get(id);
     const account = this.directory.getAccount(id);
-    const completed = job?.running === false && job.code === 'ok' && Boolean(account)
+    const completed = job?.running === false && job.commitApplied === true && Boolean(account)
       && account.runtime.enrollmentQualificationRequired !== true && validProof(account);
     job?.controller.abort();
     return { success: true, completed,
+      commitApplied: job?.commitApplied === true,
+      warning: job?.code === 'pool_sync_failed' ? 'pool_sync_failed' : null,
       activated: completed && this.directory.getAccount(id)?.runtime.disabled === false };
   }
 }

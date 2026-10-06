@@ -1,5 +1,20 @@
 # v0.4.2 onboarding candidate acceptance
 
+## Sync-fault review follow-up (independent candidate)
+
+`FIX-20261006-PUBLIC-ENROLL-SYNC-FAULTS` follows review of `6fc756a` without
+merging INT. Capture/quarantine-stage and post-commit pool sync faults retain local
+admission isolation. Explicit `commitApplied` and `warning` distinguish a rejected
+attempt from an already committed proof with failed local synchronization;
+completion/cancel/shutdown do not pretend to roll back the latter. Startup env-seed
+remains legacy-compatible, not universally subject to a new proof requirement.
+
+Final explicit-root synthetic regression: **457/457 passed, zero failures/skips**.
+The 15-case phase/fault/mode matrix and two capture-sync cases were red before
+their fixes; UI checks cover both commit outcomes. No live, private runtime,
+container, release or all-platform acceptance was performed. See the change record
+and ACCOUNT_ENROLLMENT.md for the isolation and receipt contract.
+
 ## Pending-activation follow-up (independent candidate)
 
 `FIX-20261006-PUBLIC-ENROLL-ACTIVATION`, based on integration revision

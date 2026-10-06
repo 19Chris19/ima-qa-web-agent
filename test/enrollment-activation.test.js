@@ -304,3 +304,43 @@ test('post-commit pool sync failure retains local quarantine and reports committ
   assert.equal(f.pool.accounts[0].maintenanceOperation, 'qualification');
   assert.ok(f.directory.reload().accounts[0].runtime.webQualification);
 });
+
+for (const phase of ['quarantine', 'commit']) {
+  for (const fault of ['before', 'after', 'replacement']) {
+    for (const mode of ['classic_knowledge', 'knowledge_agent']) {
+      test(`${phase} sync fault ${fault} in ${mode} closes admission and preserves commit outcome`, async t => {
+        const f = fixture(t);
+        assert.equal((await f.readiness.verify('synthetic')).success, true);
+        f.readiness.setMode(mode);
+        let probes = 0, syncs = 0;
+        f.readiness.clientFactory = () => ({ async *streamAsk(options) { probes++; yield* success(options); } });
+        const sync = f.pool.syncAccounts.bind(f.pool);
+        f.pool.syncAccounts = rows => {
+          if (++syncs !== (phase === 'quarantine' ? 1 : 2)) return sync(rows);
+          if (fault !== 'before') sync(rows);
+          if (fault === 'replacement') f.pool.accounts = f.pool.accounts.map(row => ({ ...row, maintenanceOperation: '' }));
+          throw new Error('synthetic-sync-fault');
+        };
+        const result = await f.readiness.verify('synthetic');
+        assert.equal(result.code, 'pool_sync_failed');
+        assert.equal(result.success, false);
+        assert.equal(result.capacity, 0);
+        assert.equal(result.knowledgeAgentCapacity, 0);
+        assert.equal(result.schedulable, 0);
+        assert.equal(f.pool._leaseAccount(), null);
+        assert.equal(result.commitApplied, phase === 'commit');
+        assert.equal(result.warning, 'pool_sync_failed');
+        assert.equal(result.activated, phase === 'commit');
+        assert.equal(probes, phase === 'commit' ? 1 : 0);
+        const account = f.directory.reload().accounts[0];
+        assert.equal(account.runtime.disabled, phase !== 'commit');
+        assert.equal(Boolean(account.runtime.webQualification), phase === 'commit');
+        const cancelled = f.readiness.cancel('synthetic');
+        assert.equal(cancelled.completed, phase === 'commit');
+        assert.equal(cancelled.commitApplied, phase === 'commit');
+        assert.equal(cancelled.warning, 'pool_sync_failed');
+        assert.equal(f.readiness.snapshot().capacity, 0);
+      });
+    }
+  }
+}

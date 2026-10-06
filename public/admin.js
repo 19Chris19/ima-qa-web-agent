@@ -236,7 +236,7 @@
     }
   }
 
-  async function request(url, options = {}) {
+  async function request(url, options = {}, { allowUnsuccessfulResult = false } = {}) {
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -246,7 +246,7 @@
       },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload.success === false) {
+    if (!response.ok || (!allowUnsuccessfulResult && payload.success === false)) {
       throw new Error(payload.error || `请求失败 (${response.status})`);
     }
     return payload;
@@ -1558,9 +1558,13 @@
     accountActionFeedback.set(account.id, { message: '正在验证问答能力...', isError: false });
     renderAccounts();
     try {
-      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`, { method: 'POST', body: JSON.stringify({ question }) });
+      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`,
+        { method: 'POST', body: JSON.stringify({ question }) }, { allowUnsuccessfulResult: true });
       const messages = { ok: '验证成功，可用于知识库问答', probe_evidence_insufficient: '回答或知识库来源不足，账号保留待验证', probe_timeout: '验证超时，请稍后手动重试', probe_cancelled: '验证已取消', account_store_generation_conflict: '账号状态发生变化，请重新验证', pool_sync_failed: '验证已保存，调度同步失败，账号暂时隔离', auth_expired: '登录已过期，请重新登录', auth_rejected: '登录被拒绝，请重新登录', upstream_temporary: '上游暂时不可用，请稍后重试' };
-      accountActionFeedback.set(account.id, { message: result.success && result.activated === false
+      accountActionFeedback.set(account.id, { message: result.warning === 'pool_sync_failed'
+        ? result.commitApplied ? '资格已提交，但调度同步失败；账号本机隔离，取消不会撤销提交'
+          : '资格未提交，调度同步失败；账号本机隔离，登录态已保存'
+        : result.success && result.activated === false
         ? '问答资格已验证，账号仍保持停用；登录态已保存'
         : messages[result.code] || `验证未完成（${result.code}）`, isError: !result.success });
     } catch (error) { accountActionFeedback.set(account.id, { message: error.message, isError: true }); }

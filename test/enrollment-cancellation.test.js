@@ -192,3 +192,70 @@ for (const action of ['cancel', 'shutdown']) {
     assert.equal(f.directory.reload().accounts[0].runtime.disabled, false);
   });
 }
+
+for (const action of ['complete', 'cancel', 'shutdown']) {
+  test(`${action} after committed proof and sync failure preserves receipt and warning`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch();
+        yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' };
+        yield { type: 'done' };
+      } }),
+    });
+    const sync = f.pool.syncAccounts.bind(f.pool);
+    f.pool.syncAccounts = rows => {
+      if (rows.some(row => row.webQualification)) throw new Error('synthetic-post-commit-sync-fault');
+      sync(rows);
+    };
+    f.manager.onEnrolled = async id => {
+      const result = await readiness.verify(id);
+      entered.resolve(); await release.promise;
+      return result;
+    };
+    f.manager.onCancelVerification = id => readiness.cancel(id);
+    f.scan(); await entered.promise;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    if (action === 'shutdown') await f.manager.shutdown();
+    release.resolve(); await f.job.monitorPromise;
+    assert.equal(f.job.state, 'completed');
+    assert.equal(f.job.commitApplied, true);
+    assert.equal(f.job.warning, 'pool_sync_failed');
+    assert.match(f.job.detail, /同步失败/);
+    assert.doesNotMatch(f.job.detail, /已取消|保持停用|可用于/);
+    assert.equal(f.directory.reload().accounts[0].runtime.disabled, false);
+    assert.equal(readiness.snapshot().capacity, 0);
+    if (action !== 'shutdown') {
+      assert.equal(f.manager.get(f.taskId).commitApplied, true);
+      assert.equal(f.manager.get(f.taskId).warning, 'pool_sync_failed');
+    }
+  });
+}
+
+for (const fault of ['before', 'replacement']) {
+  test(`capture sync fault ${fault} cannot leave the old reauth pool account admitted`, async t => {
+    const f = await fixture(t);
+    f.directory.upsertCapturedAccount({ id: 'synthetic-account', name: 'synthetic-account',
+      knowledgeBaseId: 'synthetic-kb', headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic-old' } });
+    f.pool.syncAccounts(f.directory.getPoolAccounts());
+    f.job.replace = true;
+    const previous = f.pool.accounts[0];
+    let probes = 0;
+    f.manager.onEnrolled = async () => { probes++; return { success: true }; };
+    f.pool.syncAccounts = () => {
+      if (fault === 'replacement') f.pool.accounts = [{ ...previous, maintenanceOperation: '' }];
+      throw new Error('synthetic-capture-sync-fault');
+    };
+    f.scan(); await f.job.monitorPromise;
+    assert.equal(f.job.state, 'failed');
+    assert.equal(f.job.warning, 'pool_sync_failed');
+    assert.equal(f.manager.get(f.taskId).commitApplied, false);
+    assert.equal(f.directory.reload().accounts[0].runtime.disabled, true);
+    assert.equal(previous.maintenanceOperation, 'qualification');
+    assert.equal(f.pool.accounts[0].maintenanceOperation, 'qualification');
+    assert.equal(probes, 0);
+  });
+}

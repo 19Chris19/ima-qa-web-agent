@@ -253,7 +253,18 @@ class WebAgentEnrollmentManager {
     job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
       : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
         : this.accountDirectory.upsertCapturedAccount(capturedAccount);
-    this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
+    const previousPoolAccount = this.pool.accounts?.find(account => account.id === job.account.id);
+    try {
+      this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
+    } catch {
+      for (const target of new Set([previousPoolAccount, ...(this.pool.accounts || []).filter(account => account.id === job.account.id)])) {
+        if (!target) continue;
+        target.maintenanceOperation = 'qualification';
+        target.webQualification = null;
+      }
+      job.warning = 'pool_sync_failed';
+      throw enrollmentError('登录态已保存，但调度同步失败；账号本机隔离，请先核对状态', 503, { code: 'pool_sync_failed' });
+    }
     // Login expiry ends here. The declared QA probe owns a separate bounded timeout.
     await this._cleanup(job);
     if (job.state === 'cancelled') return;
@@ -262,11 +273,15 @@ class WebAgentEnrollmentManager {
       const result = await this.onEnrolled(job.account.id, job.testQuestion);
       if (!isPending(job)) return;
       job.account = this.accountDirectory.listAccounts().find(account => account.id === job.account.id) || job.account;
+      job.commitApplied = result.commitApplied === true;
+      job.warning = result.warning || null;
       this.onAccountsSynced?.();
-      this._setState(job, result.success ? 'completed' : 'failed', result.success
+      this._setState(job, result.success || job.commitApplied ? 'completed' : 'failed', job.warning === 'pool_sync_failed'
+        ? job.commitApplied ? '资格已提交，但调度同步失败；账号本机隔离，请先核对状态'
+          : '资格未提交，调度同步失败；账号本机隔离，登录态已保存'
+        : result.success
         ? job.account.status === 'disabled' ? '问答资格已验证，账号仍保持停用；登录态已保存' : '账号已接入，可用于知识库问答'
-        : result.code === 'pool_sync_failed' ? '资格已保存，但调度同步失败；账号本机隔离，请先核对状态'
-          : '登录态已保存，问答验证未通过，账号保持停用；请在账号列表重试，无需重新扫码');
+        : '登录态已保存，问答验证未通过，账号保持停用；请在账号列表重试，无需重新扫码');
     } else this._setState(job, 'completed', '登录态已保存，账号保持停用；请在账号列表验证问答能力');
     this._releaseActive(job); this._scheduleRemoval(job);
   }
@@ -337,8 +352,13 @@ class WebAgentEnrollmentManager {
       return publicJob(job);
     }
     const settled = job.account && this.onCancelVerification?.(job.account.id);
+    job.commitApplied = settled?.commitApplied === true;
+    job.warning = settled?.warning || null;
     if (settled?.completed) {
-      this._setState(job, 'completed', settled.activated
+      job.account = this.accountDirectory.listAccounts().find(account => account.id === job.account.id) || job.account;
+      this._setState(job, 'completed', job.warning === 'pool_sync_failed'
+        ? '资格已提交，但调度同步失败；取消不会撤销提交，账号本机隔离'
+        : settled.activated
         ? '问答资格已提交，账号已启用；如需暂停请在账号列表停用'
         : '问答资格已提交，账号仍保持停用');
     } else this._setState(job, 'cancelled', job.account
@@ -355,8 +375,11 @@ class WebAgentEnrollmentManager {
     for (const job of this.jobs.values()) {
       if (isPending(job)) {
         const settled = job.account && this.onCancelVerification?.(job.account.id);
+        job.commitApplied = settled?.commitApplied === true;
+        job.warning = settled?.warning || null;
         this._setState(job, settled?.completed ? 'completed' : 'cancelled', settled?.completed
-          ? '问答资格已提交，服务正在关闭' : '服务已关闭接入任务；已保存账号保留停用');
+          ? job.warning === 'pool_sync_failed' ? '资格已提交，但调度同步失败；服务正在关闭，提交未撤销'
+            : '问答资格已提交，服务正在关闭' : '服务已关闭接入任务；已保存账号保留停用');
       }
     }
     await Promise.all([...this.jobs.values()].map((job) => this._cleanup(job)));
@@ -1434,6 +1457,8 @@ function publicJob(job, now = Date.now()) {
     canContinue: ['waiting_for_membership', 'access_unverified'].includes(job.state) && !job.continuing,
     identityConflict: job.state === 'identity_conflict' ? { actions: ['add', 'cancel'] } : null,
     state: job.state,
+    commitApplied: job.commitApplied === true,
+    warning: job.warning || null,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt || job.createdAt).toISOString(),
     expiresAt: new Date(job.expiresAt).toISOString(),

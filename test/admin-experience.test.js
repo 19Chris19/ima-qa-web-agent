@@ -172,6 +172,21 @@ test('cancel UI reports committed success returned by the server instead of clai
   assert.doesNotMatch(document.querySelector('#enrollFeedback').textContent, /已取消/);
 });
 
+for (const commitApplied of [false, true]) {
+  test(`verification sync warning distinguishes commitApplied=${commitApplied}`, async t => {
+    const { document, window } = await setup(t, undefined, {}, () => ({
+      success: false, code: 'pool_sync_failed', warning: 'pool_sync_failed', commitApplied,
+    }));
+    [...document.querySelectorAll('.admin-more-items button')].find(button => button.textContent === '验证问答能力').click();
+    document.querySelector('#webActionDialog form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await tick(); await tick();
+    const feedback = document.querySelector('#accountList .admin-feedback').textContent;
+    assert.match(feedback, commitApplied ? /资格已提交/ : /资格未提交/);
+    assert.match(feedback, /同步失败.*本机隔离/);
+    if (commitApplied) assert.match(feedback, /取消不会撤销/);
+  });
+}
+
 test('navigation targets only real panels; mobile and reduced-motion rules are present', async t => {
   const { document } = await setup(t);
   for (const link of document.querySelectorAll('#adminNavigation a')) assert.ok(document.querySelector(link.getAttribute('href')));
