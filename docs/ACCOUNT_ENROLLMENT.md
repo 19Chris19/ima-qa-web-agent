@@ -84,6 +84,21 @@ enable is then possible. Unrelated store changes conservatively invalidate a pro
 too; the user can retry. Manual disable, deletion/recreation, recapture or credential
 rotation while a probe runs cannot be undone by its late result.
 
+The same successful commit records current session, knowledge and web readiness
+with the proof timestamp, replacing stale authentication-check failures. Failed,
+cancelled or uncommitted probes do not create successful health evidence. Existing
+stored proofs are not retroactively promoted or re-probed on startup.
+
+Readiness `basicHealthy` counts recorded health evidence, not admission or idle
+slots: a manually paused account can still have healthy evidence. `capacity`
+counts eligible accounts for the selected mode, including busy accounts;
+`knowledgeAgentCapacity` applies the bound single-answer proof requirement.
+`schedulable` counts eligible idle accounts. Maintenance, cooling and disabled
+accounts contribute no eligible capacity. Pool maintenance status is unavailable
+until its lock is released; completed check/refresh receipts reflect the released
+state. The queue's minimum `maxConcurrent: 1` remains an execution setting, not
+evidence of an available account when readiness capacity is zero.
+
 Failure, cancellation and timeout retain disabled credentials, with no proof.
 Use **Verify QA capability** in the account list to retry without scanning again;
 each retry authorizes one fresh question. Expired credentials still require login.

@@ -75,6 +75,43 @@ test('single successful probe commits proof and activation in one write, retaini
   assert.equal(f.directory.getAccount('synthetic').runtime.enrollmentQualificationRequired, false);
 });
 
+for (const code of ['auth_expired', 'auth_rejected', 'account_not_checked']) {
+  test(`one successful bound answer replaces stale ${code} health and is schedulable`, async t => {
+    const f = fixture(t);
+    f.directory.recordAccountHealth('synthetic', { code, sessionValid: false,
+      knowledgeReady: false, webReady: false });
+    f.readiness.setMode('knowledge_agent');
+    const result = await f.readiness.verify('synthetic');
+    assert.equal(result.success, true);
+    assert.equal(result.capacity, 1);
+    assert.equal(result.schedulable, 1);
+    assert.equal(result.basicHealthy, 1);
+    assert.equal(f.pool.webReadiness(f.pool.accounts[0]), true);
+    const health = f.directory.listAccounts()[0].health;
+    assert.equal(health.last_check_code, 'ok');
+    assert.equal(health.last_check_at, f.directory.getAccount('synthetic').runtime.webQualification.verifiedAt);
+    f.pool.accounts[0].activeRequests = 1;
+    assert.equal(f.readiness.snapshot().capacity, 1);
+    assert.equal(f.readiness.snapshot().schedulable, 0);
+    f.pool.accounts[0].activeRequests = 0;
+    f.pool.accounts[0].client.streamAsk = async function* () { yield { type: 'done' }; };
+    for await (const event of f.pool.streamAsk({ mode: 'knowledge_agent', question: 'Synthetic' })) {
+      assert.ok(['route', 'done'].includes(event.type));
+    }
+    assert.equal(f.pool.accounts[0].activeRequests, 0);
+  });
+}
+
+test('failed probe does not replace failed health with success', async t => {
+  const f = fixture(t, async function* (options) { options.onDispatch(); yield { type: 'done' }; });
+  f.directory.recordAccountHealth('synthetic', { code: 'auth_expired', sessionValid: false });
+  const result = await f.readiness.verify('synthetic');
+  assert.equal(result.success, false);
+  assert.equal(result.basicHealthy, 0);
+  assert.equal(f.directory.listAccounts()[0].health.last_check_code, 'auth_expired');
+  assertPending(f);
+});
+
 for (const outcome of ['failure', 'cancel', 'timeout']) {
   test(`${outcome} retains disabled credentials and retry needs no capture`, async t => {
     let release;
@@ -174,6 +211,8 @@ test('activation write failure never enables disk or pool and preserves credenti
   };
   assert.equal((await f.readiness.verify('synthetic')).success, false);
   assertPending(f);
+  assert.equal(f.directory.listAccounts()[0].health.last_check_code, 'account_not_checked');
+  assert.equal(f.directory.listAccounts()[0].health.session_valid, null);
 });
 
 test('runtime import cannot bypass a captured admission gate or manual pause', t => {

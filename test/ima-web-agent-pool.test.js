@@ -17,6 +17,36 @@ function makeAccount(name) {
   };
 }
 
+test('pool status excludes maintenance from availability while retaining busy capacity', () => {
+  const pool = new IMAWebAgentPool({ accounts: [makeAccount('synthetic')] }, { clientFactory: () => ({}) });
+  const account = pool.accounts[0];
+  account.maintenanceOperation = 'check';
+  assert.equal(pool._leaseAccount(), null);
+  assert.equal(pool.stats().availableAccounts, 0);
+  assert.equal(pool.stats().unavailableAccounts, 1);
+  account.maintenanceOperation = '';
+  assert.ok(pool._leaseAccount());
+  assert.equal(pool.stats().busyAccounts, 1);
+  assert.equal(pool.stats().unavailableAccounts, 0);
+});
+
+test('completed maintenance returns post-release availability, not its in-flight snapshot', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const pool = new IMAWebAgentPool({ accounts: [makeAccount('synthetic')] }, {
+    clientFactory: () => ({ createFirstPartyClientContext: () => ({}), initSession: () => gate }),
+  });
+  const checking = pool.checkAccount('synthetic');
+  assert.equal(pool.stats().availableAccounts, 0);
+  assert.equal(pool.stats().unavailableAccounts, 1);
+  release();
+  const result = await checking;
+  assert.equal(result.status, 'available');
+  assert.equal(result.maintenanceOperation, null);
+  assert.equal(result.healthCheck.code, 'ok');
+  assert.equal(pool.stats().availableAccounts, 1);
+});
+
 async function collectText(stream) {
   let text = '';
   for await (const event of stream) {

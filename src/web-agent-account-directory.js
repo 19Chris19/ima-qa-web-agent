@@ -93,6 +93,13 @@ class WebAgentAccountDirectory {
         || proof.contract !== knowledgeAgentContractDigest() || proof.requests !== 1 || proof.terminals !== 1) throw conflict();
     account.runtime.webQualification = proof;
     account.runtime.enrollmentQualificationRequired = false;
+    // A bound answer proves current health; commit it atomically with admission.
+    account.runtime.lastCheckAt = proof.verifiedAt;
+    account.runtime.lastCheckCode = 'ok';
+    account.runtime.lastCheckMessage = healthMessage('ok');
+    account.runtime.sessionValid = true;
+    account.runtime.knowledgeReady = true;
+    account.runtime.webReady = true;
     if (account.runtime.disabledReason === PENDING_QUALIFICATION) {
       account.runtime.disabled = false;
       account.runtime.disabledReason = '';

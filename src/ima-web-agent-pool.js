@@ -307,12 +307,14 @@ class IMAWebAgentPool {
     }
     account.maintenanceOperation = operation;
     this._notifyState(account);
+    let result;
     try {
-      return await fn();
+      result = await fn();
     } finally {
       account.maintenanceOperation = '';
       this._notifyState(account);
     }
+    return { ...result, ...this._publicAccountState(account, { includeDetails: true }) };
   }
 
   _leaseAccount() {
@@ -540,7 +542,7 @@ class IMAWebAgentPool {
   _publicAccountState(account, options = {}) {
     const now = options.now || this.now();
     const coolingDown = !account.disabled && account.cooldownUntil > now;
-    const status = account.disabled
+    const status = account.disabled || account.maintenanceOperation
       ? 'unavailable'
       : account.activeRequests > 0
         ? 'busy'

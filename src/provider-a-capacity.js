@@ -6,7 +6,8 @@ function synchronizeProviderAQueueCapacity({ askQueue, config, pool, webReadines
   const poolStats = pool?.stats?.() || {};
   const eligibleAccounts = webReadiness ? webReadiness.snapshot().capacity : Math.max(
     0,
-    Number(poolStats.totalAccounts || 0) - Number(poolStats.unavailableAccounts || 0),
+    Number(poolStats.totalAccounts || 0) - Number(poolStats.unavailableAccounts || 0)
+      - Number(poolStats.coolingDownAccounts || 0),
   );
   return askQueue.setMaxConcurrent(Math.max(1, eligibleAccounts));
 }
