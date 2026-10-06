@@ -120,6 +120,7 @@ class WebAgentEnrollmentManager {
       monitorPromise: null,
       cleanupPromise: null,
       cleanupRequested: false,
+      loginController: new AbortController(),
       error: '',
       detail: '后台临时浏览器尚未启动',
       account: null,
@@ -210,7 +211,7 @@ class WebAgentEnrollmentManager {
     let membership = 'unknown';
     try {
       membership = (await this.membershipVerifier(job.shareUrl, { headers: auth.headers,
-        expectedId: job.knowledgeBaseId, fetchImpl: this.fetch })).membership;
+        expectedId: job.knowledgeBaseId, fetchImpl: this.fetch, signal: job.loginController.signal })).membership;
     } catch { /* Keep the window and allow retry without guessing membership. */ }
     if (!await this._checkPending(job)) return false;
     job.authorizationStatus = membership;
@@ -242,7 +243,7 @@ class WebAgentEnrollmentManager {
     this._setState(job, 'verifying', '知识库授权通过，正在检查会话能力');
     const client = this.clientFactory({ id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
       headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3 });
-    await client.initSession();
+    await client.initSession({ signal: job.loginController.signal });
     if (!await this._checkPending(job) || job.state !== 'verifying') return;
     const capturedAccount = { id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
       headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3,
@@ -252,12 +253,14 @@ class WebAgentEnrollmentManager {
       : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
         : this.accountDirectory.upsertCapturedAccount(capturedAccount);
     this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
+    // Login expiry ends here. The declared QA probe owns a separate bounded timeout.
     await this._cleanup(job);
     if (job.state === 'cancelled') return;
     if (this.onEnrolled) {
       job.detail = '授权通过，正在执行已声明的一次知识库问答验证'; this._touch(job);
-      const result = await this.onEnrolled(job.account.id, job.testQuestion); this.onAccountsSynced?.();
-      if (job.state === 'cancelled') return;
+      const result = await this.onEnrolled(job.account.id, job.testQuestion);
+      if (!isPending(job)) return;
+      this.onAccountsSynced?.();
       this._setState(job, 'completed', result.success ? '账号已接入，可用于知识库问答' : '账号已接入，问答验证未通过，请在账号列表重试');
     } else this._setState(job, 'completed', '账号已验证并同步到账号池');
     this._releaseActive(job); this._scheduleRemoval(job);
@@ -339,7 +342,10 @@ class WebAgentEnrollmentManager {
 
   async shutdown() {
     for (const job of this.jobs.values()) {
-      if (isPending(job)) this._setState(job, 'cancelled', '服务已关闭接入任务');
+      if (isPending(job)) {
+        this._setState(job, 'cancelled', '服务已关闭接入任务');
+        if (job.account) this.onCancelVerification?.(job.account.id);
+      }
     }
     await Promise.all([...this.jobs.values()].map((job) => this._cleanup(job)));
     this.jobs.clear();
@@ -628,7 +634,8 @@ class WebAgentEnrollmentManager {
       return null;
     }
     try {
-      const screenshot = await captureLoginScreenshot(job.page, { fetch: this.fetch });
+      const screenshot = await captureLoginScreenshot(job.page, { fetch: this.fetch, signal: job.loginController.signal });
+      if (!isPending(job) || job.cleanupRequested || this.now() >= job.expiresAt) return null;
       if (screenshot) {
         job.qr = screenshot;
         this._touch(job);
@@ -667,6 +674,8 @@ class WebAgentEnrollmentManager {
 
   async _cleanup(job) {
     job.pendingAuth = null;
+    job.qr = null;
+    job.loginController?.abort();
     if (job.cleanupPromise) {
       return job.cleanupPromise;
     }
@@ -1101,7 +1110,7 @@ function firstText(...values) {
 }
 
 async function captureLoginScreenshot(page, options = {}) {
-  const frameScreenshot = await captureWeChatQrScreenshot(page, options.fetch || globalThis.fetch);
+  const frameScreenshot = await captureWeChatQrScreenshot(page, options.fetch || globalThis.fetch, options.signal);
   if (frameScreenshot) {
     return frameScreenshot;
   }
@@ -1109,7 +1118,7 @@ async function captureLoginScreenshot(page, options = {}) {
   return clip ? page.screenshot({ type: 'png', clip }) : null;
 }
 
-async function captureWeChatQrScreenshot(page, fetchFn) {
+async function captureWeChatQrScreenshot(page, fetchFn, signal) {
   if (typeof page.frames !== 'function' || typeof fetchFn !== 'function') {
     return null;
   }
@@ -1122,7 +1131,7 @@ async function captureWeChatQrScreenshot(page, fetchFn) {
         .map((image) => String(image.currentSrc || image.src || ''))
         .find((src) => /^https:\/\/open\.weixin\.qq\.com\/connect\/qrcode\/[a-zA-Z0-9_-]+$/.test(src)) || '');
       if (isAllowedWeChatQrUrl(qrUrl)) {
-        const response = await fetchFn(qrUrl, { redirect: 'manual' });
+        const response = await fetchFn(qrUrl, { redirect: 'manual', signal });
         const contentType = String(response?.headers?.get?.('content-type') || '').split(';')[0].trim().toLowerCase();
         const contentLength = Number(response?.headers?.get?.('content-length') || 0);
         if (!response?.ok || !['image/jpeg', 'image/png'].includes(contentType) || contentLength > 1024 * 1024) {

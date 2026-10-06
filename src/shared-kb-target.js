@@ -108,8 +108,10 @@ async function verifySharedMembership(input, options = {}) {
   const { url, shareId } = parseShareUrl(input);
   const auth = options.headers || {};
   if (!auth['x-ima-cookie'] || !auth['x-ima-bkn']) throw failure('membership_auth_required');
+  const timeout = AbortSignal.timeout(15000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
   const response = await (options.fetchImpl || fetch)('https://ima.qq.com/cgi-bin/knowledge_share_get/get_share_info', {
-    method: 'POST', redirect: 'manual', signal: options.signal || AbortSignal.timeout(15000),
+    method: 'POST', redirect: 'manual', signal,
     headers: { 'content-type': 'application/json', 'x-ima-cookie': auth['x-ima-cookie'],
       'x-ima-bkn': auth['x-ima-bkn'], cookie: auth['x-ima-cookie'], origin: 'https://ima.qq.com',
       referer: url, from_browser_ima: '1', extension_version: '3.0.0' },
