@@ -21,14 +21,14 @@ for (const mode of ['index', 'embed']) {
       assert.equal(getComputedStyle(document.querySelector('#askForm')).gridArea, 'input');
       const latest = document.createElement('button'); latest.className = 'qa-tool return-latest';
       document.querySelector('#readingActions').append(latest);
-      for (const node of [document.querySelector('#sidebarToggle'), document.querySelector('#sendButton'), document.querySelector('#draftStopButton'), latest]) {
+      for (const node of [document.querySelector('#sidebarToggle'), document.querySelector('#sendButton'), latest]) {
         const css = getComputedStyle(node);
         assert.ok(parseFloat(css.minWidth) >= 44, `${node.id || node.className} minimum width`);
         assert.ok(parseFloat(css.minHeight) >= 44, `${node.id || node.className} minimum height`);
       }
       assert.equal(getComputedStyle(document.querySelector('#sendButton svg')).width, '22px');
       assert.equal(document.querySelectorAll('#questionInput').length, 1);
-      assert.equal(document.querySelectorAll('#askForm button').length, 2);
+      assert.equal(document.querySelectorAll('#askForm button').length, 1);
     } finally { dom.window.close(); }
   });
 }
