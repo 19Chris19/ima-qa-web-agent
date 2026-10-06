@@ -71,6 +71,15 @@ and remaining review blockers. Earlier independent-branch evidence is explicitly
 historical. Agent instructions identify v0.4.2's expanded account presentation;
 they do not claim publication or successful real enrollment.
 
+## Clean-source follow-up
+Git archive of 38e1775 extracted into a fresh temporary directory; npm ci
+installed 123 packages and onboard.sh doctor passed on Air (Node22.22.3,
+Playwright1.62.1, Docker/Compose available, no existing installation). This is
+not an install of the pending post-review fixes. Empty-pool container check of
+2cd17fb failed once without a retained cause, then passed both a diagnostic run
+and an unchanged rerun. Record this instability; do not call the first failure
+resolved or use these runs as final-install acceptance.
+
 ## Rollback
 Revert scoped commits or select the previous version image; preserve current
 account and conversation volumes. No tag replacement or history rewrite.
