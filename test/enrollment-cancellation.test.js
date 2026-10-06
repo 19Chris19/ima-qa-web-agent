@@ -1,0 +1,398 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+const { WebAgentEnrollmentManager } = require('../src/web-agent-enrollment');
+const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
+const { IMAWebAgentClient } = require('../src/ima-web-agent-client');
+const { WebReadiness } = require('../src/web-readiness');
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const fault of ['account-read', 'callback']) {
+  test(`committed enrollment survives post-commit ${fault}`, async t => {
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch();
+        yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' }; yield { type: 'done' };
+      } }),
+    });
+    let syncs = 0;
+    f.manager.onAccountsSynced = () => {
+      if (++syncs === 2 && fault === 'callback') throw new Error('synthetic-private-callback');
+    };
+    f.manager.onEnrolled = async (id, question) => {
+      const result = await readiness.verify(id, question);
+      if (fault === 'account-read') f.directory.listAccounts = () => { throw new Error('synthetic-private-read'); };
+      return result;
+    };
+    f.scan(); await f.job.monitorPromise;
+    const report = f.manager.get(f.taskId);
+    assert.equal(report.state, 'completed');
+    assert.equal(report.commitApplied, true);
+    assert.equal(report.warning, 'post_commit_update_failed');
+    assert.equal(report.error, null);
+    assert.equal(f.directory.getAccount('synthetic-account').runtime.disabled, false);
+    assert.ok(f.directory.getAccount('synthetic-account').runtime.webQualification);
+    assert.doesNotMatch(JSON.stringify(report), /synthetic-private/);
+    assert.equal((await f.manager.cancel(f.taskId)).state, 'completed');
+  });
+}
+
+for (const action of ['cancel', 'shutdown']) {
+  test(`${action} retains commit receipt when the secondary account read throws`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t, { onEnrolled: async () => { entered.resolve(); await release.promise; return {}; } });
+    f.manager.onCancelVerification = () => ({ completed: true, commitApplied: true, activated: true });
+    f.scan(); await entered.promise;
+    f.directory.listAccounts = () => { throw new Error('synthetic-private-read'); };
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else await f.manager.shutdown();
+    assert.equal(f.job.state, 'completed');
+    assert.equal(f.job.commitApplied, true);
+    assert.equal(f.job.warning, action === 'cancel' ? 'post_commit_update_failed' : null);
+    release.resolve(); await f.job.monitorPromise;
+  });
+}
+
+test('enrollment public warning rejects arbitrary callback text', async t => {
+  const f = await fixture(t, { onEnrolled: async () => ({ success: false, commitApplied: false, warning: 'synthetic-private-warning' }) });
+  f.scan(); await f.job.monitorPromise;
+  assert.equal(f.manager.get(f.taskId).state, 'failed');
+  assert.equal(f.manager.get(f.taskId).warning, null);
+});
+
+for (const fault of ['availability', 'snapshot']) {
+  test(`readiness returns committed receipt despite final ${fault} failure`, async t => {
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch(); yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' }; yield { type: 'done' };
+      } }),
+    });
+    const snapshot = readiness.snapshot.bind(readiness);
+    readiness.snapshot = () => {
+      if (fault === 'snapshot' && readiness.jobs.get('synthetic-account')?.commitApplied) throw new Error('synthetic-private-snapshot');
+      return snapshot();
+    };
+    f.pool._notifyAvailability = () => {
+      if (fault === 'availability' && readiness.jobs.get('synthetic-account')?.commitApplied) throw new Error('synthetic-private-availability');
+    };
+    let result;
+    f.manager.onEnrolled = async (id, question) => (result = await readiness.verify(id, question));
+    f.scan(); await f.job.monitorPromise;
+    assert.equal(result.commitApplied, true);
+    assert.equal(result.success, true);
+    assert.equal(result.warning, 'post_commit_update_failed');
+    assert.equal(f.manager.get(f.taskId).state, 'completed');
+    assert.equal(f.directory.getAccount('synthetic-account').runtime.disabled, false);
+  });
+}
+
+for (const action of ['cancel', 'shutdown']) {
+  test(`${action} retains real receipt if readiness current-state read fails`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch(); yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' }; yield { type: 'done' };
+      } }),
+    });
+    f.manager.onEnrolled = async (id, question) => {
+      const result = await readiness.verify(id, question);
+      entered.resolve(); await release.promise; return result;
+    };
+    f.manager.onCancelVerification = id => readiness.cancel(id);
+    f.scan(); await entered.promise;
+    const read = f.directory.getAccount.bind(f.directory);
+    f.directory.getAccount = () => { throw new Error('synthetic-private-read'); };
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else await f.manager.shutdown();
+    assert.equal(f.job.state, 'completed');
+    assert.equal(f.job.commitApplied, true);
+    assert.equal(f.job.warning, 'post_commit_update_failed');
+    f.directory.getAccount = read;
+    assert.equal(read('synthetic-account').runtime.disabled, false);
+    release.resolve(); await f.job.monitorPromise;
+  });
+}
+
+test('noncommitted callback failure remains failed and cannot manufacture a receipt', async t => {
+  const f = await fixture(t, { onEnrolled: async () => ({ success: false, commitApplied: false }) });
+  let syncs = 0;
+  f.manager.onAccountsSynced = () => { if (++syncs === 2) throw new Error('synthetic callback failure'); };
+  f.scan(); await f.job.monitorPromise;
+  const report = f.manager.get(f.taskId);
+  assert.equal(report.state, 'failed');
+  assert.equal(report.commitApplied, false);
+  assert.equal(report.warning, null);
+  assert.equal(f.directory.getAccount('synthetic-account').runtime.disabled, true);
+});
+
+test('pool quarantine warning takes precedence over a post-commit display failure', async t => {
+  const f = await fixture(t, { onEnrolled: async () => ({ success: false, commitApplied: true, warning: 'pool_sync_failed' }) });
+  let syncs = 0;
+  f.manager.onAccountsSynced = () => { if (++syncs === 2) throw new Error('synthetic-private-callback'); };
+  f.scan(); await f.job.monitorPromise;
+  const report = f.manager.get(f.taskId);
+  assert.equal(report.state, 'completed');
+  assert.equal(report.warning, 'pool_sync_failed');
+  assert.match(report.detail, /本机隔离/);
+});
+
+async function waitFor(check) {
+  for (let i = 0; i < 200; i++) {
+    if (check()) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('Synthetic enrollment did not settle');
+}
+
+async function fixture(t, overrides = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-enrollment-cancel-'));
+  const directory = new WebAgentAccountDirectory({ storePath: path.join(root, 'accounts.json'),
+    keyPath: path.join(root, 'accounts.key'), keyMaterial: 'synthetic-enrollment-test-key' });
+  const page = { goto: async () => {}, evaluate: async () => ({ x: 0, y: 0, width: 100, height: 100 }),
+    screenshot: async () => Buffer.from('synthetic-qr') };
+  const context = { pages: () => [page], close: async () => {} };
+  const state = { auth: null, now: Date.now() };
+  const pool = { accounts: [], now: () => state.now,
+    syncAccounts(rows) { this.accounts = rows.map(row => Object.assign(this.accounts.find(a => a.id === row.id) || {}, row, { activeRequests: 0 })); },
+    _requireAccount(id) { return this.accounts.find(a => a.id === id); }, _notifyAvailability() {} };
+  const manager = new WebAgentEnrollmentManager({ accountDirectory: directory, pool,
+    config: { webAgent: { sharedKnowledgeBaseId: 'synthetic-kb', browserPath: process.execPath } },
+    now: () => state.now, browserLauncher: async () => context, captureAuth: async () => state.auth,
+    clientFactory: () => ({ initSession: async () => {} }), sleep: () => new Promise(resolve => setTimeout(resolve, 1)),
+    ...overrides,
+  });
+  t.after(async () => { await manager.shutdown(); fs.rmSync(root, { recursive: true, force: true }); });
+  const { taskId } = await manager.start({ name: 'synthetic-account', timeoutMs: 30000 });
+  await waitFor(() => manager.get(taskId).state === 'waiting_for_scan');
+  const job = manager.jobs.get(taskId);
+  function scan() {
+    state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic-old; IMA-REFRESH-TOKEN=synthetic-refresh', 'x-ima-bkn': '123' } };
+  }
+  return { manager, directory, pool, state, page, context, job, taskId, scan };
+}
+
+for (const action of ['cancel', 'shutdown', 'expiry']) {
+  test(`${action} aborts enrollment init and a late expired response cannot start refresh`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const requests = [];
+    const f = await fixture(t, { clientFactory: config => new IMAWebAgentClient(config, async (url, options) => {
+      requests.push({ url, signal: options.signal });
+      if (requests.length === 1) { entered.resolve(); await release.promise; return Response.json({ code: 41 }); }
+      if (url.endsWith('/refresh')) return Response.json({ code: 0, account_info: { token: 'synthetic-new' } });
+      return Response.json({ code: 0, session_id: 'synthetic-session' });
+    }) });
+    f.scan(); await entered.promise;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else if (action === 'shutdown') await f.manager.shutdown();
+    else { f.state.now = f.job.expiresAt; await f.manager._checkPending(f.job); }
+    release.resolve(); await f.job.monitorPromise;
+    assert.equal(requests[0].signal?.aborted, true);
+    assert.equal(requests.length, 1);
+    assert.equal(f.directory.listAccounts().length, 0);
+    assert.equal(f.job.pendingAuth, null);
+  });
+}
+
+test('cancellation during credential refresh rejects late credentials without mutating the client', async t => {
+  const entered = deferred(), release = deferred();
+  t.after(() => release.resolve());
+  let client, calls = 0;
+  const f = await fixture(t, { clientFactory: config => {
+    client = new IMAWebAgentClient(config, async url => {
+      calls++;
+      if (url.endsWith('/refresh')) {
+        entered.resolve(); await release.promise;
+        return Response.json({ code: 0, account_info: { token: 'synthetic-new', refresh_token: 'synthetic-new-refresh' } });
+      }
+      return Response.json(calls === 1 ? { code: 41 } : { code: 0, session_id: 'synthetic-session' });
+    });
+    return client;
+  } });
+  f.scan(); await entered.promise;
+  const before = { ...client.headers };
+  await f.manager.cancel(f.taskId); release.resolve(); await f.job.monitorPromise;
+  assert.deepEqual(client.headers, before);
+  assert.equal(calls, 2);
+  assert.equal(f.directory.listAccounts().length, 0);
+});
+
+for (const action of ['cancel', 'shutdown']) {
+  test(`${action} propagates to the one onEnrolled probe and blocks late proof/sync`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t);
+    let signal, dispatches = 0, syncs = 0;
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        signal = options.signal; options.onDispatch(); dispatches++; entered.resolve(); await release.promise;
+        yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' }; yield { type: 'done' };
+      } }),
+    });
+    f.manager.onEnrolled = (id, question) => readiness.verify(id, question);
+    f.manager.onCancelVerification = id => readiness.cancel(id);
+    f.manager.onAccountsSynced = () => { syncs++; };
+    f.scan(); await entered.promise;
+    const before = syncs;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else await f.manager.shutdown();
+    const aborted = signal.aborted;
+    release.resolve(); await f.job.monitorPromise;
+    assert.equal(aborted, true);
+    assert.equal(dispatches, 1);
+    assert.equal(f.directory.getAccount('synthetic-account').runtime.webQualification, null);
+    assert.equal(syncs, before);
+    assert.equal(f.job.state, 'cancelled');
+  });
+}
+
+for (const action of ['cancel', 'shutdown', 'expiry']) {
+  test(`late QR screenshot cannot repopulate credentials after ${action}`, async t => {
+    const f = await fixture(t);
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve(Buffer.from('synthetic-late-qr')));
+    f.page.screenshot = () => { entered.resolve(); return release.promise; };
+    const pending = f.manager._captureScreenshot(f.job); await entered.promise;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else if (action === 'shutdown') await f.manager.shutdown();
+    else { f.state.now = f.job.expiresAt; await f.manager._checkPending(f.job); }
+    release.resolve(Buffer.from('synthetic-late-qr'));
+    assert.equal(await pending, null);
+    assert.equal(f.job.qr, null);
+    assert.equal(f.job.pendingAuth, null);
+  });
+}
+
+test('login expiry is not a total deadline; the single post-login probe has its own bounded timeout', async t => {
+  const f = await fixture(t);
+  let calls = 0, result;
+  const readiness = new WebReadiness({ directory: f.directory, pool: f.pool, timeoutMs: 15,
+    clientFactory: () => ({ async *streamAsk(options) {
+      calls++; options.onDispatch();
+      await new Promise(resolve => options.signal.addEventListener('abort', resolve, { once: true }));
+    } }),
+  });
+  f.manager.onEnrolled = async (id, question) => {
+    assert.equal(f.job.expiryTimer, null);
+    f.state.now = f.job.expiresAt + 1;
+    result = await readiness.verify(id, question);
+    return result;
+  };
+  f.scan(); await waitFor(() => f.job.state === 'failed');
+  assert.equal(calls, 1);
+  assert.equal(result.code, 'probe_timeout');
+  assert.equal(f.directory.getAccount('synthetic-account').runtime.webQualification, null);
+  assert.equal(f.directory.getAccount('synthetic-account').runtime.disabled, true);
+});
+
+for (const action of ['cancel', 'shutdown']) {
+  test(`${action} after atomic proof commit preserves completed outcome`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch();
+        yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' };
+        yield { type: 'done' };
+      } }),
+    });
+    f.manager.onEnrolled = async id => {
+      const result = await readiness.verify(id);
+      assert.equal(result.success, true);
+      entered.resolve(); await release.promise;
+      return result;
+    };
+    f.manager.onCancelVerification = id => readiness.cancel(id);
+    f.scan(); await entered.promise;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else await f.manager.shutdown();
+    assert.equal(f.job.state, 'completed');
+    release.resolve(); await f.job.monitorPromise;
+    assert.equal(f.directory.reload().accounts[0].runtime.disabled, false);
+  });
+}
+
+for (const action of ['complete', 'cancel', 'shutdown']) {
+  test(`${action} after committed proof and sync failure preserves receipt and warning`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch();
+        yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' };
+        yield { type: 'done' };
+      } }),
+    });
+    const sync = f.pool.syncAccounts.bind(f.pool);
+    f.pool.syncAccounts = rows => {
+      if (rows.some(row => row.webQualification)) throw new Error('synthetic-post-commit-sync-fault');
+      sync(rows);
+    };
+    f.manager.onEnrolled = async id => {
+      const result = await readiness.verify(id);
+      entered.resolve(); await release.promise;
+      return result;
+    };
+    f.manager.onCancelVerification = id => readiness.cancel(id);
+    f.scan(); await entered.promise;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    if (action === 'shutdown') await f.manager.shutdown();
+    release.resolve(); await f.job.monitorPromise;
+    assert.equal(f.job.state, 'completed');
+    assert.equal(f.job.commitApplied, true);
+    assert.equal(f.job.warning, 'pool_sync_failed');
+    assert.match(f.job.detail, /同步失败/);
+    assert.doesNotMatch(f.job.detail, /已取消|保持停用|可用于/);
+    assert.equal(f.directory.reload().accounts[0].runtime.disabled, false);
+    assert.equal(readiness.snapshot().capacity, 0);
+    if (action !== 'shutdown') {
+      assert.equal(f.manager.get(f.taskId).commitApplied, true);
+      assert.equal(f.manager.get(f.taskId).warning, 'pool_sync_failed');
+    }
+  });
+}
+
+for (const fault of ['before', 'replacement']) {
+  test(`capture sync fault ${fault} cannot leave the old reauth pool account admitted`, async t => {
+    const f = await fixture(t);
+    f.directory.upsertCapturedAccount({ id: 'synthetic-account', name: 'synthetic-account',
+      knowledgeBaseId: 'synthetic-kb', headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic-old' } });
+    f.pool.syncAccounts(f.directory.getPoolAccounts());
+    f.job.replace = true;
+    const previous = f.pool.accounts[0];
+    let probes = 0;
+    f.manager.onEnrolled = async () => { probes++; return { success: true }; };
+    f.pool.syncAccounts = () => {
+      if (fault === 'replacement') f.pool.accounts = [{ ...previous, maintenanceOperation: '' }];
+      throw new Error('synthetic-capture-sync-fault');
+    };
+    f.scan(); await f.job.monitorPromise;
+    assert.equal(f.job.state, 'failed');
+    assert.equal(f.job.warning, 'pool_sync_failed');
+    assert.equal(f.manager.get(f.taskId).commitApplied, false);
+    assert.equal(f.directory.reload().accounts[0].runtime.disabled, true);
+    assert.equal(previous.maintenanceOperation, 'qualification');
+    assert.equal(f.pool.accounts[0].maintenanceOperation, 'qualification');
+    assert.equal(probes, 0);
+  });
+}

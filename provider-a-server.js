@@ -9,11 +9,18 @@ const { ConversationStore } = require('./src/conversation-store');
 const { synchronizeProviderAQueueCapacity } = require('./src/provider-a-capacity');
 const { loadRuntimeEnv } = require('./src/runtime-env');
 const { WebReadiness } = require('./src/web-readiness');
+const { acquireAccountStoreFence } = require('./src/account-store-fence');
+const fs = require('node:fs');
+const path = require('node:path');
 
 async function main() {
   const envLoad = loadRuntimeEnv();
   const config = getConfig(process.env);
   assertProviderA(config);
+
+  fs.mkdirSync(path.dirname(config.webAgent.accountStorePath), { recursive: true, mode: 0o700 });
+  // Held for the process lifetime; proper-lockfile releases on exit, not on listen.
+  await acquireAccountStoreFence(config.webAgent.accountStorePath);
 
   const accountDirectory = new WebAgentAccountDirectory({
     storePath: config.webAgent.accountStorePath,

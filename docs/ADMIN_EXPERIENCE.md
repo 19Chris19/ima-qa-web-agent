@@ -1,0 +1,114 @@
+# Provider Admin Experience
+
+Status: **v0.4.2 release candidate**, aligned from `8b29c37`. The previously
+proposed table/drawer presentation was rejected and is not part of this release.
+This document describes the expanded account list. Live Air deployment and
+public release acceptance are recorded separately.
+
+## Account workspace
+
+- Account rows remain expanded. The heading shows knowledge QA status; service
+  evidence and actual maintenance dates are visible below it, without a drawer.
+  On phones the details become a single column.
+- Check, refresh, QA verification, re-login, enable/disable and delete are labeled
+  buttons. A captured account awaiting qualification offers verification, not a
+  bypass enable command. Verification retains its real-request confirmation;
+  delete retains its confirmation. Duplicate clicks are blocked while running.
+- The management sidebar and account drawer are removed. Existing enrollment,
+  exercise, report and review handlers remain. State refresh is read-only.
+- Motion is disabled under `prefers-reduced-motion: reduce`; visible focus
+  indicators and text labels accompany status colors.
+
+## State contract
+
+`account.management` is consumed as provided by the maintenance branch:
+
+```text
+knowledge: { state, qualified, verifiedAt }
+web: { state }
+session: { state }
+maintenance: {
+  state, nextCheckAt, nextRetryAt, lastCheckAt, refreshEligibleAt,
+  expiryKnown, tokenExpiresAt, refreshTokenExpiresAt, lastSuccessfulRefreshAt
+}
+schedulable
+```
+
+Knowledge states: ready, pending, needs_login, disabled, verifying, busy, cooling.
+When management knowledge is absent, `payload.readiness.accounts` is the only
+qualification fallback; no evidence means pending. Health flags never qualify
+an account. Web and session remain independent ready/unavailable/unknown states.
+`web_context_missing` does not mark knowledge QA failed, including legacy detail
+copy. Knowledge-access health records are labeled separately from QA evidence.
+
+Maintenance supports unobserved, disabled, checking, retry_wait and scheduled;
+missing/unknown states show unknown. Additional descriptive states remain
+defensive mappings. Only actual supplied timestamps are rendered, with browser
+timezone and offset. Missing schedules show not provided; missing upstream
+expiry shows unknown (not supplied by upstream). No next time is calculated.
+Top schedulable/capacity counts prefer readiness. Legacy basicHealthy is not
+used as QA availability. Qualified count uses explicit qualified evidence.
+
+Initial load and reload issue GET only. Reading state never initiates checks,
+refreshes or QA probes. Each mutation requires an explicit operator action.
+
+## Enrollment identity conflict
+
+`identity_conflict` remains an active cancellable enrollment state. Original
+identity is preserved. The only conflict-specific mutation is:
+
+```text
+POST /api/admin/enrollments/:taskId/identity
+{ "action": "add", "name": "synthetic-new-name" }
+```
+
+The response uses the existing `{ enrollment }` envelope. Empty/existing names
+are rejected locally, duplicate clicks are blocked, and polling resumes after
+acceptance. Cancellation continues to use DELETE on the enrollment resource.
+No replace action is sent by the conflict UI. Backend still owns atomic identity
+preservation and uniqueness enforcement. Parent must confirm the sibling
+enrollment contract during integration.
+
+## Verification
+
+Synthetic jsdom tests: `node --test test/admin-experience.test.js test/admin-ui.test.js`.
+Full regression: `npm test`. Browser preview uses an isolated data-URL page,
+synthetic in-memory fetch responses and no real admin requests. Screenshots are
+outside Git at `/tmp/provider-admin-ui-*.png`.
+
+Historical table/drawer candidate run (superseded presentation):
+`npm test -- --test-reporter=spec`, 300 passed, 0 failed
+(12 new jsdom cases). Chromium previews at 320, 390, 768 and 1440 pixels had no
+horizontal overflow. Tab/Shift-Tab containment, Escape/focus return and reduced
+motion were checked in the browser. Screenshots include desktop and mobile,
+with and without the details drawer. This is not a Safari or screen-reader audit.
+
+The target repository has no `scripts/check_governance.py`; invoking its required
+CI command fails with file-not-found. No out-of-scope governance files were
+added. The parent is handling the separately observed npm audit dependency issue;
+package files are untouched. No live-account, deployment, browser-helper or
+real enrollment success is claimed.
+
+## Opt-in backend contract test
+
+`test/admin-backend-contract.test.js` loads the integrated checkout's actual
+admin route handlers and management projection, then feeds their responses to
+this branch's UI through mocked fetch. Select the checkout explicitly:
+
+```sh
+PROVIDER_ADMIN_CONTRACT_ROOT=/path/to/integrated-checkout node --test test/admin-backend-contract.test.js test/admin-experience.test.js test/admin-ui.test.js
+```
+
+Without that variable, the cross-checkout test is explicitly skipped. No backend
+code is copied into this UI branch. The test uses in-memory directory, pool,
+readiness and enrollment-manager doubles, and never opens a listening socket.
+It verifies actual snapshot field mapping and identity route request/response
+serialization, GET-only loading, independent web/knowledge status, maintenance
+timestamps, unknown expiry and the UI's explicit add choice. It does not exercise
+auth middleware or real enrollment identity preservation; those remain backend
+test responsibilities. Read-only review found no UI/contract mismatch.
+
+The earlier visual preview was an in-memory Ego data-URL page, not a server or
+saved launch script: no port, former TaskSpace 2 (closed). Existing screenshots
+remain in `/tmp`. The parent owns TaskSpace 1; this contract review does not open
+or operate any browser space.

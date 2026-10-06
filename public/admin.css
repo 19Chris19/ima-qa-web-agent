@@ -1,3 +1,11 @@
+/* Account workspace; existing exercise and enrollment hooks remain intact. */
+body[data-mode="admin"] {
+  --paper: #f6f8fa;
+  --ink: #20282d;
+  --muted: #617078;
+  --line: #e1e6e9;
+  letter-spacing: 0;
+}
 body[data-mode="admin"] [hidden] {
   display: none !important;
 }
@@ -156,7 +164,7 @@ body[data-mode="admin"] {
 
 .admin-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 24px;
 }
@@ -700,6 +708,11 @@ body[data-mode="admin"] {
   line-height: 1.35;
 }
 
+.admin-section-heading > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .admin-enroll {
   display: grid;
   gap: 9px;
@@ -1098,4 +1111,33 @@ body[data-mode="admin"] {
   .admin-exercise-score-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* Familiar expanded account rows with current maintenance evidence. */
+body[data-mode="admin"] button:disabled { opacity: .5; cursor: not-allowed; }
+body[data-mode="admin"] :focus-visible { outline: 3px solid #167c80; outline-offset: 3px; }
+.admin-account-heading h3 { margin: 0; overflow-wrap: anywhere; white-space: normal; }
+.admin-state { display: inline-flex; align-items: baseline; gap: 7px; color: #657078; line-height: 1.6; }
+.admin-state::before { content: ''; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: currentColor; }
+.admin-state.ready { color: #08774a; }
+.admin-state.needs_login, .admin-state.unavailable { color: #b53738; }
+.admin-state.pending, .admin-state.verifying, .admin-state.cooling, .admin-state.busy { color: #926009; }
+.admin-account-row > * { min-width: 0; }
+.admin-account-details { display: grid; gap: 8px 24px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; }
+.admin-account-details h3 { font-size: 13px; margin: 8px 0; }
+.admin-account-details dl { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 8px; font-size: 12px; line-height: 1.7; }
+.admin-account-details dt { color: var(--muted); }
+.admin-account-details dd { margin: 0; overflow-wrap: anywhere; }
+.admin-account-row > .admin-feedback { grid-column: 1 / -1; }
+.admin-account-actions { align-content: start; max-width: 200px; }
+.admin-identity-conflict { display: grid; gap: 10px; padding: 14px 0; border-top: 2px solid #c59035; }
+.admin-identity-conflict h3 { margin: 0; font-size: 15px; }
+.admin-identity-conflict input, .admin-identity-conflict button { min-height: 40px; min-width: 0; font: inherit; }
+.admin-add-account, #upgradeWebMode { padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; cursor: pointer; }
+@media (max-width: 680px) {
+  .admin-account-details { grid-template-columns: 1fr; }
+  .admin-account-actions { justify-content: flex-start; max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body[data-mode="admin"] *, body[data-mode="admin"] *::before, body[data-mode="admin"] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

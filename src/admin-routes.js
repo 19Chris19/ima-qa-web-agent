@@ -1,4 +1,5 @@
-const { normalizeAccountId } = require('./web-agent-account-directory');
+const { normalizeAccountId, resolveAccountWriteTarget } = require('./web-agent-account-directory');
+const { accountManagementView } = require('./account-management-view');
 const {
   HEALTH_CODES,
   classifyAccountHealthError,
@@ -21,9 +22,17 @@ function registerAdminRoutes(app, options = {}) {
     else options.imaWebAgentClient?.syncAccounts?.(accountDirectory.getPoolAccounts());
     options.onAccountsSynced?.(options.imaWebAgentClient?.stats?.());
   };
+  const replaceCredentials = (input, write, runtimeEnv = false) => {
+    const target = resolveAccountWriteTarget(accountDirectory.listAccounts(), input, { runtimeEnv });
+    const writeAndSync = () => { const account = write(target); syncPool(); return account; };
+    const pool = options.imaWebAgentClient;
+    return target.previousId && pool?.withCredentialReplacement
+      ? pool.withCredentialReplacement(target.previousId, writeAndSync) : writeAndSync();
+  };
   const managementSnapshot = (includeEvents = false) => buildManagementSnapshot({
     accountDirectory,
     pool: options.imaWebAgentClient,
+    readiness: webReadiness?.snapshot(),
     includeEvents,
   });
   const actionResponse = (accountId, operation, details = {}) => {
@@ -69,7 +78,11 @@ function registerAdminRoutes(app, options = {}) {
     app.post('/api/admin/accounts/:accountId/verify', auth, async (req, res) => {
       try {
         const result = await webReadiness.verify(req.params.accountId, req.body?.question);
-        options.onAccountsSynced?.();
+        try { options.onAccountsSynced?.(); }
+        catch (error) {
+          if (!result.commitApplied) throw error;
+          result.warning = result.warning === 'pool_sync_failed' ? 'pool_sync_failed' : 'post_commit_update_failed';
+        }
         res.json(result);
       } catch (error) { sendAdminError(res, error); }
     });
@@ -84,9 +97,13 @@ function registerAdminRoutes(app, options = {}) {
       provider: options.config?.qaProvider || 'ima-web-agent',
       sharedKnowledgeBaseId: sharedKnowledgeBaseId || null,
       enrollment: {
+        authorizationProtocol: 'shared_library_membership_v1',
         requiresGuiMaintenanceMachine: true,
         accountStoreManagedByServer: true,
         supportsAdminPageQr: Boolean(enrollmentManager?.isAvailable?.()),
+        shareUrl: options.config?.webAgent?.sharedKnowledgeBaseShareUrl || null,
+        mode: options.config?.webAgent?.enrollmentBrowserEndpoint ? 'desktop_helper' : enrollmentManager?.isAvailable?.() ? 'local_browser' : 'remote_cli',
+        repairCommand: 'onboard repair --env <private-provider-env>',
         timeoutSeconds: Math.round(Number(options.config?.webAgent?.enrollmentTimeoutMs || 0) / 1000) || 300,
         activeEnrollment: enrollmentManager?.getActive?.() || null,
       },
@@ -177,6 +194,21 @@ function registerAdminRoutes(app, options = {}) {
   }
 
   if (enrollmentManager) {
+    app.post('/api/admin/enrollment-preflight', auth, async (_req, res) => {
+      try { res.json({ success: true, enrollment: await enrollmentManager.preflight() }); }
+      catch { res.status(503).json({ success: false, code: 'enrollment_preflight_failed', error: '扫码通路未就绪，请运行 onboard repair 检查维护助手' }); }
+    });
+    app.post('/api/admin/enrollments/:enrollmentId/continue', auth, async (req, res) => {
+      try { res.json({ success: true, enrollment: await enrollmentManager.continueVerification(req.params.enrollmentId) }); }
+      catch (error) { sendAdminError(res, error); }
+    });
+    app.post('/api/admin/enrollments/:enrollmentId/identity', auth, async (req, res) => {
+      try {
+        res.json({ success: true, enrollment: await enrollmentManager.resolveIdentityConflict(
+          req.params.enrollmentId, { action: req.body?.action, name: req.body?.name },
+        ) });
+      } catch (error) { sendAdminError(res, error); }
+    });
     app.post('/api/admin/enrollments', auth, async (req, res) => {
       try {
         const enrollment = await enrollmentManager.start({
@@ -233,10 +265,20 @@ function registerAdminRoutes(app, options = {}) {
     });
   }
 
-  app.post('/api/admin/accounts', auth, (req, res) => {
+  app.post('/api/admin/accounts', auth, async (req, res) => {
     try {
       rejectDuplicateAccount(accountDirectory, req.body, Boolean(req.body?.replace));
-      const account = accountDirectory.upsertCapturedAccount({
+      const shareUrl = options.config?.webAgent?.sharedKnowledgeBaseShareUrl;
+      if (shareUrl) {
+        const { verifySharedMembership } = require('./shared-kb-target');
+        const status = await (options.membershipVerifier || verifySharedMembership)(shareUrl, {
+          headers: req.body?.headers, expectedId: sharedKnowledgeBaseId,
+        });
+        if (status.membership !== 'joined') {
+          return res.status(409).json({ success: false, code: 'membership_unverified', error: '尚未确认目标知识库访问权限；不会保存账号，请加入后继续验证' });
+        }
+      }
+      const account = replaceCredentials(req.body, target => accountDirectory.upsertCapturedAccount({
         name: req.body?.name,
         id: req.body?.id,
         knowledgeBaseId: requireSharedKnowledgeBaseId(
@@ -250,9 +292,9 @@ function registerAdminRoutes(app, options = {}) {
         tokenExpiresAt: req.body?.tokenExpiresAt,
         refreshTokenExpiresAt: req.body?.refreshTokenExpiresAt,
         source: req.body?.source || 'admin-api',
+        requireQualification: true,
         replace: Boolean(req.body?.replace),
-      });
-      syncPool();
+      }, target));
       res.json({ success: true, account });
     } catch (error) {
       sendAdminError(res, error);
@@ -266,7 +308,7 @@ function registerAdminRoutes(app, options = {}) {
         return res.status(400).json({ success: false, error: 'runtimeEnvText is required and must be under 128KB' });
       }
       rejectDuplicateAccount(accountDirectory, req.body, Boolean(req.body?.replace));
-      const account = accountDirectory.upsertFromRuntimeEnv({
+      const account = replaceCredentials(req.body, target => accountDirectory.upsertFromRuntimeEnv({
         name: req.body?.name,
         id: req.body?.id,
         knowledgeBaseId: requireSharedKnowledgeBaseId(
@@ -276,9 +318,9 @@ function registerAdminRoutes(app, options = {}) {
         runtimeEnvText,
         runtimeEnvPath: req.body?.runtimeEnvPath,
         source: 'runtime-env-import',
+        requireQualification: true,
         replace: Boolean(req.body?.replace),
-      });
-      syncPool();
+      }, target), true);
       res.json({ success: true, account });
     } catch (error) {
       sendAdminError(res, error);
@@ -376,7 +418,7 @@ function registerAdminRoutes(app, options = {}) {
   });
 }
 
-function buildManagementSnapshot({ accountDirectory, pool, includeEvents = false }) {
+function buildManagementSnapshot({ accountDirectory, pool, readiness, includeEvents = false }) {
   const directoryAccounts = accountDirectory.listAccounts({ includeEvents });
   const poolSummary = pool?.stats?.({ includeDetails: true }) || null;
   const poolAccounts = new Map((poolSummary?.accounts || []).map((account) => [account.id, account]));
@@ -388,6 +430,7 @@ function buildManagementSnapshot({ accountDirectory, pool, includeEvents = false
       poolSynchronized: Boolean(poolAccount),
       availabilityStatus: account.health?.status || 'needs_check',
       maintenanceOperation: poolAccount?.maintenanceOperation || null,
+      management: accountManagementView(account, poolAccount, readiness?.accounts?.find(row => row.id === account.id)),
     };
   });
   const summary = {

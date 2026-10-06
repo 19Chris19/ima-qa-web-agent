@@ -13,6 +13,45 @@ function makeTempDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ima-account-directory-'));
 }
 
+test('captured identity classification and add-only writes fail closed across directory instances', () => {
+  const tempDir = makeTempDirectory();
+  const options = { storePath: path.join(tempDir, 'accounts.json'), keyPath: path.join(tempDir, 'accounts.key') };
+  const directory = new WebAgentAccountDirectory(options);
+  const capture = (id, uid) => ({ id, name: id, knowledgeBaseId: 'synthetic-kb',
+    headers: { 'x-ima-cookie': `IMA-UID=${uid}; IMA-TOKEN=synthetic-token` } });
+  directory.upsertCapturedAccount(capture('original', 'synthetic-original'));
+  assert.equal(directory.classifyCapturedIdentity('original', capture('x', 'synthetic-original').headers), 'same');
+  assert.equal(directory.classifyCapturedIdentity('original', capture('x', 'synthetic-distinct').headers), 'distinct');
+  const unknown = { 'x-ima-cookie': 'IMA-TOKEN=synthetic-token' };
+  assert.throws(() => directory.classifyCapturedIdentity('original', unknown), { code: 'ima_identity_unverified' });
+  assert.throws(() => directory.addCapturedAccount({ ...capture('unknown', 'x'), headers: unknown }), { code: 'ima_identity_unverified' });
+  const second = new WebAgentAccountDirectory(options);
+  second.addCapturedAccount(capture('other', 'synthetic-distinct'));
+  const before = fs.readFileSync(options.storePath);
+  assert.throws(() => directory.addCapturedAccount(capture('duplicate', 'synthetic-distinct')), { code: 'duplicate_ima_identity' });
+  assert.throws(() => directory.addCapturedAccount({ ...capture('original', 'synthetic-new'), replace: true }), { statusCode: 409 });
+  assert.deepEqual(fs.readFileSync(options.storePath), before);
+  assert.equal(directory.listAccounts().length, 2);
+});
+
+test('a competing commit cannot leave a phantom captured account in memory or on disk', () => {
+  const tempDir = makeTempDirectory();
+  const options = { storePath: path.join(tempDir, 'accounts.json'), keyPath: path.join(tempDir, 'accounts.key') };
+  const directory = new WebAgentAccountDirectory(options);
+  directory.load();
+  const other = new WebAgentAccountDirectory(options);
+  const capture = id => ({ id, name: id, knowledgeBaseId: 'synthetic-kb',
+    headers: { 'x-ima-cookie': `IMA-UID=synthetic-${id}; IMA-TOKEN=synthetic-token` } });
+  const write = directory._writeStore.bind(directory);
+  directory._writeStore = () => {
+    other.addCapturedAccount(capture('winner'));
+    return write();
+  };
+  assert.throws(() => directory.addCapturedAccount(capture('loser')), { code: 'account_store_generation_conflict' });
+  assert.deepEqual(directory.listAccounts().map(account => account.id), ['winner']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(options.storePath)).accounts.map(account => account.id), ['winner']);
+});
+
 test('WebAgentAccountDirectory imports runtime env without leaking secrets', () => {
   const tempDir = makeTempDirectory();
   const storePath = path.join(tempDir, 'accounts.json');

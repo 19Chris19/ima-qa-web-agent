@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { AuthMaintenance } = require('./auth-maintenance');
 const { parseIMAWebAgentStream, parseIMAWebAgentEvent, mapIMAWebAgentEvent, extractSources } = require('./ima-upstream-protocol');
 const { buildIMAKnowledgeAgentHeaders, buildIMAKnowledgeAgentRequest, buildIMAKnowledgeAgentSessionRequest, classifyIMAKnowledgeAgentSource } = require('./ima-knowledge-agent-contract');
 
@@ -32,12 +33,54 @@ class IMAWebAgentClient {
     this.runtimeEnvPath = config.runtimeEnvPath || '';
     this.tokenExpiresAt = Number(config.tokenExpiresAt || 0) || null;
     this.refreshTokenExpiresAt = Number(config.refreshTokenExpiresAt || 0) || null;
-    this.refreshSkewMs = Number(config.refreshSkewMs || 10 * 60 * 1000);
-    this.refreshIntervalMs = Number(config.refreshIntervalMs || 60 * 1000);
+    this.refreshSkewMs = Number(config.refreshSkewMs ?? 10 * 60 * 1000);
+    this.refreshIntervalMs = Number(config.refreshIntervalMs ?? 60 * 1000);
     this.lastRefreshAt = null;
     this.lastRefreshError = '';
     this.refreshTimer = null;
     this.refreshPromise = null;
+    this.credentialGeneration = 0;
+    this.credentialWritesSuspended = false;
+    this.pendingCredentialPersistence = false;
+    this.maintenance = new AuthMaintenance({
+      interval: () => this.refreshIntervalMs,
+      check: async () => {
+        const generation = this.credentialGeneration;
+        try {
+          this._assertCredentialGeneration(generation);
+          if (this.pendingCredentialPersistence) {
+            await this.onAutoRefreshed?.(this.getConfigSnapshot(), generation);
+            this._assertCredentialGeneration(generation);
+            this.pendingCredentialPersistence = false;
+          }
+          const refreshed = await this.ensureFreshAuth();
+          this._assertCredentialGeneration(generation);
+          if (refreshed) {
+            this.pendingCredentialPersistence = true;
+            await this.onAutoRefreshed?.(this.getConfigSnapshot(), generation);
+            this._assertCredentialGeneration(generation);
+            this.pendingCredentialPersistence = false;
+          }
+        } catch (error) {
+          if (generation === this.credentialGeneration) this.lastRefreshError = 'auth_refresh_failed';
+          throw error;
+        }
+      },
+    });
+  }
+
+  invalidateCredentials({ suspend = false } = {}) {
+    this.credentialGeneration++;
+    this.credentialWritesSuspended = suspend;
+    this.pendingCredentialPersistence = false;
+    this.refreshPromise = null;
+  }
+
+  _assertCredentialGeneration(generation, signal) {
+    signal?.throwIfAborted();
+    if (this.credentialWritesSuspended || generation !== this.credentialGeneration) {
+      throw Object.assign(new Error('credential_generation_stale'), { code: 'credential_generation_stale' });
+    }
   }
 
   applyConfig(config = {}) {
@@ -51,7 +94,10 @@ class IMAWebAgentClient {
       this.accountName = config.name || config.accountName;
     }
     if (config.headers && typeof config.headers === 'object') {
-      this.headers = normalizeAuthHeaders(config.headers);
+      const headers = normalizeAuthHeaders(config.headers);
+      if (this.credentialWritesSuspended || config.disabled === true
+          || JSON.stringify(headers) !== JSON.stringify(this.headers)) this.invalidateCredentials();
+      this.headers = headers;
     }
     if (config.modelId) {
       this.modelId = config.modelId;
@@ -96,9 +142,11 @@ class IMAWebAgentClient {
   }
 
   async initSession(options = {}) {
+    options.signal?.throwIfAborted();
     const clientContext = options.clientContext || this.createFirstPartyClientContext();
     const sessionOptions = { ...options, clientContext };
     let payload = await this._initSessionOnce(sessionOptions);
+    options.signal?.throwIfAborted();
     let sessionId = payload.session_id || payload.session_info?.id;
 
     if (!sessionId && shouldRefreshAuth(payload) && options.allowAuthRefresh === false) {
@@ -109,7 +157,9 @@ class IMAWebAgentClient {
 
     if (!sessionId && shouldRefreshAuth(payload)) {
       await this.refreshAuth(sessionOptions);
+      options.signal?.throwIfAborted();
       payload = await this._initSessionOnce(sessionOptions);
+      options.signal?.throwIfAborted();
       sessionId = payload.session_id || payload.session_info?.id;
     }
 
@@ -132,6 +182,7 @@ class IMAWebAgentClient {
   }
 
   async ensureFreshAuth(options = {}) {
+    this._assertCredentialGeneration(this.credentialGeneration, options.signal);
     const now = Date.now();
     if (!this.tokenExpiresAt) {
       return false;
@@ -165,20 +216,24 @@ class IMAWebAgentClient {
   }
 
   async refreshAuth(options = {}) {
+    this._assertCredentialGeneration(this.credentialGeneration, options.signal);
     if (this.refreshPromise) {
       await this.refreshPromise;
       return;
     }
 
-    this.refreshPromise = this._refreshAuthOnce(options);
+    const promise = this._refreshAuthOnce(options);
+    this.refreshPromise = promise;
     try {
-      await this.refreshPromise;
+      await promise;
     } finally {
-      this.refreshPromise = null;
+      if (this.refreshPromise === promise) this.refreshPromise = null;
     }
   }
 
   async _refreshAuthOnce(options = {}) {
+    const generation = this.credentialGeneration;
+    options.signal?.throwIfAborted();
     const cookie = parseCookieHeader(this.headers['x-ima-cookie'] || this.headers.cookie || '');
     const refreshToken = cookie['IMA-REFRESH-TOKEN'];
     const userId = cookie['IMA-UID'];
@@ -203,6 +258,7 @@ class IMAWebAgentClient {
     });
 
     const payload = await readJsonResponse(response, 'IMA auth refresh');
+    this._assertCredentialGeneration(generation, options.signal);
     const data = payload.accountInfo || payload.account_info || payload.data || payload;
     const now = Date.now();
     const nextCookie = {
@@ -239,7 +295,7 @@ class IMAWebAgentClient {
       : this.refreshTokenExpiresAt);
     this.lastRefreshAt = now;
     this.lastRefreshError = '';
-    this.persistRuntimeEnv();
+    this.persistRuntimeEnv(generation);
   }
 
   async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession, mode = 'classic_knowledge', onDispatch, allowAuthRefresh = true } = {}) {
@@ -309,26 +365,15 @@ class IMAWebAgentClient {
     };
   }
 
-  startAutoRefresh() {
-    this.stopAutoRefresh();
-    if (!this.refreshIntervalMs || this.refreshIntervalMs <= 0) {
-      return null;
-    }
-
-    this.refreshTimer = setInterval(() => {
-      this.ensureFreshAuth().catch((error) => {
-        this.lastRefreshError = error?.message || 'IMA Web auth refresh failed';
-      });
-    }, this.refreshIntervalMs);
-    this.refreshTimer.unref?.();
+  startAutoRefresh(onRefreshed) {
+    this.onAutoRefreshed = onRefreshed;
+    this.refreshTimer = this.maintenance.start();
     return this.refreshTimer;
   }
 
   stopAutoRefresh() {
-    if (this.refreshTimer) {
-      clearInterval(this.refreshTimer);
-      this.refreshTimer = null;
-    }
+    this.maintenance.stop();
+    this.refreshTimer = null;
   }
 
   getAuthStatus(now = Date.now()) {
@@ -348,10 +393,17 @@ class IMAWebAgentClient {
       lastRefreshAt: this.lastRefreshAt ? new Date(this.lastRefreshAt).toISOString() : null,
       lastRefreshError: this.lastRefreshError || null,
       runtimePersistence: this.runtimeEnvPath ? 'enabled' : 'disabled',
+      maintenance: {
+        ...this.maintenance.snapshot(),
+        refreshEligibleAt: this.tokenExpiresAt
+          ? new Date(this.tokenExpiresAt - this.refreshSkewMs).toISOString() : null,
+        expiryKnown: Boolean(this.tokenExpiresAt),
+      },
     };
   }
 
-  persistRuntimeEnv() {
+  persistRuntimeEnv(generation = this.credentialGeneration) {
+    if (this.credentialWritesSuspended || generation !== this.credentialGeneration) return false;
     if (!this.runtimeEnvPath) {
       return false;
     }

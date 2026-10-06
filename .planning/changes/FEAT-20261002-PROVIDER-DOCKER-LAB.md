@@ -1,7 +1,7 @@
 # Provider A Docker rehearsal
 
 - User goal: validate the published v0.4.0 deployment in isolated Linux containers, without existing accounts or production changes.
-- Baseline: v0.4.0 / d12950b03440f4048b9ee1985395e7eed10a9c8e.
+- Baseline commit SHA: v0.4.0 / d12950b03440f4048b9ee1985395e7eed10a9c8e. This was an isolated rehearsal, not a production deployment.
 - Branch: codex/FEAT-20261002-PROVIDER-DOCKER-LAB.
 - Scope: deployment instructions, setup-port correctness and reproducible empty-pool checks.
 - Original observation: setup with --host-port 3317 still prints enrolment URL 3117.

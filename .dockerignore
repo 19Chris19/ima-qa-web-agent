@@ -7,3 +7,6 @@ coverage
 .DS_Store
 .pytest_cache
 .playwright-mcp
+.onboarding
+.planning
+.git

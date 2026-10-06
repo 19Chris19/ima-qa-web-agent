@@ -38,7 +38,7 @@
         <p id="webReadinessSummary"></p>
         <button id="upgradeWebMode" type="button" hidden>升级新会话至原生知识库 Agent</button>
 
-        <section class="admin-enroll" aria-label="接入账号">
+        <section class="admin-enroll" id="enrollPanel" aria-label="接入账号">
           <div class="admin-section-heading">
             <div>
               <h2>接入账号</h2>
@@ -106,14 +106,15 @@
           </section>
         </dialog>
 
-        <section class="admin-accounts" aria-label="账号列表">
+        <section class="admin-accounts" id="accountsPanel" aria-label="账号列表">
           <div class="admin-section-heading">
             <div>
               <h2>账号池</h2>
               <p id="accountCountLabel">0 个账号</p>
             </div>
+            <button class="admin-add-account" id="addAccountButton" type="button">添加账号</button>
           </div>
-          <div class="admin-account-list" id="accountList"></div>
+          <div class="admin-account-list" id="accountList" aria-live="polite"></div>
           <p class="admin-feedback" id="accountFeedback" role="status"></p>
         </section>
 
@@ -142,6 +143,8 @@
           </header>
 
           <form class="admin-enrollment-form" id="enrollmentForm">
+            <p>请使用已加入目标知识库的 IMA 账号。扫码后可能执行上方声明的一次知识库问答验证。</p>
+            <a id="enrollmentShareLink" target="_blank" rel="noopener noreferrer" hidden>查看目标官方知识库</a>
             <label for="enrollmentName">账号名称</label>
             <input id="enrollmentName" maxlength="80" autocomplete="off" placeholder="account-c" required />
             <label for="enrollmentTestQuestion">知识库验证问题</label>
@@ -167,7 +170,15 @@
               <p id="enrollmentDiagnosticText"></p>
             </section>
             <div class="admin-enrollment-result" id="enrollmentResult" hidden></div>
+            <section id="enrollmentIdentityConflict" class="admin-identity-conflict" hidden aria-labelledby="identityConflictTitle">
+              <h3 id="identityConflictTitle">扫码身份与原账号不一致</h3>
+              <p>原账号身份保持不变。可将本次扫码身份接入为新账号，或取消本次接入。</p>
+              <label for="identityConflictName">新账号名称</label>
+              <input id="identityConflictName" maxlength="80" autocomplete="off" />
+              <button id="addConflictIdentityButton" type="button">作为新账号接入</button>
+            </section>
             <button id="focusEnrollmentWindowButton" type="button" hidden>打开受控登录窗口</button>
+            <button id="continueEnrollmentButton" type="button" hidden>已处理，继续验证</button>
             <button id="cancelEnrollmentButton" type="button">取消接入</button>
           </section>
           <p class="admin-feedback" id="enrollmentDialogFeedback" role="status"></p>

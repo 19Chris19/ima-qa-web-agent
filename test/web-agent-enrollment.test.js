@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
+const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
 const {
   WebAgentEnrollmentManager,
   captureAuthFromContext,
@@ -98,6 +99,231 @@ function makeManager(overrides = {}) {
   return { tempDir, accountDirectory, fakeBrowser, manager, poolCalls, state };
 }
 
+function syntheticAuth(uid = 'synthetic-distinct') {
+  return { headers: { 'x-ima-cookie': `IMA-UID=${uid}; IMA-TOKEN=synthetic-new-token; IMA-REFRESH-TOKEN=synthetic-refresh`, 'x-ima-bkn': '123' } };
+}
+
+async function conflictSetup(overrides = {}) {
+  const setup = makeManager(overrides);
+  const { manager, state, accountDirectory } = setup;
+  accountDirectory.upsertCapturedAccount({ id: 'original', name: 'original', knowledgeBaseId: 'web-kb-id',
+    headers: syntheticAuth('synthetic-original').headers });
+  setup.original = JSON.stringify(accountDirectory.getAccount('original'));
+  setup.storeBytes = fs.readFileSync(accountDirectory.storePath);
+  const started = await manager.start({ reauthAccountId: 'original' });
+  setup.id = started.taskId;
+  await waitFor(() => Boolean(state.wake));
+  state.auth = syntheticAuth(); state.wake();
+  await waitFor(() => manager.get(setup.id).state === 'identity_conflict');
+  return setup;
+}
+
+test('identity conflict is private, preserves store, adds once and runs the declared hook once', async () => {
+  let hooks = 0;
+  const setup = await conflictSetup({ onEnrolled: async () => { hooks++; return { success: true }; } });
+  const { manager, id, accountDirectory, storeBytes, original, state } = setup;
+  try {
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), storeBytes);
+    assert.equal(state.initCalls, 0);
+    for (const snapshot of [manager.get(id), manager.getActive()]) {
+      assert.deepEqual(snapshot.identityConflict, { actions: ['add', 'cancel'] });
+      assert.doesNotMatch(JSON.stringify(snapshot), /synthetic-distinct|synthetic-new-token|synthetic-refresh|principalFingerprint|x-ima/);
+    }
+    assert.equal(hooks, 0);
+    manager.captureAuth = async () => { throw new Error('must not rescan'); };
+    await Promise.all([manager.resolveIdentityConflict(id, { action: 'add', name: 'new-account' }),
+      manager.resolveIdentityConflict(id, { action: 'add', name: 'second-account' })]);
+    assert.equal(manager.get(id).state, 'completed');
+    assert.equal(accountDirectory.listAccounts().length, 2);
+    assert.deepEqual(accountDirectory.getAccount('original'), JSON.parse(original));
+    assert.equal(hooks, 1);
+    assert.equal(state.initCalls, 1);
+    assert.equal(manager.jobs.get(id).pendingAuth, null);
+    await assert.rejects(manager.resolveIdentityConflict(id, { action: 'add', name: 'again' }), { statusCode: 409 });
+  } finally { await manager.shutdown(); }
+});
+
+test('conflict addition keeps the original pool client and session', async () => {
+  const { manager, id, accountDirectory } = await conflictSetup();
+  const pool = new IMAWebAgentPool({ accounts: accountDirectory.getPoolAccounts() }, {
+    clientFactory: config => ({ headers: config.headers, sessionId: 'synthetic-session',
+      applyConfig(next) { this.headers = next.headers; } }),
+  });
+  manager.pool = pool;
+  const originalClient = pool.accounts[0].client;
+  const originalHeaders = { ...originalClient.headers };
+  try {
+    await manager.resolveIdentityConflict(id, { action: 'add', name: 'new' });
+    assert.equal(pool.accounts.length, 2);
+    assert.equal(pool.accounts[0].client, originalClient);
+    assert.equal(originalClient.sessionId, 'synthetic-session');
+    assert.deepEqual(originalClient.headers, originalHeaders);
+  } finally { await manager.shutdown(); }
+});
+
+test('conflict cancellation does not cancel unrelated verification on original account', async () => {
+  const cancelled = [];
+  const { manager, id } = await conflictSetup({ onCancelVerification: id => cancelled.push(id) });
+  await manager.cancel(id);
+  assert.deepEqual(cancelled, []);
+  await manager.shutdown();
+});
+
+test('conflict expires without an add request and clears all task resources', async () => {
+  let now = Date.now();
+  const { manager, id, fakeBrowser, accountDirectory, storeBytes } = await conflictSetup({ now: () => now });
+  try {
+    const job = manager.jobs.get(id);
+    clearTimeout(job.expiryTimer);
+    now = job.expiresAt;
+    manager._scheduleExpiry(job);
+    await waitFor(() => job.state === 'failed' && job.context === null);
+    assert.equal(job.pendingAuth, null);
+    assert.equal(fakeBrowser.context.closed, true);
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), storeBytes);
+  } finally { await manager.shutdown(); }
+});
+
+test('invalid conflict decisions retain the pending login and do not change the store', async () => {
+  const { manager, id, accountDirectory, storeBytes } = await conflictSetup();
+  try {
+    await assert.rejects(manager.resolveIdentityConflict(id, { action: 'replace', name: 'new' }), { statusCode: 400 });
+    await assert.rejects(manager.resolveIdentityConflict(id, { action: 'add', name: '' }), { statusCode: 400 });
+    assert.equal(manager.get(id).state, 'identity_conflict');
+    assert.ok(manager.jobs.get(id).pendingAuth);
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), storeBytes);
+  } finally { await manager.shutdown(); }
+});
+
+test('conflict add waits for membership and concurrent continue uses captured auth once', async () => {
+  let membership = 'not_joined'; let hooks = 0;
+  const { manager, id, accountDirectory, state } = await conflictSetup({
+    membershipVerifier: async () => ({ membership }),
+    onEnrolled: async () => { hooks++; return { success: true }; },
+  });
+  try {
+    manager.jobs.get(id).shareUrl = 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64);
+    manager.captureAuth = async () => { throw new Error('must not rescan'); };
+    await manager.resolveIdentityConflict(id, { action: 'add', name: 'member' });
+    assert.equal(manager.get(id).state, 'waiting_for_membership');
+    assert.equal(accountDirectory.listAccounts().length, 1);
+    membership = 'joined';
+    await Promise.all([manager.continueVerification(id), manager.continueVerification(id)]);
+    assert.equal(manager.get(id).state, 'completed');
+    assert.equal(accountDirectory.listAccounts().length, 2);
+    assert.equal(state.initCalls, 1);
+    assert.equal(hooks, 1);
+  } finally { await manager.shutdown(); }
+});
+
+test('conflict duplicate identity fails without replacing credentials or duplicating capacity', async () => {
+  const { manager, id, accountDirectory, original } = await conflictSetup();
+  try {
+    accountDirectory.upsertCapturedAccount({ id: 'existing', name: 'existing', knowledgeBaseId: 'web-kb-id',
+      headers: syntheticAuth().headers });
+    const before = fs.readFileSync(accountDirectory.storePath);
+    await manager.resolveIdentityConflict(id, { action: 'add', name: 'duplicate' });
+    assert.equal(manager.get(id).state, 'failed');
+    assert.equal(manager.get(id).diagnostics.lastFailure.code, 'duplicate_ima_identity');
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), before);
+    assert.deepEqual(accountDirectory.getAccount('original'), JSON.parse(original));
+    assert.equal(accountDirectory.listAccounts().length, 2);
+    assert.equal(manager.jobs.get(id).pendingAuth, null);
+  } finally { await manager.shutdown(); }
+});
+
+for (const action of ['cancel', 'expiry', 'failure']) {
+  test(`pending conflict ${action} clears private auth and browser without changing store`, async () => {
+    let now = Date.now();
+    const { manager, id, accountDirectory, storeBytes, fakeBrowser } = await conflictSetup({ now: () => now });
+    try {
+      if (action === 'cancel') await manager.cancel(id);
+      else {
+        if (action === 'expiry') now += 60000;
+        else manager.clientFactory = () => ({ initSession: async () => { throw new Error('synthetic failure'); } });
+        await manager.resolveIdentityConflict(id, { action: 'add', name: 'new' });
+      }
+      assert.equal(manager.get(id).state, action === 'cancel' ? 'cancelled' : 'failed');
+      assert.equal(manager.jobs.get(id).pendingAuth, null);
+      assert.equal(fakeBrowser.context.closed, true);
+      assert.deepEqual(fs.readFileSync(accountDirectory.storePath), storeBytes);
+    } finally { await manager.shutdown(); }
+  });
+}
+
+for (const interruption of ['cancel', 'expiry']) {
+  test(`conflict ${interruption} during session verification prevents late persistence`, async () => {
+    let now = Date.now(); let release; let entered;
+    const ready = new Promise(resolve => { entered = resolve; });
+    const setup = await conflictSetup({ now: () => now });
+    const { manager, id, accountDirectory, storeBytes } = setup;
+    manager.clientFactory = () => ({ initSession: () => { entered(); return new Promise(resolve => { release = resolve; }); } });
+    try {
+      const adding = manager.resolveIdentityConflict(id, { action: 'add', name: 'late' });
+      await ready;
+      if (interruption === 'cancel') await manager.cancel(id);
+      else now += 60000;
+      release(); await adding;
+      assert.deepEqual(fs.readFileSync(accountDirectory.storePath), storeBytes);
+      assert.equal(manager.jobs.get(id).pendingAuth, null);
+      assert.equal(manager.get(id).state, interruption === 'cancel' ? 'cancelled' : 'failed');
+    } finally { await manager.shutdown(); }
+  });
+}
+
+test('unknown scanned identity fails closed and preserves original credentials', async () => {
+  const setup = makeManager();
+  const { manager, state, accountDirectory } = setup;
+  accountDirectory.upsertCapturedAccount({ id: 'original', name: 'original', knowledgeBaseId: 'web-kb-id', headers: syntheticAuth('original').headers });
+  const before = fs.readFileSync(accountDirectory.storePath);
+  try {
+    const { taskId } = await manager.start({ reauthAccountId: 'original' });
+    await waitFor(() => Boolean(state.wake));
+    state.auth = { headers: { 'x-ima-cookie': 'IMA-TOKEN=synthetic-no-uid', 'x-ima-bkn': '123' } }; state.wake();
+    await waitFor(() => manager.get(taskId).state === 'failed');
+    assert.equal(manager.get(taskId).diagnostics.lastFailure.code, 'ima_identity_unverified');
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), before);
+    assert.equal(state.initCalls, 0);
+  } finally { await manager.shutdown(); }
+});
+
+test('share authorization waits in memory and resumes in the same window after joining', async () => {
+  let permission = 'not_joined';
+  const setup = makeManager({ membershipVerifier: async () => ({ membership: permission }) });
+  const { manager, state, accountDirectory, fakeBrowser, poolCalls } = setup;
+  manager.config.webAgent.sharedKnowledgeBaseShareUrl = 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64);
+  const started = await manager.start({ name: 'synthetic-member' });
+  await waitFor(() => Boolean(state.wake));
+  state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic', 'x-ima-bkn': '123' } };
+  state.wake();
+  await waitFor(() => manager.get(started.taskId).state === 'waiting_for_membership');
+  assert.equal(accountDirectory.listAccounts().length, 0);
+  assert.equal(poolCalls.length, 0);
+  assert.equal(fakeBrowser.context.closed, false);
+  assert.equal(state.initCalls, 0);
+  permission = 'joined';
+  await manager.continueVerification(started.taskId);
+  assert.equal(manager.get(started.taskId).state, 'completed');
+  assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.equal(fakeBrowser.context.closed, true);
+  await assert.rejects(manager.continueVerification(started.taskId), /不在等待/);
+  await manager.shutdown();
+});
+
+test('permission network failures do not assert non-membership; cancelling never stores auth', async () => {
+  const { manager, state, accountDirectory, fakeBrowser } = makeManager({ membershipVerifier: async () => { throw new Error('synthetic network failure'); } });
+  manager.config.webAgent.sharedKnowledgeBaseShareUrl = 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64);
+  const started = await manager.start({ name: 'synthetic-unknown' });
+  await waitFor(() => Boolean(state.wake));
+  state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic', 'x-ima-bkn': '123' } }; state.wake();
+  await waitFor(() => manager.get(started.taskId).state === 'access_unverified');
+  assert.equal(manager.get(started.taskId).authorizationStatus, 'unknown');
+  await manager.cancel(started.taskId);
+  assert.equal(accountDirectory.listAccounts().length, 0);
+  assert.equal(fakeBrowser.context.closed, true);
+  await manager.shutdown();
+});
+
 test('QR enrollment keeps screenshot in memory and stores credentials only after session verification', async () => {
   const { accountDirectory, fakeBrowser, manager, poolCalls, state } = makeManager();
   const started = await manager.start({ name: 'account-c' });
@@ -141,9 +367,10 @@ test('enrollment closes browser before one automatic probe and retains account w
   await waitFor(() => Boolean(state.wake));
   state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic-user; IMA-TOKEN=synthetic-token', 'x-ima-bkn': '123' } };
   state.wake();
-  await waitFor(() => manager.get(started.taskId).state === 'completed');
+  await waitFor(() => manager.get(started.taskId).state === 'failed');
   assert.equal(calls, 1);
   assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.equal(accountDirectory.listAccounts()[0].status, 'disabled');
   assert.match(manager.get(started.taskId).detail, /验证未通过/);
   assert.equal(JSON.stringify(manager.get(started.taskId)).includes('Synthetic test question'), false);
   await manager.shutdown();
@@ -176,10 +403,11 @@ test('QR re-login is bound to the existing slot and preserves it on identity mis
   };
   state.wake();
 
-  await waitFor(() => manager.get(started.taskId).state === 'failed');
-  assert.match(manager.get(started.taskId).error, /不是原账号/u);
+  await waitFor(() => manager.get(started.taskId).state === 'identity_conflict');
+  assert.equal(manager.get(started.taskId).error, null);
   assert.equal(accountDirectory.listAccounts().length, 1);
   assert.equal(accountDirectory.listAccounts()[0].name, 'Account C');
+  await manager.cancel(started.taskId);
 });
 
 test('QR re-login replaces the original slot only after the same IMA identity verifies', async () => {

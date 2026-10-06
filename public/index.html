@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>共享知识库问答</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23167c80'/%3E%3Cpath d='M9 8h14v16H9zM12 13h8M12 17h6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/styles.css" />
@@ -43,8 +43,11 @@
             <div class="status-pill" id="statusPill">ready</div>
           </header>
 
-          <div class="chat" id="chatLog" aria-live="polite"></div>
+          <div class="chat" id="chatLog" aria-live="polite" tabindex="0" aria-label="问答记录"></div>
 
+          <div class="composer-wrap">
+          <div class="reading-actions" id="readingActions"></div>
+          <p class="composer-notice" id="composerNotice" role="status"></p>
           <form class="composer" id="askForm">
             <textarea
               id="questionInput"
@@ -55,6 +58,7 @@
               placeholder="输入问题"
               aria-label="输入问题"
             ></textarea>
+            <div class="composer-tools">
             <button class="icon-button" id="sendButton" type="submit" title="发送" aria-label="发送">
               <svg class="send-icon" viewBox="0 0 24 24" role="img" aria-hidden="true">
                 <path d="M5 12h13" />
@@ -64,13 +68,16 @@
                 <rect x="7" y="7" width="10" height="10" rx="1" />
               </svg>
             </button>
+            </div>
           </form>
+          </div>
         </section>
       </section>
     </main>
     <script src="/vendor/marked.umd.js" defer></script>
     <script src="/vendor/purify.min.js" defer></script>
     <script src="/answer-renderer.js" defer></script>
+    <script src="/qa-experience.js" defer></script>
     <script src="/client.js" defer></script>
   </body>
 </html>

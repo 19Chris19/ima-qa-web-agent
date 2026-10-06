@@ -4,6 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
+test('default published image matches the source package version', () => {
+  const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const compose = fs.readFileSync(path.join(root, 'compose.images.yaml'), 'utf8');
+  assert.ok(compose.includes(`ghcr.io/19chris19/ima-qa-web-agent:v${version}`));
+});
+
 test('version image publication is gated and immutable', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/images.yml'), 'utf8');
   assert.match(workflow, /linux\/amd64,linux\/arm64/);

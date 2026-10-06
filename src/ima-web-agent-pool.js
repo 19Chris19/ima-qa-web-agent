@@ -50,6 +50,7 @@ class IMAWebAgentPool {
       const id = accountId(config, index);
       const existing = existingById.get(id);
       if (existing) {
+        const wasDisabled = existing.disabled;
         existing.name = config.name || existing.name || id;
         existing.webQualification = config.webQualification || null;
         existing.principalFingerprint = config.principalFingerprint;
@@ -57,6 +58,10 @@ class IMAWebAgentPool {
         existing.client.applyConfig?.({ ...config, id, name: existing.name });
         existing.disabled = Boolean(config.disabled);
         existing.disabledReason = config.disabledReason || '';
+        if (existing.disabled) existing.client.stopAutoRefresh?.();
+        else if (wasDisabled && this.autoRefreshStarted) {
+          existing.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(existing, generation));
+        }
         next.push(existing);
         seen.add(id);
         this._notifyState(existing);
@@ -87,6 +92,7 @@ class IMAWebAgentPool {
     });
 
     for (const account of this.accounts) {
+      if (!seen.has(account.id)) account.client.stopAutoRefresh?.();
       if (!seen.has(account.id) && account.activeRequests > 0) {
         account.disabled = true;
         account.disabledReason = 'removed_while_active';
@@ -98,16 +104,35 @@ class IMAWebAgentPool {
     this.accounts = next;
     if (this.autoRefreshStarted) {
       for (const account of added) {
-        account.client.startAutoRefresh?.();
+        if (!account.disabled) account.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(account, generation));
       }
     }
     this._notifyAvailability();
   }
 
+  withCredentialReplacement(accountId, writeAndSync) {
+    const previous = this.accounts.find(account => account.id === accountId);
+    if (!previous) return writeAndSync();
+    // The caller writes and syncs synchronously; no old refresh can persist in between.
+    previous.client.invalidateCredentials?.({ suspend: true });
+    previous.client.stopAutoRefresh?.();
+    try {
+      return writeAndSync();
+    } catch (error) {
+      for (const account of new Set([previous, ...this.accounts.filter(row => row.id === previous.id)])) {
+        account.client.invalidateCredentials?.({ suspend: true });
+        account.client.stopAutoRefresh?.();
+        account.maintenanceOperation = 'qualification';
+        account.webQualification = null;
+      }
+      throw error;
+    }
+  }
+
   async ensureFreshAuth() {
     const results = await Promise.allSettled(
       this.accounts.map(async (account) => {
-        if (typeof account.client.ensureFreshAuth !== 'function') {
+        if (account.disabled || typeof account.client.ensureFreshAuth !== 'function') {
           return false;
         }
         const refreshed = await account.client.ensureFreshAuth();
@@ -126,7 +151,7 @@ class IMAWebAgentPool {
   startAutoRefresh() {
     this.autoRefreshStarted = true;
     for (const account of this.accounts) {
-      account.client.startAutoRefresh?.();
+      if (!account.disabled) account.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(account, generation));
     }
   }
 
@@ -282,12 +307,14 @@ class IMAWebAgentPool {
     }
     account.maintenanceOperation = operation;
     this._notifyState(account);
+    let result;
     try {
-      return await fn();
+      result = await fn();
     } finally {
       account.maintenanceOperation = '';
       this._notifyState(account);
     }
+    return { ...result, ...this._publicAccountState(account, { includeDetails: true }) };
   }
 
   _leaseAccount() {
@@ -515,7 +542,7 @@ class IMAWebAgentPool {
   _publicAccountState(account, options = {}) {
     const now = options.now || this.now();
     const coolingDown = !account.disabled && account.cooldownUntil > now;
-    const status = account.disabled
+    const status = account.disabled || account.maintenanceOperation
       ? 'unavailable'
       : account.activeRequests > 0
         ? 'busy'
@@ -562,9 +589,11 @@ class IMAWebAgentPool {
     }
   }
 
-  _notifyCredentials(account) {
+  _notifyCredentials(account, generation = account.client.credentialGeneration) {
+    if (!this.accounts.includes(account) || account.maintenanceOperation === 'qualification'
+        || account.client.credentialWritesSuspended || generation !== account.client.credentialGeneration) return;
     if (typeof this.onAccountCredentialsChange === 'function') {
-      this.onAccountCredentialsChange(account.id, account.client.getConfigSnapshot?.() || {});
+      return this.onAccountCredentialsChange(account.id, account.client.getConfigSnapshot?.() || {});
     }
   }
 }
