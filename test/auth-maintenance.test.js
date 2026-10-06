@@ -112,3 +112,18 @@ test('pool stops disabled and removed clients and wires automatic credential per
   assert.equal(clients.get('synthetic-a').stops, 1);
   pool.syncAccounts([]); assert.equal(clients.get('synthetic-a').stops, 2);
 });
+
+test('failed credential persistence is retried before another renewal', async () => {
+  const { IMAWebAgentClient } = require('../src/ima-web-agent-client');
+  const client = new IMAWebAgentClient({ headers: {}, refreshIntervalMs: 0 }, () => assert.fail());
+  let checks = 0; let writes = 0;
+  client.ensureFreshAuth = async () => ++checks === 1;
+  client.startAutoRefresh(async () => { if (++writes === 1) throw new Error('synthetic disk failure'); });
+  await assert.rejects(client.maintenance.check());
+  assert.equal(client.pendingCredentialPersistence, true);
+  await client.maintenance.check();
+  assert.equal(writes, 2);
+  assert.equal(checks, 2);
+  assert.equal(client.pendingCredentialPersistence, false);
+  client.stopAutoRefresh();
+});

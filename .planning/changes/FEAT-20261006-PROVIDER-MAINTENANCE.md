@@ -8,3 +8,5 @@ Rollout: isolated candidate only; runtime Provider compatibility audit required 
 Rollback: revert this feature without changing account or conversation stores.
 
 Follow-up: startup credential checks skip disabled accounts, including newly imported identities. Eight scheduler/pool tests pass; imports cannot renew merely because the service starts.
+
+Persistence follow-up: await automatic credential persistence and retry failed writes before another renewal; nine synthetic scheduler/pool tests cover the failure boundary.
