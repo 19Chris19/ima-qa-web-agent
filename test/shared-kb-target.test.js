@@ -6,6 +6,35 @@ const { fixture } = require('./helpers/share-metadata');
 const shareId = 'a'.repeat(64);
 const url = `https://ima.qq.com/wiki/?shareId=${shareId}`;
 
+for (const interruption of ['parent', 'timeout']) {
+  test(`membership retains its 15s bound with an enrollment signal: ${interruption}`, async t => {
+    const parent = new AbortController(), timeout = new AbortController();
+    let timeoutRequested = false, requestSignal;
+    t.mock.method(AbortSignal, 'timeout', ms => {
+      assert.equal(ms, 15000); timeoutRequested = true; return timeout.signal;
+    });
+    const pending = verifySharedMembership(url, {
+      expectedId: '123', signal: parent.signal,
+      headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=synthetic', 'x-ima-bkn': '123' },
+      fetchImpl: async (_url, options) => {
+        requestSignal = options.signal;
+        return new Promise((_resolve, reject) => options.signal.addEventListener('abort',
+          () => reject(options.signal.reason), { once: true }));
+      },
+    });
+    const rejected = assert.rejects(pending, { name: 'AbortError' });
+    const boundPresent = timeoutRequested;
+    const combined = requestSignal !== parent.signal;
+    (interruption === 'parent' ? parent : timeout).abort();
+    const aborted = requestSignal.aborted;
+    parent.abort();
+    await rejected;
+    assert.equal(boundPresent, true);
+    assert.equal(combined, true);
+    assert.equal(aborted, true);
+  });
+}
+
 test('only canonical official share links are allowed', () => {
   assert.equal(parseShareUrl(url).shareId, shareId);
   for (const input of ['http://ima.qq.com/wiki/?shareId=' + shareId,

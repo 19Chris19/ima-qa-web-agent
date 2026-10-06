@@ -118,9 +118,11 @@ class IMAWebAgentClient {
   }
 
   async initSession(options = {}) {
+    options.signal?.throwIfAborted();
     const clientContext = options.clientContext || this.createFirstPartyClientContext();
     const sessionOptions = { ...options, clientContext };
     let payload = await this._initSessionOnce(sessionOptions);
+    options.signal?.throwIfAborted();
     let sessionId = payload.session_id || payload.session_info?.id;
 
     if (!sessionId && shouldRefreshAuth(payload) && options.allowAuthRefresh === false) {
@@ -131,7 +133,9 @@ class IMAWebAgentClient {
 
     if (!sessionId && shouldRefreshAuth(payload)) {
       await this.refreshAuth(sessionOptions);
+      options.signal?.throwIfAborted();
       payload = await this._initSessionOnce(sessionOptions);
+      options.signal?.throwIfAborted();
       sessionId = payload.session_id || payload.session_info?.id;
     }
 
@@ -201,6 +205,7 @@ class IMAWebAgentClient {
   }
 
   async _refreshAuthOnce(options = {}) {
+    options.signal?.throwIfAborted();
     const cookie = parseCookieHeader(this.headers['x-ima-cookie'] || this.headers.cookie || '');
     const refreshToken = cookie['IMA-REFRESH-TOKEN'];
     const userId = cookie['IMA-UID'];
@@ -225,6 +230,7 @@ class IMAWebAgentClient {
     });
 
     const payload = await readJsonResponse(response, 'IMA auth refresh');
+    options.signal?.throwIfAborted();
     const data = payload.accountInfo || payload.account_info || payload.data || payload;
     const now = Date.now();
     const nextCookie = {

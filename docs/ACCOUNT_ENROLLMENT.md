@@ -49,9 +49,56 @@ or expired task. The existing `onEnrolled` callback performs the declared single
 QA check after insertion; no background QA probe or GET-triggered probe is added.
 As before, a failed post-insertion QA check does not remove the enrolled account.
 
+## Cancellation and Phase Deadlines
+
+`expiresAt` is the login/authorization deadline, not a total task deadline. It
+includes waiting for scan, identity-conflict resolution, membership and session
+initialization. Retrying or choosing add does not extend it. Membership retains
+its own 15-second request bound even when the enrollment cancellation signal is
+provided.
+
+On successful insertion, cleanup closes the temporary browser, drops pending
+authentication/QR references, aborts remaining login-stage requests and clears
+the login expiry timer. Only then does `onEnrolled` run the declared single
+knowledge-base probe. Public `WebReadiness.verify` has its own timeout (60 seconds
+by default), one dispatch/terminal evidence requirement and no auth refresh.
+It may finish after the former login deadline. That is not an extension of the
+login authorization and is not a seven-mode qualification procedure.
+
+Explicit cancellation and manager shutdown cancel an in-flight post-insertion
+probe through `onCancelVerification`. Shutdown does not merely hide its task.
+A cancelled callback cannot perform a late enrollment sync/completion, and the
+readiness cancellation guard prevents a late proof commit. Accounts already
+inserted are retained; cancellation does not roll back their credentials.
+
+Session initialization now receives the login AbortSignal. Client guards reject
+late responses before refresh/retry or mutation of refreshed credentials, even
+when an injected transport ignores cancellation. Native requests also receive
+the signal. Late QR screenshots are discarded after cancellation, expiry or
+cleanup, and cannot restore a cleared task QR. No background retry is added.
+
+## Air Porting Notes
+
+Port the lifecycle controller, shutdown cancellation propagation, post-await
+guards and QR signal/terminal checks into the corresponding Air code selectively.
+Preserve any newer Air late-cancel guards and its native profile/policy/lane
+qualification contracts. Air may not have public `WebReadiness` or the same
+`onEnrolled` hook: connect cancellation to its actual verification owner rather
+than copying the public one-probe proof schema. Keep the existing Air client
+request bodies, session context and SSE parser unchanged when porting the narrow
+AbortSignal guards. Reconcile membership request timeouts only where that helper
+exists. Do not copy this public enrollment file wholesale over Air.
+
 ## Verification Boundary
 
 Tests use temporary stores, fake browsers/clients, controlled clocks and local
 HTTP fixtures. No real IMA network, live runtime, credentials, restarts, push or
 release are part of this candidate. Parent integration must retain the narrow
 route addition alongside independently edited management snapshots.
+
+The cancellation follow-up uses explicit synthetic keys, temporary stores, fake
+browser/session transports and deferred responses. It covers cancel/shutdown/
+expiry during initialization, cancellation during refresh, shutdown/cancel during
+the single probe, late QR, and independent phase timeouts. Real upstream abort
+acknowledgement and real browser teardown remain untested; no live acceptance is
+claimed.
