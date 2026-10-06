@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { AuthMaintenance } = require('./auth-maintenance');
 const { parseIMAWebAgentStream, parseIMAWebAgentEvent, mapIMAWebAgentEvent, extractSources } = require('./ima-upstream-protocol');
 const { buildIMAKnowledgeAgentHeaders, buildIMAKnowledgeAgentRequest, buildIMAKnowledgeAgentSessionRequest, classifyIMAKnowledgeAgentSource } = require('./ima-knowledge-agent-contract');
 
@@ -32,12 +33,24 @@ class IMAWebAgentClient {
     this.runtimeEnvPath = config.runtimeEnvPath || '';
     this.tokenExpiresAt = Number(config.tokenExpiresAt || 0) || null;
     this.refreshTokenExpiresAt = Number(config.refreshTokenExpiresAt || 0) || null;
-    this.refreshSkewMs = Number(config.refreshSkewMs || 10 * 60 * 1000);
-    this.refreshIntervalMs = Number(config.refreshIntervalMs || 60 * 1000);
+    this.refreshSkewMs = Number(config.refreshSkewMs ?? 10 * 60 * 1000);
+    this.refreshIntervalMs = Number(config.refreshIntervalMs ?? 60 * 1000);
     this.lastRefreshAt = null;
     this.lastRefreshError = '';
     this.refreshTimer = null;
     this.refreshPromise = null;
+    this.maintenance = new AuthMaintenance({
+      interval: () => this.refreshIntervalMs,
+      check: async () => {
+        try {
+          const refreshed = await this.ensureFreshAuth();
+          if (refreshed) this.onAutoRefreshed?.(this.getConfigSnapshot());
+        } catch (error) {
+          this.lastRefreshError = 'auth_refresh_failed';
+          throw error;
+        }
+      },
+    });
   }
 
   applyConfig(config = {}) {
@@ -309,26 +322,15 @@ class IMAWebAgentClient {
     };
   }
 
-  startAutoRefresh() {
-    this.stopAutoRefresh();
-    if (!this.refreshIntervalMs || this.refreshIntervalMs <= 0) {
-      return null;
-    }
-
-    this.refreshTimer = setInterval(() => {
-      this.ensureFreshAuth().catch((error) => {
-        this.lastRefreshError = error?.message || 'IMA Web auth refresh failed';
-      });
-    }, this.refreshIntervalMs);
-    this.refreshTimer.unref?.();
+  startAutoRefresh(onRefreshed) {
+    this.onAutoRefreshed = onRefreshed;
+    this.refreshTimer = this.maintenance.start();
     return this.refreshTimer;
   }
 
   stopAutoRefresh() {
-    if (this.refreshTimer) {
-      clearInterval(this.refreshTimer);
-      this.refreshTimer = null;
-    }
+    this.maintenance.stop();
+    this.refreshTimer = null;
   }
 
   getAuthStatus(now = Date.now()) {
@@ -348,6 +350,12 @@ class IMAWebAgentClient {
       lastRefreshAt: this.lastRefreshAt ? new Date(this.lastRefreshAt).toISOString() : null,
       lastRefreshError: this.lastRefreshError || null,
       runtimePersistence: this.runtimeEnvPath ? 'enabled' : 'disabled',
+      maintenance: {
+        ...this.maintenance.snapshot(),
+        refreshEligibleAt: this.tokenExpiresAt
+          ? new Date(this.tokenExpiresAt - this.refreshSkewMs).toISOString() : null,
+        expiryKnown: Boolean(this.tokenExpiresAt),
+      },
     };
   }
 
