@@ -69,6 +69,9 @@ async function applyPreparedTransfer({ bundle, sourceStore, sourceKey, targetSto
     const originalIds = new Set(original.accounts.map(row => row.id));
     const added = candidate.accounts.filter(row => !originalIds.has(row.id));
     if (added.some(row => row.runtime?.disabled !== true)) throw fail('transfer_candidate_must_be_disabled');
+    if (!rollback && added.some(row => row.runtime?.enrollmentQualificationRequired !== true)) {
+      throw fail('transfer_candidate_qualification_required');
+    }
     if (candidate.accounts.length !== original.accounts.length + added.length ||
         original.accounts.some(row => JSON.stringify(candidate.accounts.find(c => c.id === row.id)) !== JSON.stringify(row))) {
       throw fail('transfer_original_records_changed');

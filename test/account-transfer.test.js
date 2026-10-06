@@ -5,6 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
 const { readSnapshot, buildTransfer, prepareTransfer, decryptAccount, exportHistory } = require('../src/account-transfer');
+const { WebReadiness } = require('../src/web-readiness');
+const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-transfer-'));
@@ -51,6 +53,49 @@ test('identities deduplicate across installation HMAC keys without replacing exi
   assert.equal(result.report.duplicateIdentities, 1); assert.equal(result.report.newIdentities, 0);
   assert.deepEqual(result.candidate.accounts, input.target.store.accounts);
 });
+
+for (const mode of ['classic_knowledge', 'knowledge_agent']) {
+  test(`imported ${mode} account needs QA proof and remains migration-stopped after proof`, async t => {
+    const f = fixture(t); f.add(f.source, 'source', 'synthetic-source');
+    const { candidate } = buildTransfer(f.read());
+    candidate.settings = { ...candidate.settings, webMode: mode };
+    fs.writeFileSync(f.target.storePath, JSON.stringify(candidate));
+    const directory = f.target.directory;
+    directory.reload();
+    const id = candidate.accounts[0].id;
+    const pool = new IMAWebAgentPool({ accounts: directory.getPoolAccounts() }, {
+      clientFactory: () => ({ applyConfig() {}, stopAutoRefresh() {} }),
+      onAccountStateChange: row => directory.recordRuntimeState(row),
+    });
+    let requests = 0;
+    const readiness = new WebReadiness({ directory, pool, timeoutMs: 1000,
+      clientFactory: () => ({ async *streamAsk(options) {
+        requests++; options.onDispatch();
+        yield { type: 'sources', sources: [{ title: 'Synthetic source' }], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' };
+        yield { type: 'done' };
+      } }),
+    });
+    assert.throws(() => directory.setDisabled(id, false), { code: 'enrollment_qualification_required' });
+    directory.recordRuntimeState({ id, disabled: false });
+    readiness.sync();
+    assert.equal(readiness.snapshot().capacity, 0);
+    assert.equal(directory.reload().accounts[0].runtime.enrollmentQualificationRequired, true);
+    const result = await readiness.verify(id);
+    assert.equal(requests, 1);
+    assert.equal(result.success, true);
+    assert.equal(result.activated, false);
+    assert.equal(result.capacity, 0);
+    const runtime = directory.reload().accounts[0].runtime;
+    assert.equal(runtime.enrollmentQualificationRequired, false);
+    assert.equal(runtime.disabled, true);
+    assert.equal(runtime.disabledReason, 'migration_verification_required');
+    directory.setDisabled(id, false);
+    readiness.sync();
+    assert.equal(readiness.snapshot().capacity, 1);
+    assert.equal(readiness.snapshot().accounts[0].schedulable, true);
+  });
+}
 
 test('corrupt credentials, knowledge scope mismatches and duplicate targets fail closed', t => {
   const f = fixture(t); f.add(f.source, 'source', 'synthetic-source'); f.add(f.target, 'target', 'synthetic-target');

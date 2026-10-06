@@ -32,6 +32,25 @@ test('rollback before apply refuses without writes', async t => {
   await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_retirement_missing' });
 });
 
+test('apply rejects legacy pending imports without a QA guard before retirement or store writes', async t => {
+  const f = await fixture(t); f.prepare();
+  const candidateFile = path.join(f.input.bundle, 'candidate.accounts.json');
+  const manifestFile = path.join(f.input.bundle, 'manifest.json');
+  const candidate = parse(candidateFile);
+  const added = candidate.accounts.find(row => row.source === 'offline-transfer');
+  delete added.runtime.enrollmentQualificationRequired;
+  write(candidateFile, candidate);
+  const manifest = parse(manifestFile);
+  manifest.candidateHash = hash(read(candidateFile));
+  write(manifestFile, manifest);
+  const before = read(f.input.targetStore);
+  await assert.rejects(applyPreparedTransfer(f.input), { code: 'transfer_candidate_qualification_required' });
+  assert.equal(read(f.input.targetStore), before);
+  assert.equal(fs.existsSync(`${f.input.sourceStore}.retirement.json`), false);
+  // Legacy rollback still reaches its journal checks, not the new apply-only guard.
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_retirement_missing' });
+});
+
 for (const stage of ['before-target', 'after-target']) {
   test(`apply crash ${stage} retains retirement and retries without duplication`, async t => {
     const f = await fixture(t); f.prepare();

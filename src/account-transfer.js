@@ -101,6 +101,7 @@ function buildTransfer({ source, target, knowledgeBaseId, now = new Date().toISO
     // Drop old capability proofs, machine paths and transient scheduling state across installations.
     const runtime = {
       disabled: true, disabledReason: 'migration_verification_required', activeRequests: 0,
+      enrollmentQualificationRequired: true,
       cooldownUntil: 0, consecutiveErrors: 0, totalRequests: 0,
       tokenExpiresAt: account.runtime?.tokenExpiresAt || config.tokenExpiresAt,
       refreshTokenExpiresAt: account.runtime?.refreshTokenExpiresAt || config.refreshTokenExpiresAt,

@@ -25,7 +25,12 @@ No admin UI, live stores, credentials, Docker runtime, service operations or pus
 - Installation fix: 13/13 passed, including unrelated-volume acceptance, existing
   project protection, orphan label/name rejection, query failure and owned resume.
 - All Docker/SSH installation commands were mocked; no runtime commands executed.
-- Migration guard and complete-suite verification are recorded in later commits.
+- Focused transfer/readiness/activation/rollback/installation run: 109/109 passed.
+  The later legacy-bundle apply guard separately went red then green (1/1).
+- New imports now require QA before enable; a successful proof preserves migration
+  stop in both modes. Old unguarded prepared additions are rejected on apply, not
+  silently upgraded. Rollback retains its original journal checks.
+- Complete-suite verification is recorded in the documentation follow-up commit.
 - Repository governance command cannot run: scripts/check_governance.py is absent.
   Main owns clean deployment acceptance.
 
