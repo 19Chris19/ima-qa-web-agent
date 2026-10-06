@@ -11,9 +11,12 @@ No production service, credential, backend, admin, vendor or renderer-core chang
 - Single-line composer: 56px capsule, 28px radius. A measurement-only hidden
   textarea detects wrapping; the interactive textarea is never replaced.
   Multiline text spans the full width above tools, with a 144px height ceiling.
-- While generating without a draft, send becomes stop and calls the existing
-  AbortController. With a draft, send is unavailable, a separate stop control
-  remains reachable and the notice says to stop or wait. Drafts are in-memory
+- While generating, the single primary send control remains stop, with or without
+  a draft, and calls the existing AbortController. There is no extra stop button.
+  A layout-neutral notice asks the user to stop or wait before sending a draft.
+  On completion the primary control returns to send. Empty submissions do not
+  dispatch a request; the current primary control remains enabled. Drafts are
+  preserved and are in-memory
   only: no queue, auto-submit, concurrent turn, or persistence claim.
 - Wheel-up, touch, pointer reading and upward keyboard/scroll navigation suspend
   streaming follow. The centered, named return-latest button explicitly resumes
