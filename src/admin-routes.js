@@ -189,6 +189,13 @@ function registerAdminRoutes(app, options = {}) {
       try { res.json({ success: true, enrollment: await enrollmentManager.continueVerification(req.params.enrollmentId) }); }
       catch (error) { sendAdminError(res, error); }
     });
+    app.post('/api/admin/enrollments/:enrollmentId/identity', auth, async (req, res) => {
+      try {
+        res.json({ success: true, enrollment: await enrollmentManager.resolveIdentityConflict(
+          req.params.enrollmentId, { action: req.body?.action, name: req.body?.name },
+        ) });
+      } catch (error) { sendAdminError(res, error); }
+    });
     app.post('/api/admin/enrollments', auth, async (req, res) => {
       try {
         const enrollment = await enrollmentManager.start({
