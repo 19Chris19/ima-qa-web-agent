@@ -74,7 +74,9 @@ test('helper ownership validates paths and definitions before repair or uninstal
 test('synthetic server install pins the image, pauses for human authorization and can safely resume', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guided-install-')); const events = []; const commands = [];
   const deps = { run: async (bin, args) => commands.push([bin, ...args]),
-    capture: async (bin, args) => args[0] === 'ps' ? '' : JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]),
+    capture: async (bin, args) => args[0] === 'ps' ? '' : args[0] === 'volume'
+      ? args.includes('--filter') ? '' : 'ima-guided_provider-state-other\nother_provider-state'
+      : JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]),
     portAvailable: async () => {}, fetch: async url => url.includes('/bootstrap')
       ? Response.json({ provider: 'ima-web-agent', sharedKnowledgeBaseId: '123456789', enrollment: { supportsAdminPageQr: false, authorizationProtocol: 'shared_library_membership_v1' } }) : new Response(fixture()) };
   const options = { mode: 'server', image: 'synthetic/provider:fixture', shareUrl: 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64) };
@@ -99,12 +101,40 @@ test('foreign projects and protocol failures block before any secret is generate
   try {
     await assert.rejects(guided(root, 'install', options, () => {}, deps), /existing_compose_project_protected/);
     assert.equal(fs.existsSync(path.join(root, '.onboarding/provider.env')), false);
-    deps.capture = async (_, args) => args[0] === 'ps' ? '' : JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]);
+    deps.capture = async (_, args) => ['ps', 'volume'].includes(args[0]) ? '' : JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]);
     deps.run = async (_, args) => { if (args[0] === 'run') throw new Error('browser_protocol_version_mismatch'); };
     await assert.rejects(guided(root, 'install', options, () => {}, deps), /browser_protocol_version_mismatch/);
     assert.equal(fs.existsSync(path.join(root, '.onboarding/provider.env')), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+for (const scenario of ['project-volume', 'exact-name', 'query-failure']) {
+  test(`new install rejects orphan ${scenario} before pull, writes or startup`, async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guided-orphan-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const commands = [];
+    const deps = {
+      run: async (_, args) => { commands.push(args); },
+      capture: async (_, args) => {
+        if (args[0] === 'ps') return '';
+        if (args[0] === 'volume') {
+          if (scenario === 'query-failure') throw new Error('synthetic_volume_query_failed');
+          if (args.includes('--filter')) assert.equal(args.at(-1), 'label=com.docker.compose.project=synthetic');
+          return args.includes('--filter')
+            ? scenario === 'project-volume' ? 'renamed-synthetic-volume' : ''
+            : scenario === 'exact-name' ? 'synthetic_provider-state' : '';
+        }
+        return JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]);
+      },
+      portAvailable: async () => {},
+      fetch: async () => { throw new Error('unexpected_fetch_after_orphan'); },
+    };
+    await assert.rejects(guided(root, 'install', { mode: 'server', project: 'synthetic',
+      image: 'synthetic/provider:fixture', shareUrl: 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64) }, () => {}, deps),
+    scenario === 'query-failure' ? /synthetic_volume_query_failed/ : /existing_compose_volume_protected/);
+    assert.equal(fs.existsSync(path.join(root, '.onboarding')), false);
+    assert.deepEqual(commands, [['info'], ['compose', 'version']]);
+  });
+}
 test('SSH preparation keeps only maintenance credentials locally and never prints them', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-fixture-')); const events = [];
   try {

@@ -293,6 +293,12 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     await guided(root, 'doctor', options, emit, dependencies);
     const project = projectName(options.project); const hostPort = port(options.port, 3117);
     if (await readCommand('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`])) throw fail('existing_compose_project_protected');
+    // Compose can reuse persistent volumes even after every project container is gone.
+    const projectVolumes = await readCommand('docker', ['volume', 'ls', '--format', '{{.Name}}',
+      '--filter', `label=com.docker.compose.project=${project}`]);
+    if (projectVolumes.trim()) throw fail('existing_compose_volume_protected');
+    const volumeNames = await readCommand('docker', ['volume', 'ls', '--format', '{{.Name}}']);
+    if (volumeNames.split(/\r?\n/).includes(`${project}_provider-state`)) throw fail('existing_compose_volume_protected');
     await (dependencies.portAvailable || portAvailable)(hostPort);
     const image = options.image || `ghcr.io/19chris19/ima-qa-web-agent:v${require('../package.json').version}`;
     if (!/^[a-z0-9][a-z0-9./:_@-]+$/.test(image)) throw fail('invalid_image');
