@@ -81,6 +81,18 @@ not an install of the pending post-review fixes. Empty-pool container check of
 2cd17fb failed once without a retained cause, then passed both a diagnostic run
 and an unchanged rerun. Record this instability; do not call the first failure
 resolved or use these runs as final-install acceptance.
+The empty-pool verifier now emits only allowlisted failure stages, never raw
+command stderr or configuration. Synthetic fake-Docker tests cover known and
+unknown stages. The 2ecd5df image passed a subsequent diagnostic run; the earlier
+undifferentiated failure is still not attributed to a specific cause.
+
+## PR and review follow-up
+Public draft PR #12 contains the isolated release candidate. GitHub Test and
+pack passed for c943860. Local 2ecd5df full run passed 548/550 with two timing
+failures in enrollment waiting/cancellation; both passed unchanged in a focused
+rerun (2/2). Do not describe that local full run as entirely green. Private PR #6
+at Explorer 173c35a passed synthetic/build and Docker synthetic-chain CI.
+No maintainer merge, tag or release has occurred at this checkpoint.
 
 ## Rollback
 Revert scoped commits or select the previous version image; preserve current
