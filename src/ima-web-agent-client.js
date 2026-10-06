@@ -39,12 +39,21 @@ class IMAWebAgentClient {
     this.lastRefreshError = '';
     this.refreshTimer = null;
     this.refreshPromise = null;
+    this.pendingCredentialPersistence = false;
     this.maintenance = new AuthMaintenance({
       interval: () => this.refreshIntervalMs,
       check: async () => {
         try {
+          if (this.pendingCredentialPersistence) {
+            await this.onAutoRefreshed?.(this.getConfigSnapshot());
+            this.pendingCredentialPersistence = false;
+          }
           const refreshed = await this.ensureFreshAuth();
-          if (refreshed) this.onAutoRefreshed?.(this.getConfigSnapshot());
+          if (refreshed) {
+            this.pendingCredentialPersistence = true;
+            await this.onAutoRefreshed?.(this.getConfigSnapshot());
+            this.pendingCredentialPersistence = false;
+          }
         } catch (error) {
           this.lastRefreshError = 'auth_refresh_failed';
           throw error;

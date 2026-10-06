@@ -570,7 +570,7 @@ class IMAWebAgentPool {
 
   _notifyCredentials(account) {
     if (typeof this.onAccountCredentialsChange === 'function') {
-      this.onAccountCredentialsChange(account.id, account.client.getConfigSnapshot?.() || {});
+      return this.onAccountCredentialsChange(account.id, account.client.getConfigSnapshot?.() || {});
     }
   }
 }
