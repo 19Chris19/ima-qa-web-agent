@@ -248,6 +248,7 @@ class WebAgentEnrollmentManager {
     const capturedAccount = { id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
       headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3,
       tokenExpiresAt: auth.tokenExpiresAt, refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
+      requireQualification: true,
       source: 'admin-qr-enrollment', replace: job.replace };
     job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
       : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
@@ -260,9 +261,13 @@ class WebAgentEnrollmentManager {
       job.detail = '授权通过，正在执行已声明的一次知识库问答验证'; this._touch(job);
       const result = await this.onEnrolled(job.account.id, job.testQuestion);
       if (!isPending(job)) return;
+      job.account = this.accountDirectory.listAccounts().find(account => account.id === job.account.id) || job.account;
       this.onAccountsSynced?.();
-      this._setState(job, 'completed', result.success ? '账号已接入，可用于知识库问答' : '账号已接入，问答验证未通过，请在账号列表重试');
-    } else this._setState(job, 'completed', '账号已验证并同步到账号池');
+      this._setState(job, result.success ? 'completed' : 'failed', result.success
+        ? job.account.status === 'disabled' ? '问答资格已验证，账号仍保持停用；登录态已保存' : '账号已接入，可用于知识库问答'
+        : result.code === 'pool_sync_failed' ? '资格已保存，但调度同步失败；账号本机隔离，请先核对状态'
+          : '登录态已保存，问答验证未通过，账号保持停用；请在账号列表重试，无需重新扫码');
+    } else this._setState(job, 'completed', '登录态已保存，账号保持停用；请在账号列表验证问答能力');
     this._releaseActive(job); this._scheduleRemoval(job);
   }
 
@@ -331,9 +336,15 @@ class WebAgentEnrollmentManager {
     if (['completed', 'failed', 'cancelled'].includes(job.state)) {
       return publicJob(job);
     }
-    this._setState(job, 'cancelled', '已关闭临时浏览器并清理登录任务');
-    if (job.account) this.onCancelVerification?.(job.account.id);
-    job.error = '已取消账号接入';
+    const settled = job.account && this.onCancelVerification?.(job.account.id);
+    if (settled?.completed) {
+      this._setState(job, 'completed', settled.activated
+        ? '问答资格已提交，账号已启用；如需暂停请在账号列表停用'
+        : '问答资格已提交，账号仍保持停用');
+    } else this._setState(job, 'cancelled', job.account
+      ? '已取消验证，登录态已保存，账号保持停用；可在账号列表重试'
+      : '已关闭临时浏览器并清理登录任务');
+    job.error = settled?.completed ? '' : '已取消账号接入';
     await this._cleanup(job);
     this._releaseActive(job);
     this._scheduleRemoval(job);
@@ -343,8 +354,9 @@ class WebAgentEnrollmentManager {
   async shutdown() {
     for (const job of this.jobs.values()) {
       if (isPending(job)) {
-        this._setState(job, 'cancelled', '服务已关闭接入任务');
-        if (job.account) this.onCancelVerification?.(job.account.id);
+        const settled = job.account && this.onCancelVerification?.(job.account.id);
+        this._setState(job, settled?.completed ? 'completed' : 'cancelled', settled?.completed
+          ? '问答资格已提交，服务正在关闭' : '服务已关闭接入任务；已保存账号保留停用');
       }
     }
     await Promise.all([...this.jobs.values()].map((job) => this._cleanup(job)));

@@ -1,7 +1,8 @@
-# Account Enrollment: Identity Conflict Candidate
+# Account Enrollment: Pending Activation Candidate
 
 This is a local implementation candidate, not a release or live acceptance claim.
-The public admin UI is unchanged and needs separate integration.
+The public admin UI offers an explicitly authorized single-probe retry for saved
+pending accounts. No production or all-platform acceptance is claimed.
 
 ## Reauthentication Contract
 
@@ -47,11 +48,56 @@ shutdown and terminal failure clear the pending auth reference and close the
 temporary browser/profile. Late verification completion cannot persist a cancelled
 or expired task. The existing `onEnrolled` callback performs the declared single
 QA check after insertion; no background QA probe or GET-triggered probe is added.
-As before, a failed post-insertion QA check does not remove the enrolled account.
+A failed post-insertion QA check does not remove the enrolled account, but it
+now remains disabled in both classic and knowledge-agent modes.
+
+## Durable Admission Gate
+
+Browser capture, admin credential capture and runtime-text import persist encrypted
+credentials with `disabled: true` and `enrollmentQualificationRequired: true` in
+their first account write. New/previously enabled accounts use
+`pending_enrollment_qualification`. Same-identity reauthentication recovers
+`auth_failed` and `knowledge_base_unavailable` into pending; manual, migration,
+duplicate and unknown disable reasons are not silently released. Existing accounts
+are not mass-migrated or probed. Imported accounts do not start an automatic probe.
+
+Only an explicit admin verify action or the declared enrollment callback starts
+one knowledge-agent probe. GET, startup and ordinary enable never do so. Pending
+accounts cannot be enabled through the normal enable API (409); paused credentials
+remain encrypted and available to the verifier, not to ordinary scheduling.
+Verification of an already enabled account first persists the same disabled gate,
+so failure cannot fall back to classic scheduling or inherit an older proof.
+
+On success, the directory reloads and compares the store generation and a digest
+of the captured account, including encrypted credentials, identity, scope, model,
+disabled state and events. Proof contract, principal, scope and one dispatch/terminal
+are checked again. Proof and release of the gate are one existing locked atomic
+store commit. Only the pending reason automatically enables the account. A manual
+or migration pause can acquire proof but stays disabled; a subsequent explicit
+enable is then possible. Unrelated store changes conservatively invalidate a probe
+too; the user can retry. Manual disable, deletion/recreation, recapture or credential
+rotation while a probe runs cannot be undone by its late result.
+
+Failure, cancellation and timeout retain disabled credentials, with no proof.
+Use **Verify QA capability** in the account list to retry without scanning again;
+each retry authorizes one fresh question. Expired credentials still require login.
+Successful proof committed before cancellation wins: cancellation reports completed
+rather than claiming to undo an already committed activation. To pause it, use
+the explicit disable action. A successful proof with pool-sync failure is reported
+as `pool_sync_failed` and remains locally quarantined, not as ready; its disk proof
+may already be committed and requires reconciliation before service acceptance.
+
+| Phase/result | Durable account state | Next action |
+|---|---|---|
+| Before insertion, cancelled/expired | No new account; existing account unchanged | Restart login if needed |
+| Captured, awaiting/running probe | Saved and disabled; no classic capacity | Await or cancel the authorized probe |
+| Probe failed/cancelled/timed out | Saved and disabled | Explicit single-probe retry; no rescan unless auth expired |
+| Proof committed for pending account | Proof and enable committed together | Normal scheduling |
+| Proof committed for manual/migration pause | Proof saved; pause preserved | Explicit enable if desired |
 
 ## Cancellation and Phase Deadlines
 
-`expiresAt` is the login/authorization deadline, not a total task deadline. It
+`expiresAt` is the login/authorization deadline (five minutes by default), not a total task deadline. It
 includes waiting for scan, identity-conflict resolution, membership and session
 initialization. Retrying or choosing add does not extend it. Membership retains
 its own 15-second request bound even when the enrollment cancellation signal is
@@ -69,7 +115,9 @@ Explicit cancellation and manager shutdown cancel an in-flight post-insertion
 probe through `onCancelVerification`. Shutdown does not merely hide its task.
 A cancelled callback cannot perform a late enrollment sync/completion, and the
 readiness cancellation guard prevents a late proof commit. Accounts already
-inserted are retained; cancellation does not roll back their credentials.
+inserted are retained disabled; cancellation does not roll back their credentials.
+Cancellation after a completed atomic proof commit is the completed-success case
+described above, not a cancelled probe.
 
 Session initialization now receives the login AbortSignal. Client guards reject
 late responses before refresh/retry or mutation of refreshed credentials, even

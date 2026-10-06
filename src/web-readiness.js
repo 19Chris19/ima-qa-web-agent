@@ -63,7 +63,8 @@ class WebReadiness {
         (this.mode === 'classic_knowledge' || qualified));
       return { id: row.id, qualified: Boolean(qualified), schedulable,
         verifiedAt: account?.webQualification?.verifiedAt || null,
-        state: job?.running ? 'verifying' : needsLogin ? 'needs_login' : account?.disabled ? 'disabled' : account?.activeRequests ? 'busy' :
+        state: job?.running ? 'verifying' : needsLogin ? 'needs_login' : account?.disabled
+          ? account.disabledReason === 'pending_enrollment_qualification' ? 'pending' : 'disabled' : account?.activeRequests ? 'busy' :
           account?.cooldownUntil > this.pool.now() ? 'cooling' : schedulable ? 'ready' : 'pending',
         reason: needsLogin ? row.health.last_check_code : job?.code || (qualified ? 'ok' : 'qualification_required') };
     });
@@ -82,8 +83,8 @@ class WebReadiness {
   async verify(id, question = DEFAULT_QUESTION) {
     if (typeof question !== 'string' || !question.trim() || question.length > 2000) throw Object.assign(new Error('请输入不超过 2000 字的知识库测试问题'), { statusCode: 400 });
     const account = this.pool._requireAccount(id);
-    if (this.jobs.get(id)?.running || account.activeRequests || account.maintenanceOperation || account.disabled || account.cooldownUntil > this.pool.now()) {
-      throw Object.assign(new Error('账号需要处于启用、空闲且非冷却状态'), { statusCode: 409 });
+    if (this.jobs.get(id)?.running || account.activeRequests || account.maintenanceOperation || account.cooldownUntil > this.pool.now()) {
+      throw Object.assign(new Error('账号需要处于空闲且非冷却状态'), { statusCode: 409 });
     }
     const controller = new AbortController();
     const job = { running: true, code: 'probe_in_progress', controller };
@@ -91,14 +92,13 @@ class WebReadiness {
     account.maintenanceOperation = 'qualification';
     let timer;
     try {
-      this.directory.reload();
+      // Quarantine before dispatch, including revalidation in classic mode.
+      this.directory.beginWebQualification(id);
+      this.sync();
       const config = this.directory.getPoolAccounts().find(a => a.id === id);
       if (!config) throw conflict();
-      // Reverification never inherits a previous successful proof.
-      this.directory.getAccount(id).runtime.webQualification = null;
-      this.directory._writeStore();
-      account.webQualification = null;
-      const expectedGeneration = this.directory.load().generation;
+      // sync can persist pool observations; bind only after those synchronous writes.
+      const expected = this.directory.webQualificationBinding(id);
       const client = this.clientFactory(config);
       let requests = 0, terminals = 0, answerLength = 0, knowledge = false;
       const run = async () => {
@@ -117,7 +117,7 @@ class WebReadiness {
       if (requests !== 1 || terminals !== 1 || !answerLength || !knowledge) throw new Error('probe_evidence_insufficient');
       const proof = { contract: knowledgeAgentContractDigest(), principalFingerprint: config.principalFingerprint,
         scope: hash(config.knowledgeBaseId), verifiedAt: new Date().toISOString(), requests, terminals };
-      this.directory.commitWebQualification(id, proof, expectedGeneration);
+      this.directory.commitWebQualification(id, proof, expected);
       try { this.sync(); } catch { job.code = 'pool_sync_failed'; throw new Error('pool_sync_failed'); }
       job.code = 'ok';
     } catch (error) {
@@ -134,9 +134,19 @@ class WebReadiness {
       if (job.code !== 'pool_sync_failed') account.maintenanceOperation = '';
       this.pool._notifyAvailability();
     }
-    return { success: job.code === 'ok', code: job.code, ...this.snapshot() };
+    return { success: job.code === 'ok', code: job.code,
+      activated: job.code === 'ok' && this.directory.getAccount(id)?.runtime.disabled === false,
+      ...this.snapshot() };
   }
 
-  cancel(id) { this.jobs.get(id)?.controller.abort(); return { success: true }; }
+  cancel(id) {
+    const job = this.jobs.get(id);
+    const account = this.directory.getAccount(id);
+    const completed = job?.running === false && job.code === 'ok' && Boolean(account)
+      && account.runtime.enrollmentQualificationRequired !== true && validProof(account);
+    job?.controller.abort();
+    return { success: true, completed,
+      activated: completed && this.directory.getAccount(id)?.runtime.disabled === false };
+  }
 }
 module.exports = { WebReadiness, DEFAULT_QUESTION, validProof };

@@ -281,6 +281,7 @@ function registerAdminRoutes(app, options = {}) {
         tokenExpiresAt: req.body?.tokenExpiresAt,
         refreshTokenExpiresAt: req.body?.refreshTokenExpiresAt,
         source: req.body?.source || 'admin-api',
+        requireQualification: true,
         replace: Boolean(req.body?.replace),
       });
       syncPool();
@@ -307,6 +308,7 @@ function registerAdminRoutes(app, options = {}) {
         runtimeEnvText,
         runtimeEnvPath: req.body?.runtimeEnvPath,
         source: 'runtime-env-import',
+        requireQualification: true,
         replace: Boolean(req.body?.replace),
       });
       syncPool();

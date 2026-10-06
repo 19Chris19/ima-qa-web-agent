@@ -50,6 +50,17 @@ test('read-only loading and reload never probe; knowledge is independent of web 
   assert.equal(document.querySelectorAll('.admin-more-items button').length, 6);
 });
 
+test('pending-disabled capture offers verification and manual pause, never a bypass enable action', async t => {
+  const account = { ...sample('pending', 'pending'), status: 'disabled',
+    disabledReason: 'pending_enrollment_qualification', enrollmentQualificationRequired: true };
+  const { document, calls } = await setup(t, { accounts: [account] });
+  assert.equal(document.querySelector('.admin-row-actions > button').textContent, '验证问答能力');
+  const labels = [...document.querySelectorAll('.admin-more-items button')].map(button => button.textContent);
+  assert.equal(labels.includes('启用'), false);
+  assert.equal(labels.includes('停用'), true);
+  assert.equal(calls.length, 2);
+});
+
 test('missing evidence stays pending and readiness fallback retains separate capabilities', async t => {
   const { document } = await setup(t, { accounts: [
     { id: 'unknown', name: '<img src=x onerror=alert(1)>', availabilityStatus: 'available' },
@@ -144,6 +155,21 @@ test('identity conflict cancellation uses existing DELETE contract', async t => 
   await tick();
   assert.equal(calls.filter(call => call.method === 'DELETE').length, 1);
   assert.equal(document.querySelector('#enrollmentDialog').open, false);
+});
+
+test('cancel UI reports committed success returned by the server instead of claiming cancellation', async t => {
+  const current = { taskId: 'synthetic-committed', state: 'verifying' };
+  const { document } = await setup(t, undefined,
+    { enrollment: { supportsAdminPageQr: true, activeEnrollment: current } }, (_url, options) => ({
+      enrollment: options.method === 'DELETE' ? { ...current, state: 'completed',
+        detail: '问答资格已提交，账号已启用', account: { name: 'Synthetic one' } } : current,
+    }));
+  document.querySelector('#startEnrollmentButton').click();
+  await tick();
+  document.querySelector('#cancelEnrollmentButton').click();
+  await tick(); await tick();
+  assert.match(document.querySelector('#enrollFeedback').textContent, /资格已提交/);
+  assert.doesNotMatch(document.querySelector('#enrollFeedback').textContent, /已取消/);
 });
 
 test('navigation targets only real panels; mobile and reduced-motion rules are present', async t => {

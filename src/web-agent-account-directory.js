@@ -5,9 +5,12 @@ const dotenv = require('dotenv');
 const { commitStore, conflict } = require('./generation-store');
 const { buildRuntimeEnvText } = require('./ima-web-agent-client');
 const { healthMessage } = require('./account-health');
+const { knowledgeAgentContractDigest } = require('./ima-knowledge-agent-contract');
 
 const STORE_VERSION = 1;
 const DEFAULT_EVENT_LIMIT = 80;
+const PENDING_QUALIFICATION = 'pending_enrollment_qualification';
+const bindingDigest = account => crypto.createHash('sha256').update(JSON.stringify(account)).digest('hex');
 
 function defaultAccountStorePath() {
   return path.resolve(__dirname, '..', '..', '..', 'runtime', 'ima-web-agent-accounts.json');
@@ -63,13 +66,43 @@ class WebAgentAccountDirectory {
     return this.load();
   }
 
-  commitWebQualification(accountId, proof, expectedGeneration) {
+  beginWebQualification(accountId) {
     this.reload();
-    if (this.store.generation !== expectedGeneration) throw conflict();
     const account = this._requireAccount(accountId);
-    if (account.principalFingerprint !== proof.principalFingerprint) throw conflict();
-    account.runtime.webQualification = proof;
+    if (account.id !== accountId || !account.principalFingerprint
+        || account.runtime.disabledReason === 'duplicate_ima_identity') throw conflict();
+    if (!account.runtime.disabled) account.runtime.disabledReason = PENDING_QUALIFICATION;
+    account.runtime.disabled = true;
+    account.runtime.enrollmentQualificationRequired = true;
+    account.runtime.webQualification = null;
     this._writeStore();
+  }
+
+  webQualificationBinding(accountId) {
+    return { generation: this.load().generation, digest: bindingDigest(this._requireAccount(accountId)) };
+  }
+
+  commitWebQualification(accountId, proof, expected) {
+    this.reload();
+    if (!expected || this.store.generation !== expected.generation) throw conflict();
+    const account = this._requireAccount(accountId);
+    if (bindingDigest(account) !== expected.digest || account.id !== accountId
+        || account.runtime.disabled !== true || account.runtime.enrollmentQualificationRequired !== true
+        || !account.principalFingerprint || account.principalFingerprint !== proof.principalFingerprint
+        || proof.scope !== crypto.createHash('sha256').update(account.knowledgeBaseId).digest('hex')
+        || proof.contract !== knowledgeAgentContractDigest() || proof.requests !== 1 || proof.terminals !== 1) throw conflict();
+    account.runtime.webQualification = proof;
+    account.runtime.enrollmentQualificationRequired = false;
+    if (account.runtime.disabledReason === PENDING_QUALIFICATION) {
+      account.runtime.disabled = false;
+      account.runtime.disabledReason = '';
+    }
+    try {
+      this._writeStore();
+    } catch (error) {
+      this.store = null;
+      throw error;
+    }
     return this.store.generation;
   }
 
@@ -157,7 +190,7 @@ class WebAgentAccountDirectory {
         eventType: 'account_imported',
         message: `Imported ${name} from runtime env`,
       },
-      { replace: Boolean(options.replace) },
+      { replace: Boolean(options.replace), requireQualification: options.requireQualification === true },
     );
     if (runtimeEnvPath) {
       this.writeRuntimeEnvFile(id);
@@ -210,7 +243,7 @@ class WebAgentAccountDirectory {
         eventType: 'account_captured',
         message: `Captured ${name} from browser login`,
       },
-      { replace: Boolean(options.replace) },
+      { replace: Boolean(options.replace), requireQualification: options.requireQualification === true },
     );
     if (runtimeEnvPath) {
       this.writeRuntimeEnvFile(id);
@@ -275,12 +308,18 @@ class WebAgentAccountDirectory {
       refreshSkewMs: options.refreshSkewMs,
       refreshIntervalMs: options.refreshIntervalMs,
       source: options.source || 'admin-qr-reauth',
+      requireQualification: options.requireQualification === true,
       replace: true,
     });
   }
 
   setDisabled(accountId, disabled, reason = '') {
     const account = this._requireAccount(accountId);
+    if (!disabled && account.runtime.enrollmentQualificationRequired === true) {
+      throw Object.assign(new Error('登录态已保存，请先验证问答能力，无需重新扫码'), {
+        code: 'enrollment_qualification_required', statusCode: 409,
+      });
+    }
     if (!disabled && account.runtime.disabledReason === 'duplicate_ima_identity') {
       const error = new Error('该条目与账号池中另一条记录属于同一个 IMA 账号，不能启用为额外并发。请保留其中一条并删除另一条。');
       error.statusCode = 409;
@@ -321,8 +360,11 @@ class WebAgentAccountDirectory {
     account.runtime.totalRequests = Number(snapshot.totalRequests || 0);
     account.runtime.lastUsedAt = Number(snapshot.lastUsedAt || 0);
     account.runtime.lastError = cleanText(snapshot.lastError || '');
-    account.runtime.disabled = Boolean(snapshot.disabled);
-    account.runtime.disabledReason = cleanText(snapshot.disabledReason || '');
+    // Pool callbacks report observations; they cannot release a durable admission gate.
+    if (account.runtime.enrollmentQualificationRequired !== true) {
+      account.runtime.disabled = Boolean(snapshot.disabled);
+      account.runtime.disabledReason = cleanText(snapshot.disabledReason || '');
+    }
     account.runtime.updatedAt = this.now();
     this._writeStore();
     return true;
@@ -507,6 +549,14 @@ class WebAgentAccountDirectory {
       error.statusCode = 409;
       error.code = 'duplicate_ima_identity';
       throw error;
+    }
+    if (options.requireQualification === true || existing?.runtime.enrollmentQualificationRequired === true) {
+      nextAccount.runtime.disabled = true;
+      nextAccount.runtime.disabledReason = existing?.runtime.disabled === true
+        && !['auth_failed', 'knowledge_base_unavailable'].includes(existing.runtime.disabledReason)
+        ? existing.runtime.disabledReason : PENDING_QUALIFICATION;
+      nextAccount.runtime.enrollmentQualificationRequired = true;
+      nextAccount.runtime.webQualification = null;
     }
     const account = existing || {
       id: nextAccount.id,
@@ -784,6 +834,7 @@ function sanitizeAccount(account, options = {}) {
     identityDuplicate: account.runtime?.disabledReason === 'duplicate_ima_identity',
     status,
     disabledReason: account.runtime?.disabledReason || '',
+    enrollmentQualificationRequired: account.runtime?.enrollmentQualificationRequired === true,
     activeRequests: Number(account.runtime?.activeRequests || 0),
     cooldownSecondsRemaining: Math.max(0, Math.ceil((Number(account.runtime?.cooldownUntil || 0) - Date.now()) / 1000)),
     consecutiveErrors: Number(account.runtime?.consecutiveErrors || 0),

@@ -157,8 +157,38 @@ test('login expiry is not a total deadline; the single post-login probe has its 
     result = await readiness.verify(id, question);
     return result;
   };
-  f.scan(); await waitFor(() => f.job.state === 'completed');
+  f.scan(); await waitFor(() => f.job.state === 'failed');
   assert.equal(calls, 1);
   assert.equal(result.code, 'probe_timeout');
   assert.equal(f.directory.getAccount('synthetic-account').runtime.webQualification, null);
+  assert.equal(f.directory.getAccount('synthetic-account').runtime.disabled, true);
 });
+
+for (const action of ['cancel', 'shutdown']) {
+  test(`${action} after atomic proof commit preserves completed outcome`, async t => {
+    const entered = deferred(), release = deferred();
+    t.after(() => release.resolve());
+    const f = await fixture(t);
+    const readiness = new WebReadiness({ directory: f.directory, pool: f.pool,
+      clientFactory: () => ({ async *streamAsk(options) {
+        options.onDispatch();
+        yield { type: 'sources', sources: [{}], sourceKinds: ['knowledge'] };
+        yield { type: 'delta', text: 'Synthetic answer' };
+        yield { type: 'done' };
+      } }),
+    });
+    f.manager.onEnrolled = async id => {
+      const result = await readiness.verify(id);
+      assert.equal(result.success, true);
+      entered.resolve(); await release.promise;
+      return result;
+    };
+    f.manager.onCancelVerification = id => readiness.cancel(id);
+    f.scan(); await entered.promise;
+    if (action === 'cancel') await f.manager.cancel(f.taskId);
+    else await f.manager.shutdown();
+    assert.equal(f.job.state, 'completed');
+    release.resolve(); await f.job.monitorPromise;
+    assert.equal(f.directory.reload().accounts[0].runtime.disabled, false);
+  });
+}

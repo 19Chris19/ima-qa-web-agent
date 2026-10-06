@@ -1215,12 +1215,12 @@ test('admin routes can inspect and manage Web Agent accounts with token auth', a
       },
     });
     const enableData = await enableResponse.json();
-    assert.equal(enableResponse.status, 200);
-    assert.equal(enableData.account.status, 'available');
+    assert.equal(enableResponse.status, 409);
+    assert.match(enableData.error, /先验证问答能力/);
 
     assert.ok(calls.some((call) => call.type === 'sync'));
     assert.ok(calls.some((call) => call.type === 'disable' && call.disabled === true));
-    assert.ok(calls.some((call) => call.type === 'disable' && call.disabled === false));
+    assert.equal(calls.some((call) => call.type === 'disable' && call.disabled === false), false);
   });
 });
 

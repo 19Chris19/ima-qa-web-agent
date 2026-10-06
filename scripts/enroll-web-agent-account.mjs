@@ -151,6 +151,7 @@ async function main() {
       tokenExpiresAt: auth.tokenExpiresAt,
       refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
       source: 'browser-onboarding',
+      requireQualification: true,
     };
     const account = serverUrl
       ? await syncAccountToServer(serverUrl, process.env.IMA_QA_ADMIN_TOKEN, {
@@ -158,7 +159,7 @@ async function main() {
         replace: Boolean(args.replace),
       })
       : store.upsertCapturedAccount({ ...accountInput, replace: Boolean(args.replace) });
-    console.log('\n账号接入成功：');
+    console.log('\n登录态已保存，账号保持停用；请在管理页授权一次问答验证：');
     console.log(JSON.stringify({
       id: account.id,
       name: account.name,

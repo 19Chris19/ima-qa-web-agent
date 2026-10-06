@@ -1,5 +1,21 @@
 # v0.4.2 onboarding candidate acceptance
 
+## Pending-activation follow-up (independent candidate)
+
+`FIX-20261006-PUBLIC-ENROLL-ACTIVATION`, based on integration revision
+`7d2006eca6932ffbf2e731119d3fda6e278c43d3`, closes the classic-capacity blocker
+identified below. New captured credentials are persisted disabled, one successful
+bound probe atomically commits proof and pending activation, and failed/cancelled
+probes retain disabled credentials for explicit retry. Manual pauses are preserved.
+See ACCOUNT_ENROLLMENT.md for phase deadlines, state transitions and the distinct
+post-commit pool-sync-failure outcome. This independent candidate has not been
+merged, deployed or accepted on all platforms.
+
+Clean npm installation with lifecycle scripts/audit disabled and full explicit-root
+synthetic regression passed **438/438, zero failures/skips**. Existing 406-test
+integration evidence below remains historical. No real login, QA, runtime access,
+container build/start, push or release was performed for this follow-up.
+
 ## Public integration acceptance (2026-10-06)
 
 Candidate only, not a release. Clean integration branch `codex/INT-20261006-PROVIDER-MANAGEMENT`

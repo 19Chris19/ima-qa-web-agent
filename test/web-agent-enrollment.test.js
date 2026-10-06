@@ -367,9 +367,10 @@ test('enrollment closes browser before one automatic probe and retains account w
   await waitFor(() => Boolean(state.wake));
   state.auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic-user; IMA-TOKEN=synthetic-token', 'x-ima-bkn': '123' } };
   state.wake();
-  await waitFor(() => manager.get(started.taskId).state === 'completed');
+  await waitFor(() => manager.get(started.taskId).state === 'failed');
   assert.equal(calls, 1);
   assert.equal(accountDirectory.listAccounts().length, 1);
+  assert.equal(accountDirectory.listAccounts()[0].status, 'disabled');
   assert.match(manager.get(started.taskId).detail, /验证未通过/);
   assert.equal(JSON.stringify(manager.get(started.taskId)).includes('Synthetic test question'), false);
   await manager.shutdown();
