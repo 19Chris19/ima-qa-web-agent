@@ -46,6 +46,12 @@ User scan/confirmation is performed by the human when required.
 ## Rollout
 Candidate only. Existing 3117, 3317, 4317, 4318, 4417 and Bot are unchanged.
 
+## Image/version gate
+The default compose image was still v0.4.1; a new source/package-version
+assertion reproduced the mismatch and now guards v0.4.2. This references the
+intended release, not an assertion that its image already exists. CI and image
+publication explicitly enable the synthetic admin backend contract test.
+
 ## Rollback
 Revert scoped commits or select the previous version image; preserve current
 account and conversation volumes. No tag replacement or history rewrite.
