@@ -1,5 +1,11 @@
 # FEAT-20261006-PROVIDER-SOURCE-RETIREMENT
 
+Parent review: integrated 99313ae locally, reran 394/394 tests without skips, and
+documented Air compatibility (504 Provider tests, 25 Bot contract tests). Corrected
+the existing Docker rehearsal baseline label to explicitly say commit SHA; installed
+governance --ci now reports zero hard failures and four existing soft warnings.
+Acceptance documentation is synchronized. No real transfer or deployment performed.
+
 User goal: durably retire the source store before offline disabled imports.
 Scope: migration tools, startup store fence, synthetic tests and independent documentation.
 Plan: failing regression tests; durable retirement journal; conservative journaled rollback; full synthetic suite.
