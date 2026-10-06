@@ -157,6 +157,21 @@ test('identity conflict cancellation uses existing DELETE contract', async t => 
   assert.equal(document.querySelector('#enrollmentDialog').open, false);
 });
 
+test('enrollment committed update warning overrides stale disabled presentation', async t => {
+  const current = { taskId: 'synthetic-committed', state: 'verifying' };
+  const { document } = await setup(t, undefined,
+    { enrollment: { supportsAdminPageQr: true, activeEnrollment: current } }, (_url, options) => ({
+      enrollment: options.method === 'DELETE' ? { ...current, state: 'completed', commitApplied: true,
+        warning: 'post_commit_update_failed', detail: 'stale synthetic presentation' } : current,
+    }));
+  document.querySelector('#startEnrollmentButton').click();
+  await tick();
+  document.querySelector('#cancelEnrollmentButton').click();
+  await tick(); await tick();
+  assert.match(document.querySelector('#enrollFeedback').textContent, /资格已提交.*提交未撤销/);
+  assert.doesNotMatch(document.querySelector('#enrollFeedback').textContent, /stale/);
+});
+
 test('cancel UI reports committed success returned by the server instead of claiming cancellation', async t => {
   const current = { taskId: 'synthetic-committed', state: 'verifying' };
   const { document } = await setup(t, undefined,

@@ -71,7 +71,11 @@ function registerAdminRoutes(app, options = {}) {
     app.post('/api/admin/accounts/:accountId/verify', auth, async (req, res) => {
       try {
         const result = await webReadiness.verify(req.params.accountId, req.body?.question);
-        options.onAccountsSynced?.();
+        try { options.onAccountsSynced?.(); }
+        catch (error) {
+          if (!result.commitApplied) throw error;
+          result.warning = result.warning === 'pool_sync_failed' ? 'pool_sync_failed' : 'post_commit_update_failed';
+        }
         res.json(result);
       } catch (error) { sendAdminError(res, error); }
     });

@@ -6,6 +6,8 @@ const { conflict } = require('./generation-store');
 
 const DEFAULT_QUESTION = '请根据当前知识库概括主要主题，并引用相关资料';
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
+const warningFor = job => job?.code === 'pool_sync_failed' ? 'pool_sync_failed'
+  : job?.warning === 'post_commit_update_failed' ? 'post_commit_update_failed' : null;
 const validProof = account => {
   const proof = account.webQualification || account.runtime?.webQualification;
   return Boolean(account.principalFingerprint && account.knowledgeBaseId && proof && proof.contract === knowledgeAgentContractDigest() &&
@@ -63,7 +65,7 @@ class WebReadiness {
         (this.mode === 'classic_knowledge' || qualified));
       return { id: row.id, qualified: Boolean(qualified), schedulable,
         commitApplied: job?.commitApplied === true,
-        warning: job?.code === 'pool_sync_failed' ? 'pool_sync_failed' : null,
+        warning: warningFor(job),
         verifiedAt: account?.webQualification?.verifiedAt || null,
         state: job?.running ? 'verifying' : needsLogin ? 'needs_login' : account?.disabled
           ? account.disabledReason === 'pending_enrollment_qualification' ? 'pending' : 'disabled' : account?.activeRequests ? 'busy' :
@@ -141,25 +143,43 @@ class WebReadiness {
           if (!job.commitApplied) target.webQualification = null;
         }
       } else account.maintenanceOperation = '';
-      this.pool._notifyAvailability();
+      try { this.pool._notifyAvailability(); }
+      catch (error) {
+        if (!job.commitApplied) throw error;
+        job.warning = 'post_commit_update_failed';
+      }
     }
-    return { success: job.code === 'ok', code: job.code,
+    const result = { success: job.code === 'ok', code: job.code,
       commitApplied: job.commitApplied,
-      warning: job.code === 'pool_sync_failed' ? 'pool_sync_failed' : null,
-      activated: job.commitApplied && this.directory.getAccount(id)?.runtime.disabled === false,
-      ...this.snapshot() };
+      warning: warningFor(job) };
+    try {
+      return { ...this.snapshot(), ...result,
+        activated: job.commitApplied && this.directory.getAccount(id)?.runtime.disabled === false };
+    } catch (error) {
+      if (!job.commitApplied) throw error;
+      job.warning = 'post_commit_update_failed';
+      return { ...result, warning: result.warning || job.warning, activated: null };
+    }
   }
 
   cancel(id) {
     const job = this.jobs.get(id);
-    const account = this.directory.getAccount(id);
-    const completed = job?.running === false && job.commitApplied === true && Boolean(account)
-      && account.runtime.enrollmentQualificationRequired !== true && validProof(account);
     job?.controller.abort();
+    // The receipt is historical truth; a failed current-state read cannot undo it.
+    let completed = job?.running === false && job.commitApplied === true;
+    let activated = false;
+    if (completed) {
+      try {
+        const account = this.directory.getAccount(id);
+        completed = Boolean(account) && account.runtime.enrollmentQualificationRequired !== true && validProof(account);
+        activated = completed && account.runtime.disabled === false;
+      }
+      catch { activated = null; job.warning = 'post_commit_update_failed'; }
+    }
     return { success: true, completed,
       commitApplied: job?.commitApplied === true,
-      warning: job?.code === 'pool_sync_failed' ? 'pool_sync_failed' : null,
-      activated: completed && this.directory.getAccount(id)?.runtime.disabled === false };
+      warning: warningFor(job),
+      activated };
   }
 }
 module.exports = { WebReadiness, DEFAULT_QUESTION, validProof };

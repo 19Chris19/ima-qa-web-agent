@@ -369,7 +369,7 @@
     stopEnrollmentPolling();
     const accountName = String(completedEnrollment?.account?.name || '新账号');
     dismissEnrollmentDialog();
-    setFeedback(enrollFeedback, `账号 ${accountName}：${completedEnrollment.detail || '接入完成，请查看账号状态'}。`);
+    setFeedback(enrollFeedback, `账号 ${accountName}：${enrollmentStatus(completedEnrollment)}。`);
     await loadAdminState();
   }
 
@@ -413,7 +413,7 @@
       setFeedback(enrollmentDialogFeedback, enrollment.error, true);
     }
     if (!active && enrollment.state === 'completed') {
-      setFeedback(enrollmentDialogFeedback, '接入完成，账号池已刷新。');
+      setFeedback(enrollmentDialogFeedback, enrollment.warning ? enrollmentStatus(enrollment) : '接入完成，账号池已刷新。');
     }
   }
 
@@ -575,6 +575,9 @@
   }
 
   function enrollmentStatus(current) {
+    if (current.commitApplied && current.warning === 'post_commit_update_failed') {
+      return '资格已提交，后续状态更新失败；提交未撤销，请核对账号当前状态。';
+    }
     if (current.state === 'identity_conflict') {
       return current.detail || '本次扫码身份尚未保存为账号，原账号保持不变。请填写新名称接入，或取消。';
     }
@@ -1561,7 +1564,9 @@
       const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`,
         { method: 'POST', body: JSON.stringify({ question }) }, { allowUnsuccessfulResult: true });
       const messages = { ok: '验证成功，可用于知识库问答', probe_evidence_insufficient: '回答或知识库来源不足，账号保留待验证', probe_timeout: '验证超时，请稍后手动重试', probe_cancelled: '验证已取消', account_store_generation_conflict: '账号状态发生变化，请重新验证', pool_sync_failed: '验证已保存，调度同步失败，账号暂时隔离', auth_expired: '登录已过期，请重新登录', auth_rejected: '登录被拒绝，请重新登录', upstream_temporary: '上游暂时不可用，请稍后重试' };
-      accountActionFeedback.set(account.id, { message: result.warning === 'pool_sync_failed'
+      accountActionFeedback.set(account.id, { message: result.commitApplied && result.warning === 'post_commit_update_failed'
+        ? '资格已提交，后续状态更新失败；提交未撤销，请核对账号当前状态'
+        : result.warning === 'pool_sync_failed'
         ? result.commitApplied ? '资格已提交，但调度同步失败；账号本机隔离，取消不会撤销提交'
           : '资格未提交，调度同步失败；账号本机隔离，登录态已保存'
         : result.success && result.activated === false

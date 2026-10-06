@@ -109,6 +109,22 @@ Verification and cancel responses explicitly include `commitApplied` and `warnin
   cancelled back to disabled. The commit receipt is recorded immediately after
   the atomic write succeeds, independently of final sync status.
 
+Post-commit account-display reads, availability notification and enrollment
+capacity callbacks cannot turn a committed operation into `failed`. The receipt
+is retained before those reads; the fixed warning `post_commit_update_failed`
+means the commit was not undone, but current presentation/state refresh failed.
+This warning does **not** assert pool quarantine or current schedulability.
+`pool_sync_failed` takes precedence when both faults occur. Enrollment warnings
+are allowlisted to these two values; exception text is never a warning value.
+Failures before commitment still fail normally and never acquire a receipt.
+
+Cancel and shutdown retain the same historical receipt even if a current account
+read fails. Readiness returns `activated: null` when that read is unavailable,
+instead of inventing the current enabled state. A failed final snapshot may omit
+the optional capacity/account snapshot fields while returning the commit result.
+No callback retry, re-probe, rollback, or automatic repair is performed. These are
+offline candidate semantics, not a claim of live deployment or successful recovery.
+
 `commitApplied: false` alone does not prove zero requests: a generation conflict
 followed by recovery-sync failure can occur after a probe dispatched, without a
 proof commit. Do not automatically retry either case.

@@ -246,6 +246,29 @@ test('protected capture and retry APIs use stored credentials and never probe on
   assert.equal(probes, 1);
 });
 
+test('verify route preserves committed receipt when its capacity callback fails', async t => {
+  const f = fixture(t);
+  let callbacks = 0;
+  const app = express(); app.use(express.json());
+  registerAdminRoutes(app, { accountDirectory: f.directory, imaWebAgentClient: f.pool, webReadiness: f.readiness,
+    onAccountsSynced: () => { if (++callbacks > 1) throw new Error('synthetic-private-callback'); },
+    config: { security: { adminToken: 'synthetic-admin' } } });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/admin/accounts/synthetic/verify`, {
+    method: 'POST', headers: { authorization: 'Bearer synthetic-admin', 'content-type': 'application/json' },
+    body: JSON.stringify({ question: 'Synthetic' }),
+  });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.commitApplied, true);
+  assert.equal(result.success, true);
+  assert.equal(result.warning, 'post_commit_update_failed');
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-private/);
+  assert.equal(f.directory.getAccount('synthetic').runtime.disabled, false);
+});
+
 test('deletion during a probe rejects proof and never resurrects the account', async t => {
   const f = fixture(t);
   f.readiness.clientFactory = () => ({ async *streamAsk(options) {
