@@ -43,6 +43,19 @@ User scan/confirmation is performed by the human when required.
 - Cross-repository archive test exposed missing public export audit helpers.
   Release remains blocked until the matching export/parser contract passes.
 
+## Integrated verification at 2cd17fb
+- Full synthetic suite: 544 total, 542 passed, zero failed; two optional private
+  parser cases were then explicitly enabled and passed in a 10/10 focused run.
+- Explorer f808602 full suite with this exporter: 158/158, zero skipped.
+- Native ARM64 and emulated AMD64 builds and network-none startup passed;
+  unauthenticated internal capacity requests were rejected. No IMA access.
+- Local image tags: provider-v042-aligned:2cd17fb-arm64 and
+  provider-v042-aligned:2cd17fb-amd64. These are not published release images.
+- npm package dry-run contains 188 files; forbidden runtime/config path scan
+  found zero. This path scan alone is not a complete source-secret audit.
+- Final release review and clean full installation remain pending. No account,
+  browser enrollment, existing service, or persisted runtime data was touched.
+
 ## Rollout
 Candidate only. Existing 3117, 3317, 4317, 4318, 4417 and Bot are unchanged.
 
