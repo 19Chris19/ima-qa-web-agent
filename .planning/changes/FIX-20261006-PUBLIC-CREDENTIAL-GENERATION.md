@@ -37,9 +37,11 @@ to shared runtime, live access, push or merge.
   arrow-function property as a secret assignment. This new expression false positive
   is not a baseline finding.
 - Staged governance: 1 HARD (rule 04), 4 pre-existing soft warnings. Manual comparison
-  against ad62b69 identifies 37 unchanged assignment matches and 4 new expression
+  against ad62b69 identifies 36 unchanged assignment matches and 5 new expression
   matches: client `credentialGeneration = 0`, `credentialWritesSuspended = false`,
-  `credentialWritesSuspended = suspend`, and the test callback property. All are
+  `pendingCredentialPersistence = false`, `credentialWritesSuspended = suspend`,
+  and the test callback property. The corrected count uses occurrence multiplicity,
+  not set membership: the pending-persistence assignment also existed elsewhere. All are
   code, not credentials. The checker scans full staged blobs and treats these
   expressions as secrets (SECRET_ASSIGNMENT_RE lines 45-48, placeholder handling
   lines 130-147, staged scan lines 302-315). No scanner changes or suppressions.
@@ -55,7 +57,32 @@ semantics, without Air expiry ordering. Refresh results and maintenance callback
 check their captured generation before applying or persisting. Existing single
 probe, qualification CAS, cancellation receipts and deadlines are unchanged.
 
-## Rollout / rollback
+## Canonical target follow-up
+
+- Review reproduced a runtime-only ID import bypassing old-client isolation when
+  sync throws before applying the new account configuration.
+- Capture, runtime import and QR replacement now share Directory target resolution
+  before writing. Runtime ID precedence, normalized name fallback and ordered
+  first ID-or-name matching remain unchanged. Writers receive the resolved identity;
+  pool isolation uses exact ID only, including when another account has that name.
+- Added 12 real-client/encrypted-directory deferred cases: runtime-only ID,
+  disagreeing runtime/top-level IDs, top-level fallback, capture/import name fallback,
+  successful/failed sync, and ordered identity collisions with injected write failure.
+- Before fix: 8 failures / 4 compatibility passes in the new cases. After fix:
+  credential suite 31/31; full actual admin contract suite 501/501, no skips.
+- Logs: `/tmp/public-canonical-target-red.log`,
+  `/tmp/public-canonical-target-focused.log`,
+  `/tmp/public-canonical-target-full-rootcontract.log`.
+- Synthetic verification only; no live login, credentials, runtime, deployment,
+  cross-process behavior, Air modification, merge or push.
+- Follow-up staged governance: 1 HARD expression false-positive category, 4 existing
+  SOFT warnings. All 51 assignment matches in the five flagged source/test blobs
+  already occur in cf5c11c6 (multiset comparison); manually inspected code expressions
+  and protocol/status literals, not credentials. No new scanner matches in this
+  follow-up. Report: `/tmp/public-canonical-target-governance.log`.
+- Ownership verification and staged whitespace checks pass. Governance is not green.
+
+## Follow-up rollout / rollback
 
 Parent reviews and integrates separately. Reverting restores the known late-refresh
 race; reconcile affected accounts before any deployment decision.

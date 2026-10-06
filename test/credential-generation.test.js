@@ -45,8 +45,14 @@ function fixture(t) {
     (url, ...handlers) => routes.set(`${method} ${url}`, handlers.at(-1))]));
   registerAdminRoutes(app, { accountDirectory: directory, imaWebAgentClient: pool,
     config: { security: { adminToken: 'synthetic-unused' }, webAgent: { sharedKnowledgeBaseId: '123' } } });
+  const submit = async (entry, body) => {
+    let result, status = 200;
+    const res = { status(code) { status = code; return this; }, json(value) { result = value; return this; } };
+    await routes.get(`post /api/admin/accounts${entry === 'import' ? '/import-runtime' : ''}`)({ body }, res);
+    return { status, result };
+  };
   t.after(async () => { await manager.shutdown(); pool.stopAutoRefresh(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { directory, pool, manager, pending, input, client: pool.accounts[0].client,
+  return { directory, pool, manager, pending, input, submit, client: pool.accounts[0].client,
     requests: () => requests, writes: () => writes,
     disk: () => new WebAgentAccountDirectory(options).getPoolAccounts()[0],
     runtime: () => fs.readFileSync(runtimeEnvPath, 'utf8'),
@@ -59,10 +65,7 @@ function fixture(t) {
       }
       const body = input(token);
       if (entry === 'import') body.runtimeEnvText = buildRuntimeEnvText(body);
-      let result, status = 200;
-      const res = { status(code) { status = code; return this; }, json(value) { result = value; return this; } };
-      await routes.get(`post /api/admin/accounts${entry === 'import' ? '/import-runtime' : ''}`)({ body }, res);
-      return { status, result };
+      return submit(entry, body);
     },
   };
 }
@@ -201,4 +204,63 @@ test('disabled sync without capture invalidates the old refresh before qualifica
   assert.equal(f.writes(), 0);
   assert.match(f.disk().headers['x-ima-cookie'], /synthetic-old/);
   assert.doesNotMatch(f.runtime(), /synthetic-late-old/);
+});
+
+for (const variant of ['runtime-only-id', 'runtime-id-wins', 'top-level-id-fallback', 'capture-name-fallback', 'runtime-name-fallback']) {
+  for (const failSync of [false, true]) test(`canonical target ${variant}, sync failure=${failSync}`, async t => {
+    const f = fixture(t);
+    const refresh = f.client.maintenance.check().catch(error => error);
+    const body = f.input('synthetic-canonical-new');
+    let entry = 'import';
+    if (variant === 'capture-name-fallback') {
+      entry = 'capture'; body.id = 'synthetic-renamed'; body.name = '  synthetic  ';
+      body.headers = { 'x-ima-cookie': 'IMA-UID=synthetic-renamed-user; IMA-TOKEN=synthetic-canonical-new' };
+    } else {
+      const runtime = { ...body, accountId: 'synthetic', accountName: 'synthetic' };
+      if (variant === 'top-level-id-fallback') runtime.accountId = '';
+      if (variant === 'runtime-name-fallback') {
+        runtime.accountId = 'synthetic-renamed';
+        runtime.headers = { 'x-ima-cookie': 'IMA-UID=synthetic-renamed-user; IMA-TOKEN=synthetic-canonical-new' };
+      }
+      body.runtimeEnvText = buildRuntimeEnvText(runtime);
+      if (variant === 'runtime-only-id' || variant === 'runtime-name-fallback') { delete body.id; delete body.name; }
+      if (variant === 'runtime-id-wins') { body.id = 'synthetic-decoy'; body.name = 'synthetic-renamed-name'; }
+    }
+    if (failSync) f.pool.syncAccounts = () => { throw new Error('synthetic-sync-failure'); };
+    const result = await f.submit(entry, body);
+    assert.equal(result.status, failSync ? 400 : 200);
+    assert.match(f.disk().headers['x-ima-cookie'], /synthetic-canonical-new/);
+    f.pending.resolve(response('synthetic-obsolete-refresh')); await refresh;
+    assert.equal(f.writes(), 0);
+    assert.match(f.disk().headers['x-ima-cookie'], /synthetic-canonical-new/);
+    assert.match(f.runtime(), /synthetic-canonical-new/);
+    if (failSync) assert.equal(f.client.credentialWritesSuspended, true);
+  });
+}
+
+for (const entry of ['capture', 'import']) test(`${entry} uses first id-or-name write match and pool exact id, not a name alias`, async t => {
+  const f = fixture(t);
+  f.directory.upsertCapturedAccount({ ...f.input('synthetic-old'), name: 'synthetic-target-name',
+    requireQualification: false, tokenExpiresAt: 1 });
+  f.directory.upsertCapturedAccount({ id: 'synthetic-other', name: 'synthetic', knowledgeBaseId: '123',
+    headers: { 'x-ima-cookie': 'IMA-UID=synthetic-other-user; IMA-TOKEN=synthetic-other' } });
+  f.pool.syncAccounts(f.directory.getPoolAccounts());
+  // The name alias precedes the exact id only in the pool, not in Directory order.
+  f.pool.accounts.reverse();
+  const target = f.pool.accounts.find(a => a.id === 'synthetic');
+  const other = f.pool.accounts.find(a => a.id === 'synthetic-other');
+  const refresh = target.client.maintenance.check().catch(error => error);
+  let atWrite;
+  f.directory._writeStore = () => {
+    atWrite = { target: target.client.credentialWritesSuspended, other: other.client.credentialWritesSuspended };
+    throw new Error('synthetic-write-failure');
+  };
+  const body = { ...f.input('synthetic-collision'), id: 'synthetic-other', name: 'synthetic-target-name',
+    headers: { 'x-ima-cookie': 'IMA-UID=synthetic-third-user; IMA-TOKEN=synthetic-collision' } };
+  if (entry === 'import') body.runtimeEnvText = buildRuntimeEnvText({ ...body,
+    accountId: body.id, accountName: body.name });
+  await f.submit(entry, body);
+  f.pending.resolve(response('synthetic-obsolete-refresh')); await refresh;
+  assert.deepEqual(atWrite, { target: true, other: false });
+  assert.equal(f.writes(), 0);
 });

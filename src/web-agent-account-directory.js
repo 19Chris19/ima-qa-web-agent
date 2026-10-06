@@ -140,15 +140,8 @@ class WebAgentAccountDirectory {
     });
   }
 
-  upsertFromRuntimeEnv(options = {}) {
-    const runtimeConfig = parseRuntimeEnvText(options.runtimeEnvText || '');
-    const name = cleanAccountName(
-      options.name ||
-        runtimeConfig.accountName ||
-        runtimeConfig.accountId ||
-        path.basename(options.runtimeEnvPath || runtimeConfig.runtimeEnvPath || 'account'),
-    );
-    const id = normalizeAccountId(runtimeConfig.accountId || options.id || name);
+  upsertFromRuntimeEnv(options = {}, target = resolveAccountWriteTarget(this.load().accounts, options, { runtimeEnv: true })) {
+    const { id, name, runtimeConfig } = target;
     const runtimeEnvPath = options.runtimeEnvPath || runtimeConfig.runtimeEnvPath || '';
     const account = {
       id,
@@ -198,9 +191,8 @@ class WebAgentAccountDirectory {
     return sanitizeAccount(this.getAccount(id), { includeEvents: true });
   }
 
-  upsertCapturedAccount(options = {}) {
-    const name = cleanAccountName(options.name || options.id || 'account');
-    const id = normalizeAccountId(options.id || name);
+  upsertCapturedAccount(options = {}, target = resolveAccountWriteTarget(this.load().accounts, options)) {
+    const { id, name } = target;
     const runtimeEnvPath = options.runtimeEnvPath || '';
     const headers = normalizeHeaders(options.headers);
     const account = {
@@ -278,7 +270,7 @@ class WebAgentAccountDirectory {
     }
   }
 
-  replaceCapturedAccount(accountId, options = {}) {
+  replaceCapturedAccount(accountId, options = {}, target) {
     const existing = this._requireAccount(accountId);
     const headers = normalizeHeaders(options.headers);
     const nextFingerprint = this._identityFingerprint(headers);
@@ -310,7 +302,7 @@ class WebAgentAccountDirectory {
       source: options.source || 'admin-qr-reauth',
       requireQualification: options.requireQualification === true,
       replace: true,
-    });
+    }, target);
   }
 
   setDisabled(accountId, disabled, reason = '') {
@@ -531,9 +523,7 @@ class WebAgentAccountDirectory {
   _upsertAccount(nextAccount, runtimeEnvText, event, options = {}) {
     const store = this.load();
     const now = this.now();
-    const existing = store.accounts.find(
-      (account) => account.id === nextAccount.id || account.name === nextAccount.name,
-    );
+    const existing = findAccountWriteTarget(store.accounts, nextAccount);
     if (existing && !options.replace) {
       const error = new Error(`账号 ${existing.name} 已存在；如确认要重新绑定登录态，请显式使用 replace`);
       error.statusCode = 409;
@@ -749,6 +739,22 @@ function createEmptyStore(now) {
     updatedAt: timestamp,
     accounts: [],
   };
+}
+
+function findAccountWriteTarget(accounts, { id, name }) {
+  return accounts.find(account => account.id === id || account.name === name);
+}
+
+function resolveAccountWriteTarget(accounts, options = {}, { runtimeEnv = false } = {}) {
+  const runtimeConfig = runtimeEnv ? parseRuntimeEnvText(options.runtimeEnvText || '') : null;
+  const name = cleanAccountName(runtimeEnv
+    ? options.name || runtimeConfig.accountName || runtimeConfig.accountId
+      || path.basename(options.runtimeEnvPath || runtimeConfig.runtimeEnvPath || 'account')
+    : options.name || options.id || 'account');
+  const id = normalizeAccountId(runtimeConfig?.accountId || options.id || name);
+  // Preserve the writer's ordered id-or-name match, not getAccount's mixed lookup.
+  const previous = findAccountWriteTarget(accounts, { id, name });
+  return Object.freeze({ id, name, previousId: previous?.id || null, runtimeConfig });
 }
 
 function normalizeStoredAccount(account) {
@@ -989,4 +995,5 @@ module.exports = {
   getImaPrincipalId,
   parseRuntimeEnvText,
   normalizeAccountId,
+  resolveAccountWriteTarget,
 };

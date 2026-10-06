@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright-core');
 const { IMAWebAgentClient, getBkn, stringifyCookie } = require('./ima-web-agent-client');
-const { normalizeAccountId } = require('./web-agent-account-directory');
+const { normalizeAccountId, resolveAccountWriteTarget } = require('./web-agent-account-directory');
 const { connectEnrollmentBrowser, validateEndpoint } = require('./enrollment-browser-bridge');
 const { parseShareUrl, verifySharedMembership } = require('./shared-kb-target');
 
@@ -250,10 +250,14 @@ class WebAgentEnrollmentManager {
       tokenExpiresAt: auth.tokenExpiresAt, refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
       requireQualification: true,
       source: 'admin-qr-enrollment', replace: job.replace };
+    const reauth = job.reauthAccountId && this.accountDirectory.getAccount(job.reauthAccountId);
+    const target = !job.addIdentity && resolveAccountWriteTarget(this.accountDirectory.listAccounts(), {
+      ...capturedAccount, ...(reauth ? { id: reauth.id, name: reauth.name } : {}),
+    });
     const writeAndSync = () => {
       job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
-        : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
-          : this.accountDirectory.upsertCapturedAccount(capturedAccount);
+        : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount, target)
+          : this.accountDirectory.upsertCapturedAccount(capturedAccount, target);
       const previousPoolAccount = this.pool.accounts?.find(account => account.id === job.account.id);
       try {
         this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
@@ -267,9 +271,7 @@ class WebAgentEnrollmentManager {
         throw enrollmentError('登录态已保存，但调度同步失败；账号本机隔离，请先核对状态', 503, { code: 'pool_sync_failed' });
       }
     };
-    const previous = !job.addIdentity && (this.accountDirectory.getAccount(job.reauthAccountId || job.accountId)
-      || this.accountDirectory.getAccount(job.name));
-    if (previous && this.pool.withCredentialReplacement) this.pool.withCredentialReplacement(previous.id, writeAndSync);
+    if (target?.previousId && this.pool.withCredentialReplacement) this.pool.withCredentialReplacement(target.previousId, writeAndSync);
     else writeAndSync();
     // Login expiry ends here. The declared QA probe owns a separate bounded timeout.
     await this._cleanup(job);

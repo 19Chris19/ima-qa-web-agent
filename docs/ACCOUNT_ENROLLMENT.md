@@ -109,6 +109,13 @@ obsolete or detached clients cannot write the encrypted account directory.
 Stopping a timer alone does not abort an upstream request. The guarantee is that
 its obsolete response cannot apply locally, not that the upstream cancelled it.
 
+Capture/import resolve the write target before invalidation or persistence, using
+the same normalized identity passed to the Directory writer. Runtime-text account
+ID takes precedence over the top-level ID; existing name fallback and Directory's
+ordered first ID-or-name match are preserved, including conflicting IDs/names.
+The pool then invalidates only that resolved account's exact ID, never a name alias.
+This is target alignment, not a new collision or identity-merging policy.
+
 Public `applyConfig` still directly accepts headers, including earlier or unknown
 expiry. There is no Air expiry ordering rule or seven-mode qualification here.
 Changed credentials and disabled synchronization invalidate older refreshes;

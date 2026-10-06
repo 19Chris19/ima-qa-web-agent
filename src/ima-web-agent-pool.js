@@ -111,7 +111,7 @@ class IMAWebAgentPool {
   }
 
   withCredentialReplacement(accountId, writeAndSync) {
-    const previous = this.accounts.find(account => account.id === accountId || account.name === accountId);
+    const previous = this.accounts.find(account => account.id === accountId);
     if (!previous) return writeAndSync();
     // The caller writes and syncs synchronously; no old refresh can persist in between.
     previous.client.invalidateCredentials?.({ suspend: true });
