@@ -113,7 +113,7 @@ class IMAWebAgentPool {
   async ensureFreshAuth() {
     const results = await Promise.allSettled(
       this.accounts.map(async (account) => {
-        if (typeof account.client.ensureFreshAuth !== 'function') {
+        if (account.disabled || typeof account.client.ensureFreshAuth !== 'function') {
           return false;
         }
         const refreshed = await account.client.ensureFreshAuth();
