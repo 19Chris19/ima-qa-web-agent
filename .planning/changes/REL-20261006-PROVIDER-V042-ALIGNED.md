@@ -65,6 +65,12 @@ assertion reproduced the mismatch and now guards v0.4.2. This references the
 intended release, not an assertion that its image already exists. CI and image
 publication explicitly enable the synthetic admin backend contract test.
 
+## Documentation reconciliation
+The onboarding acceptance page now leads with the aligned candidate evidence
+and remaining review blockers. Earlier independent-branch evidence is explicitly
+historical. Agent instructions identify v0.4.2's expanded account presentation;
+they do not claim publication or successful real enrollment.
+
 ## Rollback
 Revert scoped commits or select the previous version image; preserve current
 account and conversation volumes. No tag replacement or history rewrite.

@@ -1,6 +1,28 @@
 # v0.4.2 onboarding candidate acceptance
 
-## Sync-fault review follow-up (independent candidate)
+## Current aligned candidate (2026-10-06)
+
+This is not a published release. The aligned release branch is
+`codex/REL-20261006-PROVIDER-V042-ALIGNED`. Verified implementation `2cd17fb`
+includes the pending-activation, cancellation and sync-fault fixes described
+below. The rejected table/drawer UI has been replaced by expanded account rows.
+Default image metadata targets v0.4.2; that tag must not be assumed published.
+
+- Full synthetic regression: 542 passed, zero failed, two optional website-parser
+  cases skipped; those two were then explicitly enabled in a passing 10-case run.
+- Matched Explorer candidate f808602: 158/158 tests with public export enabled.
+- Native ARM64 and emulated AMD64 image builds, disconnected startup and internal
+  API authentication checks passed. No real IMA question was sent.
+- Final review found additional fresh-install volume ownership and transferred
+  account admission issues. Their fixes and a new clean installation are still
+  required before release; previous image evidence does not cover later fixes.
+- Windows desktop, remote SSH enrollment, fresh-account scan and real QA,
+  token-renewal longevity and long-running Linux acceptance remain unverified.
+
+Everything below is dated historical evidence for its stated revision, not a
+current instruction or claim that the final release has passed those checks.
+
+## Historical sync-fault review follow-up
 
 `FIX-20261006-PUBLIC-ENROLL-SYNC-FAULTS` follows review of `6fc756a` without
 merging INT. Capture/quarantine-stage and post-commit pool sync faults retain local
@@ -15,7 +37,7 @@ their fixes; UI checks cover both commit outcomes. No live, private runtime,
 container, release or all-platform acceptance was performed. See the change record
 and ACCOUNT_ENROLLMENT.md for the isolation and receipt contract.
 
-## Pending-activation follow-up (independent candidate)
+## Historical pending-activation follow-up
 
 `FIX-20261006-PUBLIC-ENROLL-ACTIVATION`, based on integration revision
 `7d2006eca6932ffbf2e731119d3fda6e278c43d3`, closes the classic-capacity blocker
@@ -31,7 +53,7 @@ synthetic regression passed **438/438, zero failures/skips**. Existing 406-test
 integration evidence below remains historical. No real login, QA, runtime access,
 container build/start, push or release was performed for this follow-up.
 
-## Public integration acceptance (2026-10-06)
+## Historical integration acceptance (2026-10-06, af9627c)
 
 Candidate only, not a release. Clean integration branch `codex/INT-20261006-PROVIDER-MANAGEMENT`
 at `af9627c` merged cancellation fix `1f7827a6c26e0f78f8a677156821da5e21fad02b`
