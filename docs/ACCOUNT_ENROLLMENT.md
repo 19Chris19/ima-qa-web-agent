@@ -1,7 +1,8 @@
-# Account Enrollment: Identity Conflict Candidate
+# Account Enrollment: Pending Activation Candidate
 
 This is a local implementation candidate, not a release or live acceptance claim.
-The public admin UI is unchanged and needs separate integration.
+The public admin UI offers an explicitly authorized single-probe retry for saved
+pending accounts. No production or all-platform acceptance is claimed.
 
 ## Reauthentication Contract
 
@@ -47,11 +48,100 @@ shutdown and terminal failure clear the pending auth reference and close the
 temporary browser/profile. Late verification completion cannot persist a cancelled
 or expired task. The existing `onEnrolled` callback performs the declared single
 QA check after insertion; no background QA probe or GET-triggered probe is added.
-As before, a failed post-insertion QA check does not remove the enrolled account.
+A failed post-insertion QA check does not remove the enrolled account, but it
+now remains disabled in both classic and knowledge-agent modes.
+
+## Durable Admission Gate
+
+Browser capture, admin credential capture and runtime-text import persist encrypted
+credentials with `disabled: true` and `enrollmentQualificationRequired: true` in
+their first account write. New/previously enabled accounts use
+`pending_enrollment_qualification`. Same-identity reauthentication recovers
+`auth_failed` and `knowledge_base_unavailable` into pending; manual, migration,
+duplicate and unknown disable reasons are not silently released. Existing accounts
+are not mass-migrated or probed. Imported accounts do not start an automatic probe.
+
+This is not a universal new-proof requirement for every entrypoint. Startup
+`env-seed` in provider-a-server.js/server.js intentionally retains its legacy
+compatibility behavior; it does not request this new gate and can remain usable
+in classic mode without a new proof. Direct internal Directory callers must opt
+in with `requireQualification: true`; an existing pending marker is still honored.
+
+Only an explicit admin verify action or the declared enrollment callback starts
+one knowledge-agent probe. GET, startup and ordinary enable never do so. Pending
+accounts cannot be enabled through the normal enable API (409); paused credentials
+remain encrypted and available to the verifier, not to ordinary scheduling.
+Verification of an already enabled account first persists the same disabled gate,
+so failure cannot fall back to classic scheduling or inherit an older proof.
+
+On success, the directory reloads and compares the store generation and a digest
+of the captured account, including encrypted credentials, identity, scope, model,
+disabled state and events. Proof contract, principal, scope and one dispatch/terminal
+are checked again. Proof and release of the gate are one existing locked atomic
+store commit. Only the pending reason automatically enables the account. A manual
+or migration pause can acquire proof but stays disabled; a subsequent explicit
+enable is then possible. Unrelated store changes conservatively invalidate a probe
+too; the user can retry. Manual disable, deletion/recreation, recapture or credential
+rotation while a probe runs cannot be undone by its late result.
+
+Failure, cancellation and timeout retain disabled credentials, with no proof.
+Use **Verify QA capability** in the account list to retry without scanning again;
+each retry authorizes one fresh question. Expired credentials still require login.
+Successful proof committed before cancellation wins: cancellation reports completed
+rather than claiming to undo an already committed activation. To pause it, use
+the explicit disable action.
+
+Both the quarantine-stage sync and the post-commit sync fail closed locally,
+including throws before any pool update, partial updates and replacement objects.
+The target retains a maintenance admission lock; both classic and knowledge-agent
+capacity exclude it. A sync failure is not classified as an upstream probe error
+and never clears that lock in verification cleanup. No automatic repair/re-probe
+is performed; reconcile the failed pool before service acceptance or further use.
+
+Verification and cancel responses explicitly include `commitApplied` and `warning`:
+- Quarantine-stage sync failure returns `commitApplied: false`,
+  `warning: "pool_sync_failed"`, with no probe dispatch and a disabled disk account.
+- After successful atomic commit, sync failure returns `commitApplied: true`, the
+  same warning, and `success: false` because local scheduling did not recover.
+  `activated` describes the durable enable state, not local schedulability; local
+  capacity remains zero. Cancel/shutdown and the enrollment completion preserve
+  the committed outcome plus warning, never claim the enabled disk account was
+  cancelled back to disabled. The commit receipt is recorded immediately after
+  the atomic write succeeds, independently of final sync status.
+
+Post-commit account-display reads, availability notification and enrollment
+capacity callbacks cannot turn a committed operation into `failed`. The receipt
+is retained before those reads; the fixed warning `post_commit_update_failed`
+means the commit was not undone, but current presentation/state refresh failed.
+This warning does **not** assert pool quarantine or current schedulability.
+`pool_sync_failed` takes precedence when both faults occur. Enrollment warnings
+are allowlisted to these two values; exception text is never a warning value.
+Failures before commitment still fail normally and never acquire a receipt.
+
+Cancel and shutdown retain the same historical receipt even if a current account
+read fails. Readiness returns `activated: null` when that read is unavailable,
+instead of inventing the current enabled state. A failed final snapshot may omit
+the optional capacity/account snapshot fields while returning the commit result.
+No callback retry, re-probe, rollback, or automatic repair is performed. These are
+offline candidate semantics, not a claim of live deployment or successful recovery.
+
+`commitApplied: false` alone does not prove zero requests: a generation conflict
+followed by recovery-sync failure can occur after a probe dispatched, without a
+proof commit. Do not automatically retry either case.
+
+| Phase/result | Durable account state | Next action |
+|---|---|---|
+| Before insertion, cancelled/expired | No new account; existing account unchanged | Restart login if needed |
+| Captured, awaiting/running probe | Saved and disabled; no classic capacity | Await or cancel the authorized probe |
+| Probe failed/cancelled/timed out | Saved and disabled | Explicit single-probe retry; no rescan unless auth expired |
+| Proof committed for pending account | Proof and enable committed together | Normal scheduling |
+| Proof committed for manual/migration pause | Proof saved; pause preserved | Explicit enable if desired |
+| Quarantine-stage sync failed | Disabled, no new proof; commitApplied=false | Reconcile local pool; no automatic probe |
+| Post-commit sync failed | Proof/enable already committed; commitApplied=true | Reconcile local pool; cancellation does not undo commit |
 
 ## Cancellation and Phase Deadlines
 
-`expiresAt` is the login/authorization deadline, not a total task deadline. It
+`expiresAt` is the login/authorization deadline (five minutes by default), not a total task deadline. It
 includes waiting for scan, identity-conflict resolution, membership and session
 initialization. Retrying or choosing add does not extend it. Membership retains
 its own 15-second request bound even when the enrollment cancellation signal is
@@ -69,7 +159,9 @@ Explicit cancellation and manager shutdown cancel an in-flight post-insertion
 probe through `onCancelVerification`. Shutdown does not merely hide its task.
 A cancelled callback cannot perform a late enrollment sync/completion, and the
 readiness cancellation guard prevents a late proof commit. Accounts already
-inserted are retained; cancellation does not roll back their credentials.
+inserted are retained disabled; cancellation does not roll back their credentials.
+Cancellation after a completed atomic proof commit is the completed-success case
+described above, not a cancelled probe.
 
 Session initialization now receives the login AbortSignal. Client guards reject
 late responses before refresh/retry or mutation of refreshed credentials, even

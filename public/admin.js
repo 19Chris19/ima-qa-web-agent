@@ -236,7 +236,7 @@
     }
   }
 
-  async function request(url, options = {}) {
+  async function request(url, options = {}, { allowUnsuccessfulResult = false } = {}) {
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -246,7 +246,7 @@
       },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload.success === false) {
+    if (!response.ok || (!allowUnsuccessfulResult && payload.success === false)) {
       throw new Error(payload.error || `请求失败 (${response.status})`);
     }
     return payload;
@@ -369,7 +369,7 @@
     stopEnrollmentPolling();
     const accountName = String(completedEnrollment?.account?.name || '新账号');
     dismissEnrollmentDialog();
-    setFeedback(enrollFeedback, `账号 ${accountName}：${completedEnrollment.detail || '接入完成，请查看账号状态'}。`);
+    setFeedback(enrollFeedback, `账号 ${accountName}：${enrollmentStatus(completedEnrollment)}。`);
     await loadAdminState();
   }
 
@@ -413,7 +413,7 @@
       setFeedback(enrollmentDialogFeedback, enrollment.error, true);
     }
     if (!active && enrollment.state === 'completed') {
-      setFeedback(enrollmentDialogFeedback, '接入完成，账号池已刷新。');
+      setFeedback(enrollmentDialogFeedback, enrollment.warning ? enrollmentStatus(enrollment) : '接入完成，账号池已刷新。');
     }
   }
 
@@ -480,6 +480,10 @@
         method: 'DELETE',
       });
       enrollment = payload.enrollment;
+      if (enrollment.state === 'completed') {
+        await finishCompletedEnrollment(enrollment);
+        return;
+      }
       if (closeDialog) {
         setFeedback(enrollFeedback, '未完成的账号接入已取消。');
         await loadAdminState();
@@ -571,6 +575,9 @@
   }
 
   function enrollmentStatus(current) {
+    if (current.commitApplied && current.warning === 'post_commit_update_failed') {
+      return '资格已提交，后续状态更新失败；提交未撤销，请核对账号当前状态。';
+    }
     if (current.state === 'identity_conflict') {
       return current.detail || '本次扫码身份尚未保存为账号，原账号保持不变。请填写新名称接入，或取消。';
     }
@@ -1379,6 +1386,8 @@
       const busy = accountActionsInFlight.has(account.id);
       if (view.knowledge.state === 'needs_login') {
         actions.append(createAction('重新登录', () => reauthenticate(account), busy));
+      } else if (account.enrollmentQualificationRequired && !account.identityDuplicate) {
+        actions.append(createAction('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying'));
       } else if (account.status === 'disabled' && !account.identityDuplicate) {
         actions.append(createAction('启用', () => runAccountAction(account, 'enable'), busy));
       } else {
@@ -1471,7 +1480,8 @@
     add('刷新', () => runAccountAction(account, 'refresh'));
     add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
     add('重新登录', () => reauthenticate(account));
-    if (!account.identityDuplicate) add(account.status === 'disabled' ? '启用' : '停用', () => runAccountAction(account, account.status === 'disabled' ? 'enable' : 'disable'));
+    const canEnable = account.status === 'disabled' && !account.enrollmentQualificationRequired;
+    if (!account.identityDuplicate) add(canEnable ? '启用' : '停用', () => runAccountAction(account, canEnable ? 'enable' : 'disable'));
     add('删除', () => deleteAccount(account));
     menu.append(trigger, items);
     menu.addEventListener('toggle', () => {
@@ -1551,9 +1561,17 @@
     accountActionFeedback.set(account.id, { message: '正在验证问答能力...', isError: false });
     renderAccounts();
     try {
-      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`, { method: 'POST', body: JSON.stringify({ question }) });
+      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`,
+        { method: 'POST', body: JSON.stringify({ question }) }, { allowUnsuccessfulResult: true });
       const messages = { ok: '验证成功，可用于知识库问答', probe_evidence_insufficient: '回答或知识库来源不足，账号保留待验证', probe_timeout: '验证超时，请稍后手动重试', probe_cancelled: '验证已取消', account_store_generation_conflict: '账号状态发生变化，请重新验证', pool_sync_failed: '验证已保存，调度同步失败，账号暂时隔离', auth_expired: '登录已过期，请重新登录', auth_rejected: '登录被拒绝，请重新登录', upstream_temporary: '上游暂时不可用，请稍后重试' };
-      accountActionFeedback.set(account.id, { message: messages[result.code] || `验证未完成（${result.code}）`, isError: !result.success });
+      accountActionFeedback.set(account.id, { message: result.commitApplied && result.warning === 'post_commit_update_failed'
+        ? '资格已提交，后续状态更新失败；提交未撤销，请核对账号当前状态'
+        : result.warning === 'pool_sync_failed'
+        ? result.commitApplied ? '资格已提交，但调度同步失败；账号本机隔离，取消不会撤销提交'
+          : '资格未提交，调度同步失败；账号本机隔离，登录态已保存'
+        : result.success && result.activated === false
+        ? '问答资格已验证，账号仍保持停用；登录态已保存'
+        : messages[result.code] || `验证未完成（${result.code}）`, isError: !result.success });
     } catch (error) { accountActionFeedback.set(account.id, { message: error.message, isError: true }); }
     finally {
       accountActionsInFlight.delete(account.id);
