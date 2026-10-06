@@ -106,18 +106,33 @@ test('private preparation is repeat-safe and cannot overwrite existing bundles o
   assert.throws(() => prepareTransfer({ ...options, output: path.join(f.root, 'unsafe') }), /transfer_output_must_be_private/);
 });
 
+test('archive preflight failure creates no transfer bundle and does not modify synthetic stores', t => {
+  const f = fixture(t);
+  const before = f.read();
+  const historyStore = path.join(f.root, 'synthetic-history.json');
+  fs.writeFileSync(historyStore, JSON.stringify({ conversations: [{ id: 'synthetic-orphan', turns: [] }] }));
+  const output = path.join(f.root, 'blocked-bundle');
+  assert.throws(() => prepareTransfer({ sourceStore: f.source.storePath, sourceKey: f.source.keyPath,
+    targetStore: f.target.storePath, targetKey: f.target.keyPath, knowledgeBaseId: '999000111',
+    historyStore, output }), { code: 'archive_preflight_failed' });
+  assert.equal(fs.existsSync(output), false);
+  assert.equal(fs.readFileSync(f.source.storePath, 'utf8'), before.source.raw);
+  assert.equal(fs.readFileSync(f.target.storePath, 'utf8'), before.target.raw);
+});
+
 test('archive retains owner and Markdown but excludes upstream bindings and private metadata', () => {
   const answer = '| a | b |\n|---|---|\n| 1 | 2 |';
-  const archive = exportHistory({ conversations: [{ id: 'synthetic-history', ownerKey: 'demo:owner-a',
+  const archive = exportHistory({ conversations: [{ id: 'synthetic-history', ownerKey: 'demo:11111111-1111-4111-8111-111111111111',
+    createdAt: 0, updatedAt: 1, expiresAt: 2,
     upstream: { accountId: 'private-id', sessionId: 'private-session' }, title: 'synthetic',
     turns: [{ question: 'synthetic', answer, createdAt: 1, cookie: 'private-cookie',
       sources: [{ index: 1, title: 'synthetic source', snippet: 'synthetic', cookie: 'private-cookie' }],
       evidence: { source_count: 1, answer_basis: 'knowledge', credential: 'private-value' } }] }] });
-  assert.equal(archive.conversations[0].ownerKey, 'demo:owner-a');
+  assert.equal(archive.conversations[0].ownerKey, 'demo:11111111-1111-4111-8111-111111111111');
   assert.equal(archive.conversations[0].turns[0].answer, answer);
   assert.equal(archive.conversations[0].turns[0].evidence.source_count, 1);
   assert.doesNotMatch(JSON.stringify(archive), /private-|upstream|credential|cookie/);
-  assert.throws(() => exportHistory({ conversations: [{ id: 'missing-owner', turns: [] }] }), /archive_ownership_invalid/);
+  assert.throws(() => exportHistory({ conversations: [{ id: 'missing-owner', turns: [] }] }), /archive_preflight_failed/);
 });
 
 test('archive source/evidence keys match consumer schema v1 at 6237d8a', () => {

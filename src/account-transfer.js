@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseRuntimeEnvText, getImaPrincipalId, normalizeAccountId } = require('./web-agent-account-directory');
 const { buildRuntimeEnvText } = require('./ima-web-agent-client');
+const { auditHistoryInput, adaptHistoryInput } = require('./history-export-preflight');
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const keyBytes = value => crypto.createHash('sha256').update(String(value).trim()).digest();
@@ -128,9 +129,14 @@ function buildTransfer({ source, target, knowledgeBaseId, now = new Date().toISO
 }
 
 function exportHistory(store) {
-  if (!Array.isArray(store?.conversations) || store.conversations.length > 5000) throw failure('archive_store_invalid');
+  return exportHistoryWithReport(store).archive;
+}
+
+function exportHistoryWithReport(store, options = {}) {
+  const { report, conversations } = adaptHistoryInput(store, options);
+  if (!report.ready) throw Object.assign(failure('archive_preflight_failed'), { report });
   const ids = new Set();
-  return { schemaVersion: 1, conversations: store.conversations.map(row => {
+  const archive = { schemaVersion: 1, conversations: conversations.map(row => {
     if (!row || typeof row.id !== 'string' || !row.id || ids.has(row.id) ||
         typeof row.ownerKey !== 'string' || !/^[a-z0-9._:-]{1,160}$/i.test(row.ownerKey) || !Array.isArray(row.turns)) {
       throw failure('archive_ownership_invalid');
@@ -142,10 +148,16 @@ function exportHistory(store) {
         if (typeof turn.question !== 'string' || typeof turn.answer !== 'string') throw failure('archive_turn_invalid');
         return { question: turn.question, answer: turn.answer, createdAt: turn.createdAt,
           sources: Array.isArray(turn.sources) ? turn.sources.map(exportSource) : [],
-          searchSummary: turn.searchSummary || '',
+          searchSummary: turn.searchSummary ?? null,
           evidence: turn.evidence ? exportEvidence(turn.evidence) : undefined };
       }) };
   }) };
+  if (Buffer.byteLength(JSON.stringify(archive)) > 16 * 1024 * 1024) {
+    throw Object.assign(failure('archive_preflight_failed'), {
+      report: { ...report, ready: false, reasons: { size_limit: 1 } },
+    });
+  }
+  return { archive, report };
 }
 
 function exportSource(source) {
@@ -160,7 +172,8 @@ function exportSource(source) {
 }
 
 function exportEvidence(evidence) {
-  const result = Object.fromEntries(['source_intent', 'answer_basis', 'source_count', 'knowledge_source_count', 'web_source_count']
+  const result = Object.fromEntries(['source_intent', 'answer_basis', 'source_count', 'knowledge_source_count', 'web_source_count',
+    'complete', 'interrupted', 'timing', 'process']
     .filter(key => key in evidence).map(key => [key, evidence[key]]));
   if (result.source_intent === undefined && ['', 'web_requested'].includes(evidence.sourceIntent)) {
     result.source_intent = evidence.sourceIntent;
@@ -196,4 +209,5 @@ function prepareTransfer({ sourceStore, sourceKey, targetStore, targetKey, knowl
   return { ...transfer.report, state: 'prepared_not_applied', archivedConversations: archive?.conversations.length || 0 };
 }
 
-module.exports = { readSnapshot, buildTransfer, prepareTransfer, exportHistory, decryptAccount, validateAccountNamespace };
+module.exports = { readSnapshot, buildTransfer, prepareTransfer, exportHistory, exportHistoryWithReport,
+  auditHistoryInput, decryptAccount, validateAccountNamespace };

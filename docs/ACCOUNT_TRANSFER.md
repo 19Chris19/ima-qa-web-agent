@@ -67,6 +67,50 @@ for UUID owner IDs, dates, value/size limits and read-only visibility; its parse
 export before any integration. Cross-repository export-to-parse acceptance is independently owned; this
 candidate does not modify the consumer or claim that acceptance on its behalf.
 
+### Strict candidate preflight (2026-10-06)
+
+The public baseline at `32be509` only projected archive fields. It did not expose
+the strict audit/report APIs already required by the Explorer candidate. This
+follow-up ports only the pure history adapter reviewed at monorepo `92c01bd7`,
+not Air CLI, live-store handling or service guards. It remains unpublished.
+
+`auditHistoryInput(store, options)` returns readiness and count-only reasons;
+`exportHistoryWithReport(store, options)` returns `{ archive, report }` or throws
+`archive_preflight_failed` with that report. `exportHistory(store)` keeps its
+schema-v1 return shape and uses the strict default. No identities, source URLs,
+questions, answers or credential values appear in reports. The archive itself
+is private and still contains owned conversation text.
+
+Before projection, validation checks UUID-shaped owners, IDs, canonical dates,
+chronology, nonblank completed turns, supported metadata and bounded sizes.
+Unknown fields, active requests, conflicting evidence and incomplete turns fail
+closed. Existing invalid exports are not repaired by guessing owners or text.
+The input cap is conservatively 16 MiB including fields to be redacted, with at
+most 5,000 conversations, 1,000 turns per conversation and 50,000 total turns.
+
+Public `ConversationStore` persists nested evidence, which is preserved. Legacy
+flat `answerBasis`, `sourceCount`, `knowledgeSourceCount`, `webSourceCount` and
+`sourceIntent` map to canonical nested fields without coercion. Conflicts fail.
+Supported completion, timing and process evidence is retained instead of silently
+dropped. Private upstream bindings and validated L0 fields are excluded and counted.
+Missing/null search summaries remain null rather than being invented as empty text.
+
+Empty shells block export unless `excludeEmptyShells: true` explicitly excludes
+otherwise valid inactive shells. Unsafe source URL schemes, userinfo, query
+strings and fragments block default export. `omitSourceUrls: true` removes every
+URL with a count, never an entire source; URL-only sources that become empty and
+malformed fields still block. Neither option permits invalid owners or evidence.
+These options are pure API options, not new flags on the existing transfer CLI.
+`prepareTransfer` uses strict defaults and fails before creating a bundle on
+archive validation failure. Its account encryption/apply/rollback logic is unchanged.
+
+Synthetic interop can be enabled with
+`PROVIDER_A_ARCHIVE_PARSER_TEST_MODULE=/absolute/reviewed/explorer/history-archive.mjs`
+when running the Provider tests. This does not load private history or change the
+website parser. It is not evidence that a running Air process, existing image or
+published tag contains this patch; operator authorization and offline guards
+remain separate requirements.
+
 ## Operator Cutover Gate
 
 Before applying any artifact:
