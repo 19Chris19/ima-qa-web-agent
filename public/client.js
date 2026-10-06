@@ -23,7 +23,6 @@
   const experience = window.ProviderQaExperience;
   const resizeComposer = experience.composer(form, input);
   const notice = document.querySelector('#composerNotice');
-  const draftStop = document.querySelector('#draftStopButton');
   const latest = experience.button('返回最新回答', 'latest', 'return-latest');
   latest.hidden = true;
   document.querySelector('#readingActions').append(latest);
@@ -33,16 +32,14 @@
     scrollToBottom({ force: true });
     chatLog.focus({ preventScroll: true });
   });
-  draftStop.addEventListener('click', () => activeController?.abort());
 
   function updateComposer() {
     const hasDraft = Boolean(input.value.trim());
-    const stop = isBusy && !hasDraft;
+    const stop = isBusy;
     sendButton.classList.toggle('is-busy', stop);
     sendButton.title = stop ? '停止回答' : '发送';
     sendButton.setAttribute('aria-label', sendButton.title);
-    sendButton.setAttribute('aria-disabled', String(isBusy && hasDraft));
-    draftStop.hidden = !(isBusy && hasDraft);
+    sendButton.setAttribute('aria-disabled', 'false');
     notice.textContent = isBusy && hasDraft ? '草稿已保留。请先停止或等待当前回答完成，再发送。' : '';
     resizeComposer();
   }
@@ -50,8 +47,7 @@
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (isBusy) {
-      if (!input.value.trim()) activeController?.abort();
-      else updateComposer();
+      activeController?.abort();
       return;
     }
     submitQuestion(input.value);

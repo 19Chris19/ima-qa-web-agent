@@ -59,21 +59,49 @@ for (const mode of ['index', 'embed']) {
     assert.equal(p.d.querySelector('#sendButton').getAttribute('aria-label'), '停止回答');
     p.emit('delta', { text: 'Received 123' }); await tick();
     assert.equal(p.d.querySelector('.answer-copy'), null);
-    p.draft('retained draft'); p.submit();
+    const primary = p.d.querySelector('#sendButton');
+    p.draft('retained draft');
     p.input.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     assert.equal(p.asks.length, 1);
     assert.equal(p.asks[0].signal.aborted, false);
     assert.match(p.d.querySelector('#composerNotice').textContent, /停止或等待/);
-    assert.equal(p.d.querySelector('#sendButton').getAttribute('aria-label'), '发送');
-    p.d.querySelector('#draftStopButton').click(); await tick();
+    assert.equal(primary.getAttribute('aria-label'), '停止回答');
+    assert.equal(primary.getAttribute('aria-disabled'), 'false');
+    assert.equal(p.d.querySelector('#draftStopButton'), null);
+    assert.equal(p.form.querySelectorAll('button').length, 1);
+    primary.click(); await tick();
     assert.equal(p.asks[0].signal.aborted, true);
     assert.equal(p.input.value, 'retained draft');
     assert.equal(p.asks.length, 1);
+    assert.equal(primary.getAttribute('aria-label'), '发送');
+    assert.equal(p.d.querySelector('#sendButton'), primary);
     p.d.querySelector('.answer-copy').click(); await tick();
     assert.deepEqual(p.copied, ['Received 123']);
     assert.match(p.d.querySelector('.answer-copy').getAttribute('aria-label'), /部分/);
     assert.equal(p.d.querySelector('#questionInput'), p.input);
     if (mode === 'embed') assert.match(p.asks[0].headers['X-IMA-Client-Id'], /^embed-/);
+  });
+}
+
+for (const mode of ['index', 'embed']) {
+  test(`${mode}: completion restores the same send button and requires explicit draft submission`, async t => {
+    const p = await page(t, { mode });
+    const primary = p.d.querySelector('#sendButton');
+    p.draft('first'); p.submit(); await tick();
+    p.draft('next draft');
+    assert.equal(primary.getAttribute('aria-label'), '停止回答');
+    p.input.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assert.equal(p.asks.length, 1);
+    assert.equal(p.asks[0].signal.aborted, false);
+    p.emit('delta', { text: 'completed synthetic answer' });
+    p.emit('done', {}); p.finish(); await tick();
+    assert.equal(primary.getAttribute('aria-label'), '发送');
+    assert.equal(p.input.value, 'next draft');
+    assert.equal(p.asks.length, 1);
+    assert.equal(p.d.querySelector('#sendButton'), primary);
+    primary.click(); await tick();
+    assert.equal(p.asks.length, 2);
+    primary.click(); await tick();
   });
 }
 
