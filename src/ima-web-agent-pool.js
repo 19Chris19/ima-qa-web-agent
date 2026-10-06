@@ -50,6 +50,7 @@ class IMAWebAgentPool {
       const id = accountId(config, index);
       const existing = existingById.get(id);
       if (existing) {
+        const wasDisabled = existing.disabled;
         existing.name = config.name || existing.name || id;
         existing.webQualification = config.webQualification || null;
         existing.principalFingerprint = config.principalFingerprint;
@@ -57,6 +58,10 @@ class IMAWebAgentPool {
         existing.client.applyConfig?.({ ...config, id, name: existing.name });
         existing.disabled = Boolean(config.disabled);
         existing.disabledReason = config.disabledReason || '';
+        if (existing.disabled) existing.client.stopAutoRefresh?.();
+        else if (wasDisabled && this.autoRefreshStarted) {
+          existing.client.startAutoRefresh?.(() => this._notifyCredentials(existing));
+        }
         next.push(existing);
         seen.add(id);
         this._notifyState(existing);
@@ -87,6 +92,7 @@ class IMAWebAgentPool {
     });
 
     for (const account of this.accounts) {
+      if (!seen.has(account.id)) account.client.stopAutoRefresh?.();
       if (!seen.has(account.id) && account.activeRequests > 0) {
         account.disabled = true;
         account.disabledReason = 'removed_while_active';
@@ -98,7 +104,7 @@ class IMAWebAgentPool {
     this.accounts = next;
     if (this.autoRefreshStarted) {
       for (const account of added) {
-        account.client.startAutoRefresh?.();
+        if (!account.disabled) account.client.startAutoRefresh?.(() => this._notifyCredentials(account));
       }
     }
     this._notifyAvailability();
@@ -126,7 +132,7 @@ class IMAWebAgentPool {
   startAutoRefresh() {
     this.autoRefreshStarted = true;
     for (const account of this.accounts) {
-      account.client.startAutoRefresh?.();
+      if (!account.disabled) account.client.startAutoRefresh?.(() => this._notifyCredentials(account));
     }
   }
 

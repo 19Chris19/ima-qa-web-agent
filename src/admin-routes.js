@@ -1,4 +1,5 @@
 const { normalizeAccountId } = require('./web-agent-account-directory');
+const { accountManagementView } = require('./account-management-view');
 const {
   HEALTH_CODES,
   classifyAccountHealthError,
@@ -24,6 +25,7 @@ function registerAdminRoutes(app, options = {}) {
   const managementSnapshot = (includeEvents = false) => buildManagementSnapshot({
     accountDirectory,
     pool: options.imaWebAgentClient,
+    readiness: webReadiness?.snapshot(),
     includeEvents,
   });
   const actionResponse = (accountId, operation, details = {}) => {
@@ -398,7 +400,7 @@ function registerAdminRoutes(app, options = {}) {
   });
 }
 
-function buildManagementSnapshot({ accountDirectory, pool, includeEvents = false }) {
+function buildManagementSnapshot({ accountDirectory, pool, readiness, includeEvents = false }) {
   const directoryAccounts = accountDirectory.listAccounts({ includeEvents });
   const poolSummary = pool?.stats?.({ includeDetails: true }) || null;
   const poolAccounts = new Map((poolSummary?.accounts || []).map((account) => [account.id, account]));
@@ -410,6 +412,7 @@ function buildManagementSnapshot({ accountDirectory, pool, includeEvents = false
       poolSynchronized: Boolean(poolAccount),
       availabilityStatus: account.health?.status || 'needs_check',
       maintenanceOperation: poolAccount?.maintenanceOperation || null,
+      management: accountManagementView(account, poolAccount, readiness?.accounts?.find(row => row.id === account.id)),
     };
   });
   const summary = {
