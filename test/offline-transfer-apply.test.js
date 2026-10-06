@@ -17,6 +17,142 @@ const parse = file => JSON.parse(read(file));
 const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2), { mode: 0o600 });
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 
+test('persistent retirement blocks startup and old apply replay after explicit rollback', async t => {
+  const f = await fixture(t); f.prepare();
+  await applyPreparedTransfer(f.input);
+  await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'account_store_retired' });
+  assert.equal(parse(`${f.input.sourceStore}.retirement.json`).state, 'retired');
+  await applyPreparedTransfer({ ...f.input, rollback: true });
+  const release = await acquireAccountStoreFence(f.input.sourceStore); await release();
+  await assert.rejects(applyPreparedTransfer(f.input), { code: 'transfer_retirement_replay' });
+});
+
+test('rollback before apply refuses without writes', async t => {
+  const f = await fixture(t); f.prepare();
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_retirement_missing' });
+});
+
+for (const stage of ['before-target', 'after-target']) {
+  test(`apply crash ${stage} retains retirement and retries without duplication`, async t => {
+    const f = await fixture(t); f.prepare();
+    const rename = fs.renameSync;
+    const mock = t.mock.method(fs, 'renameSync', (from, to) => {
+      if (to === f.input.targetStore) {
+        assert.equal(parse(`${f.input.sourceStore}.retirement.json`).state, 'retired');
+        if (stage === 'after-target') rename(from, to);
+        throw new Error('synthetic crash');
+      }
+      return rename(from, to);
+    });
+    await assert.rejects(applyPreparedTransfer(f.input), /synthetic crash/);
+    mock.mock.restore();
+    await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'account_store_retired' });
+    await applyPreparedTransfer(f.input);
+    assert.equal(parse(f.input.targetStore).accounts.length, 2);
+    assert.equal(fs.statSync(`${f.input.sourceStore}.retirement.json`).mode & 0o777, 0o600);
+  });
+  test(`rollback crash ${stage} is journaled and retry preserves data`, async t => {
+    const f = await fixture(t); f.prepare(); await applyPreparedTransfer(f.input);
+    const rename = fs.renameSync;
+    const mock = t.mock.method(fs, 'renameSync', (from, to) => {
+      if (to === f.input.targetStore) {
+        if (stage === 'after-target') rename(from, to);
+        throw new Error('synthetic crash');
+      }
+      return rename(from, to);
+    });
+    await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), /synthetic crash/);
+    mock.mock.restore();
+    await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'account_store_retired' });
+    await assert.rejects(applyPreparedTransfer(f.input), { code: 'transfer_rollback_pending' });
+    await applyPreparedTransfer({ ...f.input, rollback: true });
+    assert.equal(parse(f.input.targetStore).accounts.length, 1);
+  });
+}
+
+test('missing import and duplicate source identity prevent source release', async t => {
+  const f = await fixture(t); f.prepare(); await applyPreparedTransfer(f.input);
+  const current = parse(f.input.targetStore);
+  write(f.input.targetStore, { ...current, accounts: current.accounts.slice(0, 1) });
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_rollback_account_changed' });
+  current.accounts.push({ ...structuredClone(current.accounts[1]), id: 'duplicate', name: 'duplicate' });
+  write(f.input.targetStore, current);
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_retirement_target_identity_present' });
+  await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'account_store_retired' });
+});
+
+for (const field of ['sourceKey', 'targetKey', 'sourceStore']) {
+  test(`post-seal ${field} changes fail closed`, async t => {
+    const f = await fixture(t); f.prepare(); await applyPreparedTransfer(f.input);
+    fs.appendFileSync(f.input[field], '\nsynthetic-change');
+    await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: field === 'sourceStore' ? 'transfer_source_changed' : 'transfer_key_changed' });
+    await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'account_store_retired' });
+  });
+}
+
+test('invalid marker fails closed and rejected startup releases the mutex', async t => {
+  const f = await fixture(t);
+  write(`${f.input.sourceStore}.retirement.json`, { state: 'released' });
+  for (let i = 0; i < 2; i++) await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'transfer_retirement_invalid' });
+});
+
+test('different transaction rollback cannot release source', async t => {
+  const f = await fixture(t); f.prepare(); await applyPreparedTransfer(f.input);
+  const file = `${f.input.sourceStore}.retirement.json`, marker = parse(file);
+  write(file, { ...marker, transaction: 'a'.repeat(64) });
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_retirement_conflict' });
+});
+
+test('failure to seal leaves target unchanged; corrupted backup cannot seal', async t => {
+  const f = await fixture(t); f.prepare();
+  const before = read(f.input.targetStore), rename = fs.renameSync;
+  const mock = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (to.endsWith('.retirement.json')) throw new Error('synthetic seal failure');
+    return rename(from, to);
+  });
+  await assert.rejects(applyPreparedTransfer(f.input), /synthetic seal failure/);
+  mock.mock.restore();
+  assert.equal(read(f.input.targetStore), before);
+  const release = await acquireAccountStoreFence(f.input.sourceStore); await release();
+  fs.appendFileSync(path.join(f.input.bundle, 'source.accounts.json'), ' ');
+  await assert.rejects(applyPreparedTransfer(f.input), { code: 'transfer_bundle_changed' });
+  assert.equal(fs.existsSync(`${f.input.sourceStore}.retirement.json`), false);
+});
+
+test('rollback recovery refuses newer target data instead of overwriting it', async t => {
+  const f = await fixture(t); f.prepare(); await applyPreparedTransfer(f.input);
+  const rename = fs.renameSync;
+  const mock = t.mock.method(fs, 'renameSync', (from, to) => {
+    rename(from, to);
+    if (to === f.input.targetStore) throw new Error('synthetic crash');
+  });
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), /synthetic crash/);
+  mock.mock.restore();
+  const newer = parse(f.input.targetStore); newer.settings = { newData: true }; write(f.input.targetStore, newer);
+  const before = read(f.input.targetStore);
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_rollback_target_changed' });
+  assert.equal(read(f.input.targetStore), before);
+  await assert.rejects(acquireAccountStoreFence(f.input.sourceStore), { code: 'account_store_retired' });
+});
+
+test('fresh process refuses retired source even after runtime flags change', async t => {
+  const f = await fixture(t); f.prepare(); await applyPreparedTransfer(f.input);
+  const source = parse(f.input.sourceStore); source.accounts[0].runtime.disabled = false;
+  write(f.input.sourceStore, source);
+  const { spawnSync } = require('node:child_process');
+  const result = spawnSync(process.execPath, ['-e',
+    'require(process.argv[1]).acquireAccountStoreFence(process.argv[2]).then(r=>r()).catch(e=>{console.log(e.code);process.exitCode=7})',
+    require.resolve('../src/account-store-fence'), f.input.sourceStore], { encoding: 'utf8' });
+  assert.equal(result.status, 7);
+  assert.equal(result.stdout.trim(), 'account_store_retired');
+});
+
+test('deduplicated existing target identity cannot release source on rollback', async t => {
+  const f = await fixture(t); f.add(f.target, 'existing-source', 'imported'); f.prepare();
+  await applyPreparedTransfer(f.input);
+  await assert.rejects(applyPreparedTransfer({ ...f.input, rollback: true }), { code: 'transfer_retirement_target_identity_present' });
+});
+
 async function listen(host = '::', port = 0) {
   const server = net.createServer(socket => socket.destroy());
   await new Promise((resolve, reject) => {
@@ -28,7 +164,7 @@ async function listen(host = '::', port = 0) {
 const close = server => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-offline-transfer-'));
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'synthetic-offline-transfer-')));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const make = name => {
     const storePath = path.join(root, `${name}.json`), keyPath = path.join(root, `${name}.key`);

@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const lockfile = require('proper-lockfile');
 
-async function acquireAccountStoreFence(storePath) {
+async function acquireMaintenanceStoreFence(storePath) {
   const absolute = path.resolve(storePath);
   const canonical = fs.existsSync(absolute) ? fs.realpathSync(absolute)
     : path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute));
@@ -19,4 +19,11 @@ async function acquireAccountStoreFence(storePath) {
   }
 }
 
-module.exports = { acquireAccountStoreFence };
+async function acquireAccountStoreFence(storePath) {
+  const release = await acquireMaintenanceStoreFence(storePath);
+  try { require('./source-retirement').assertNotRetired(storePath); }
+  catch (error) { await release(); throw error; }
+  return release;
+}
+
+module.exports = { acquireAccountStoreFence, acquireMaintenanceStoreFence };

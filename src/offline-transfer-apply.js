@@ -4,7 +4,8 @@ const crypto = require('node:crypto');
 const net = require('node:net');
 const lockfile = require('proper-lockfile');
 const { decryptAccount, validateAccountNamespace } = require('./account-transfer');
-const { acquireAccountStoreFence } = require('./account-store-fence');
+const { acquireMaintenanceStoreFence } = require('./account-store-fence');
+const { readRetirement, markerPath, durableWrite, assertNotRetired, encode } = require('./source-retirement');
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = code => Object.assign(new Error(code), { code });
@@ -34,10 +35,13 @@ async function applyPreparedTransfer({ bundle, sourceStore, sourceKey, targetSto
   if (path.resolve(sourceStore) === path.resolve(targetStore) || fs.realpathSync(sourceStore) === fs.realpathSync(targetStore)) {
     throw fail('transfer_distinct_stores_required');
   }
+  sourceStore = fs.realpathSync(sourceStore);
+  targetStore = fs.realpathSync(targetStore);
   const files = [fs.realpathSync(sourceStore), fs.realpathSync(targetStore)].sort();
   const releases = [];
   try {
-    for (const file of files) releases.push(await acquireAccountStoreFence(file));
+    for (const file of files) releases.push(await acquireMaintenanceStoreFence(file));
+    assertNotRetired(targetStore);
     await requireStopped([sourcePort, targetPort]);
     // Match the ordinary store writer's lease settings; do not allow it to steal
     // a migration lock before this process's first heartbeat.
@@ -70,34 +74,68 @@ async function applyPreparedTransfer({ bundle, sourceStore, sourceKey, targetSto
       throw fail('transfer_original_records_changed');
     }
     if (hash(read(sourceStore)) !== manifest.sourceHash) throw fail('transfer_source_changed');
+    const sourceRaw = read(path.join(bundle, 'source.accounts.json'));
+    if (hash(sourceRaw) !== manifest.sourceHash) throw fail('transfer_bundle_changed');
+    const sourceIdentities = new Set(JSON.parse(sourceRaw).accounts.map(row => decryptAccount(row, read(sourceKey).trim()).principal));
+    const transaction = hash(JSON.stringify([fs.realpathSync(sourceStore), fs.realpathSync(targetStore),
+      manifest.sourceHash, manifest.targetHash, manifest.candidateHash, hash(read(sourceKey).trim()), hash(key)]));
+    let marker = readRetirement(sourceStore);
+    const save = value => { durableWrite(markerPath(sourceStore), encode(value)); marker = value; };
+    if (marker?.state === 'retired' && marker.transaction !== transaction) throw fail('transfer_retirement_conflict');
     const currentRaw = read(targetStore), current = JSON.parse(currentRaw);
     if (current.version !== 1 || !Array.isArray(current.accounts)) throw fail('transfer_manifest_invalid');
     validateAccountNamespace(current.accounts);
     let output;
     if (rollback) {
-      for (const row of added) {
-        const found = current.accounts.find(a => a.id === row.id);
-        if (found && JSON.stringify(found) !== JSON.stringify(row)) throw fail('transfer_rollback_account_changed');
+      if (!marker) throw fail('transfer_retirement_missing');
+      if (marker.transaction !== transaction) throw fail('transfer_retirement_conflict');
+      const noSourceIdentity = rows => {
+        if (rows.some(row => sourceIdentities.has(decryptAccount(row, key).principal))) throw fail('transfer_retirement_target_identity_present');
+      };
+      if (marker.state === 'released') {
+        noSourceIdentity(current.accounts);
+        return { state: 'already_rolled_back', sourceRetired: false, ...ownershipBoundary };
       }
-      const addedIds = new Set(added.map(row => row.id));
-      if (!current.accounts.some(row => addedIds.has(row.id))) return { state: 'already_rolled_back', ...ownershipBoundary };
-      output = { ...current, generation: Number(current.generation || 0) + 1,
-        accounts: current.accounts.filter(row => !addedIds.has(row.id)) };
+      if (marker.phase === 'rolling_back' && hash(currentRaw) === marker.after) {
+        noSourceIdentity(current.accounts);
+        // Complete target durability before allowing source startup after recovery.
+        durableWrite(targetStore, currentRaw);
+      } else {
+        if (marker.phase === 'rolling_back' && hash(currentRaw) !== marker.before) throw fail('transfer_rollback_target_changed');
+        const neverInserted = marker.phase === 'sealed' && hash(currentRaw) === manifest.targetHash;
+        for (const row of added) {
+          const found = current.accounts.find(a => a.id === row.id);
+          if (!neverInserted && (!found || JSON.stringify(found) !== JSON.stringify(row))) throw fail('transfer_rollback_account_changed');
+        }
+        const addedIds = new Set(added.map(row => row.id));
+        output = { ...current, generation: Number(current.generation || 0) + 1,
+          accounts: current.accounts.filter(row => !addedIds.has(row.id)) };
+        noSourceIdentity(output.accounts);
+        const raw = neverInserted ? currentRaw : encode(output);
+        if (marker.phase === 'rolling_back' && hash(raw) !== marker.after) throw fail('transfer_rollback_target_changed');
+        save({ ...marker, phase: 'rolling_back', before: hash(currentRaw), after: hash(raw) });
+        durableWrite(targetStore, raw);
+      }
+      save({ ...marker, state: 'released', phase: 'rolled_back', completed: [...new Set([...marker.completed, transaction])] });
     } else {
+      if (marker?.completed.includes(transaction)) throw fail('transfer_retirement_replay');
+      if (marker?.phase === 'rolling_back') throw fail('transfer_rollback_pending');
       output = { ...original, updatedAt: candidate.updatedAt, accounts: candidate.accounts,
         generation: Number(original.generation || 0) + 1 };
-      if (hash(currentRaw) === hash(JSON.stringify(output, null, 2) + '\n')) return { state: 'already_applied', ...ownershipBoundary };
+      if (hash(currentRaw) === hash(encode(output))) {
+        if (marker?.state !== 'retired') throw fail('transfer_retirement_missing');
+        save({ ...marker, phase: 'applied' });
+        return { state: 'already_applied', sourceRetired: true, ...ownershipBoundary };
+      }
       if (hash(currentRaw) !== manifest.targetHash) throw fail('transfer_target_changed');
+      if (marker?.phase === 'applied') throw fail('transfer_target_changed');
+      if ((marker?.completed.length || 0) >= 1000) throw fail('transfer_retirement_history_full');
+      save({ version: 1, state: 'retired', phase: 'sealed', transaction, completed: marker?.completed || [] });
+      durableWrite(targetStore, encode(output));
+      save({ ...marker, phase: 'applied' });
     }
-    const temporary = `${targetStore}.transfer-${crypto.randomUUID()}.tmp`;
-    try {
-      const fd = fs.openSync(temporary, 'wx', 0o600);
-      try { fs.writeFileSync(fd, JSON.stringify(output, null, 2) + '\n'); fs.fsyncSync(fd); }
-      finally { fs.closeSync(fd); }
-      fs.renameSync(temporary, targetStore);
-    } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
     return { state: rollback ? 'rolled_back_unused_import' : 'applied_disabled', importedEnabledAccounts: 0,
-      addedIdentities: rollback ? 0 : added.length, credentialsVerifiedOnline: false, ...ownershipBoundary };
+      sourceRetired: !rollback, addedIdentities: rollback ? 0 : added.length, credentialsVerifiedOnline: false, ...ownershipBoundary };
   } catch (error) {
     if (error.code === 'ELOCKED') throw fail('transfer_store_locked');
     throw error;

@@ -12,6 +12,7 @@ const { values } = parseArgs({ options: {
   'source-port': { type: 'string' }, 'target-port': { type: 'string' },
 } });
 if (values.help) {
+  console.log('Persistent retirement: apply seals the entire source store before importing disabled targets. Marker-aware startup refuses retired stores. Explicit rollback releases only after journaled safe removal; old binaries MUST remain stopped. See docs/SOURCE_RETIREMENT.md.');
   console.log('Read-only preflight: node scripts/prepare-account-transfer.mjs --source-store PATH --source-key PATH --target-store PATH --target-key PATH --knowledge-base-id ID\nAdd --prepare --output PRIVATE_NEW_DIRECTORY [--history-store PATH] to create a private bundle without changing live stores.\nOffline apply: replace --prepare with --apply --bundle DIRECTORY --source-port PORT --target-port PORT. Both services must use the shared startup fence and be fully stopped; disable old launchers/automatic restarts first. The tool holds both startup fences and store locks, checks IPv4/IPv6 listeners and compares final snapshot hashes. Incoming accounts remain disabled. --rollback instead of --apply removes only unchanged unused imports, preserving unrelated newer data. Neither command starts services or verifies IMA.');
 } else {
   try {
@@ -27,7 +28,7 @@ if (values.help) {
       knowledgeBaseId: input.knowledgeBaseId }).report;
     console.log(JSON.stringify(result));
   } catch (error) {
-    console.error(JSON.stringify({ error: /^(transfer|archive)_[a-z_]+$/.test(error.code || error.message)
+    console.error(JSON.stringify({ error: /^(transfer|archive|account_store)_[a-z_]+$/.test(error.code || error.message)
       ? error.code || error.message : 'transfer_failed' })); process.exitCode = 1;
   }
 }

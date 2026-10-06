@@ -88,9 +88,10 @@ both services/refresh owners and keep their launchers stopped throughout mainten
 perform those actions or verify supervisor state. Port numbers supplied to the CLI must match the actual
 reviewed topology; no default assumes that 3117/3317 are stopped.
 
-A durable migrated-out marker or controlled source-disable workflow, its startup enforcement, and evidence
-that the source scheduler no longer owns these identities are a **separate acceptance gate**. This tool
-does not write such a marker, disable the source, or enable target accounts. Success means only
+The candidate now writes a durable source-store retirement marker before target imports and checks it
+at startup. See [Source Retirement](SOURCE_RETIREMENT.md) for crash recovery, explicit conservative
+rollback, and old-binary limitations. Deployment and scheduler-disablement evidence remain a
+**separate acceptance gate**. The tool never enables target accounts. Success means only
 `applied_disabled` (or conservative rollback), never completed cross-instance ownership transfer.
 Results explicitly report `sourceOwnershipTransferred: false`; offline results also report
 `sourceMustRemainStopped: true`, including idempotent retries. Do not restart 3317 solely on these results.
