@@ -1,9 +1,9 @@
 # v0.4.2 onboarding candidate acceptance
 
-## Current aligned candidate (2026-10-06)
+## Current aligned candidate (2026-10-07)
 
 This is not a published release. The aligned release branch is
-`codex/REL-20261006-PROVIDER-V042-ALIGNED`. Verified implementation `2cd17fb`
+`codex/REL-20261006-PROVIDER-V042-ALIGNED`. Implementation through `38cf9e1`
 includes the pending-activation, cancellation and sync-fault fixes described
 below. The rejected table/drawer UI has been replaced by expanded account rows.
 Default image metadata targets v0.4.2; that tag must not be assumed published.
@@ -13,9 +13,17 @@ Default image metadata targets v0.4.2; that tag must not be assumed published.
 - Matched Explorer candidate f808602: 158/158 tests with public export enabled.
 - Native ARM64 and emulated AMD64 image builds, disconnected startup and internal
   API authentication checks passed. No real IMA question was sent.
-- Final review found additional fresh-install volume ownership and transferred
-  account admission issues. Their fixes and a new clean installation are still
-  required before release; previous image evidence does not cover later fixes.
+- Fresh-install volume ownership was fixed in `bcb568c`; transferred-account
+  durable admission was fixed in `eae33fc`. The 2026-10-07 clean-source website
+  installer used Provider runtime `2ecd5df` and tooling `38cf9e1`, with synthetic
+  target metadata and independent empty volumes. Startup, capacity 0 / not ready,
+  protocol matching, gateway management denial and repeat-init preservation
+  passed. Rehearsal services were stopped; existing Air services were untouched.
+- Remote Test and pack passed at `38cf9e1`. Local runtime regression at
+  `2ecd5df` passed 548/550; two timing-sensitive enrollment cases failed under
+  load and passed an unchanged focused rerun. This is not a fully green local run.
+- Published tag/image installation and final dual-platform registry smoke remain
+  release gates. Earlier ARM64/AMD64 evidence does not verify the final image.
 - Windows desktop, remote SSH enrollment, fresh-account scan and real QA,
   token-renewal longevity and long-running Linux acceptance remain unverified.
 

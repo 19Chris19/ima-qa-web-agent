@@ -6,6 +6,8 @@ Change: Describe v0.4.2 source capabilities while requiring the matching formal 
 
 Verification: Documentation-only diff; inspect named staged files, whitespace and governance checks before commit.
 
+Follow-up: Updated current onboarding evidence with fixed volume/admission guards and the completed clean dual-service installation. Retained timing-test failures and final registry verification as explicit boundaries. Whitespace and governance checks passed; no runtime edits.
+
 Rollout: Include in the existing release PR. No service or account changes.
 
 Rollback: Revert documentation commit without changing runtime state.
