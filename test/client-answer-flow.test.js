@@ -23,7 +23,7 @@ async function pageWithAnswer(events) {
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'client.js']) {
     window.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await waitFor(() => window.document.querySelector('#providerLabel').textContent.includes('synthetic'));
@@ -101,7 +101,7 @@ test('the send control becomes stop and aborts exactly one in-flight request', a
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'client.js']) {
     window.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await waitFor(() => window.document.querySelector('#providerLabel').textContent.includes('synthetic'));

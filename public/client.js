@@ -19,31 +19,67 @@
   let isBusy = false;
   let activeController = null;
   let followStreamingAnswer = true;
+  let lastScrollTop = 0;
+  const experience = window.ProviderQaExperience;
+  const resizeComposer = experience.composer(form, input);
+  const notice = document.querySelector('#composerNotice');
+  const draftStop = document.querySelector('#draftStopButton');
+  const latest = experience.button('返回最新回答', 'latest', 'return-latest');
+  latest.hidden = true;
+  document.querySelector('#readingActions').append(latest);
+  experience.selectionCopy(chatLog);
+  latest.addEventListener('click', () => {
+    followStreamingAnswer = true;
+    scrollToBottom({ force: true });
+    chatLog.focus({ preventScroll: true });
+  });
+  draftStop.addEventListener('click', () => activeController?.abort());
+
+  function updateComposer() {
+    const hasDraft = Boolean(input.value.trim());
+    const stop = isBusy && !hasDraft;
+    sendButton.classList.toggle('is-busy', stop);
+    sendButton.title = stop ? '停止回答' : '发送';
+    sendButton.setAttribute('aria-label', sendButton.title);
+    sendButton.setAttribute('aria-disabled', String(isBusy && hasDraft));
+    draftStop.hidden = !(isBusy && hasDraft);
+    notice.textContent = isBusy && hasDraft ? '草稿已保留。请先停止或等待当前回答完成，再发送。' : '';
+    resizeComposer();
+  }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (isBusy) {
-      activeController?.abort();
+      if (!input.value.trim()) activeController?.abort();
+      else updateComposer();
       return;
     }
     submitQuestion(input.value);
   });
 
   input.addEventListener('input', () => {
-    input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, 148)}px`;
+    updateComposer();
   });
 
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
-      if (isBusy) return;
+      if (isBusy) { updateComposer(); return; }
       submitQuestion(input.value);
     }
   });
 
   chatLog.addEventListener('scroll', () => {
-    followStreamingAnswer = isNearChatBottom();
+    if (chatLog.scrollTop < lastScrollTop) followStreamingAnswer = false;
+    lastScrollTop = chatLog.scrollTop;
+    latest.hidden = followStreamingAnswer || isNearChatBottom();
+  });
+  const suspendFollowing = () => { followStreamingAnswer = false; };
+  chatLog.addEventListener('wheel', event => { if (event.deltaY < 0) suspendFollowing(); }, { passive: true });
+  chatLog.addEventListener('touchstart', suspendFollowing, { passive: true });
+  chatLog.addEventListener('pointerdown', suspendFollowing);
+  chatLog.addEventListener('keydown', event => {
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) suspendFollowing();
   });
 
   newConversationButton.addEventListener('click', createConversation);
@@ -215,19 +251,19 @@
     activeController = new AbortController();
     followStreamingAnswer = true;
     setStatus('busy', '回答中');
-    sendButton.classList.add('is-busy');
-    sendButton.title = '停止回答';
-    sendButton.setAttribute('aria-label', '停止回答');
     newConversationButton.disabled = true;
     input.value = '';
-    input.style.height = 'auto';
+    updateComposer();
 
     appendMessage('user', question);
     const assistantMessage = appendMessage('assistant', '', { pending: true });
 
+    let complete = false;
     try {
       await streamAnswer(question, assistantMessage);
+      complete = true;
       assistantMessage.bubble.classList.remove('pending');
+      experience.answerCopy(assistantMessage);
       await refreshConversationList();
       setStatus('', 'ready');
     } catch (error) {
@@ -245,13 +281,12 @@
       assistantMessage.bubble.appendChild(failure);
       setStatus('error', '未完成');
     } finally {
+      assistantMessage.settled = true;
+      experience.answerCopy(assistantMessage, !complete);
       isBusy = false;
       activeController = null;
-      sendButton.classList.remove('is-busy');
-      sendButton.title = '发送';
-      sendButton.setAttribute('aria-label', '发送');
+      updateComposer();
       newConversationButton.disabled = false;
-      input.focus();
     }
   }
 
@@ -292,7 +327,7 @@
       renderScheduled = true;
       window.requestAnimationFrame(() => {
         renderScheduled = false;
-        if (streamingFinished) {
+        if (streamingFinished || assistantMessage.settled) {
           return;
         }
         renderAnswer(assistantMessage.text, answer, {
@@ -373,6 +408,7 @@
   }
 
   function renderHistory(messages) {
+    followStreamingAnswer = true;
     chatLog.replaceChildren();
     if (!messages.length) {
       renderWelcome();
@@ -380,6 +416,8 @@
     }
     for (const message of messages) {
       const view = appendMessage(message.role, message.content || '');
+      view.answer = message.content || '';
+      view.sources = message.sources || [];
       if (message.role === 'assistant' && message.sources?.length) {
         renderAnswer(view.text, message.content || '', { sourceIndexes: sourceIndexes(message.sources) });
         renderSources(view.bubble, message.sources, {
@@ -387,11 +425,13 @@
           answer: message.content || '',
         });
       }
+      if (message.role === 'assistant') experience.answerCopy(view, message.complete === false || message.interrupted === true);
     }
     scrollToBottom();
   }
 
   function renderWelcome() {
+    followStreamingAnswer = true;
     chatLog.replaceChildren();
     appendMessage('assistant', '可以开始提问。');
   }
@@ -463,6 +503,7 @@
     bubble.className = options.pending ? 'bubble pending' : 'bubble';
     const paragraph = document.createElement('div');
     paragraph.className = role === 'assistant' ? 'answer-markdown' : '';
+    if (role === 'assistant') paragraph.tabIndex = -1;
     if (role === 'assistant') {
       renderAnswer(paragraph, content);
     } else {
@@ -477,7 +518,7 @@
     }
     chatLog.appendChild(article);
     scrollToBottom();
-    return { article, bubble, text: paragraph };
+    return { article, bubble, text: paragraph, answer: content, sources: [] };
   }
 
   function renderAnswer(target, markdown, options = {}) {
@@ -660,8 +701,10 @@
   }
 
   function scrollToBottom(options = {}) {
-    if (options.force || isNearChatBottom()) {
+    if (options.force || followStreamingAnswer) {
       chatLog.scrollTop = chatLog.scrollHeight;
+      lastScrollTop = chatLog.scrollTop;
     }
+    latest.hidden = followStreamingAnswer || isNearChatBottom();
   }
 })();
