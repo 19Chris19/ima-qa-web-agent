@@ -218,6 +218,33 @@ class WebAgentAccountDirectory {
     return sanitizeAccount(this.getAccount(id), { includeEvents: true });
   }
 
+  classifyCapturedIdentity(accountId, headers) {
+    const existing = this._requireAccount(accountId);
+    const fingerprint = this._identityFingerprint(normalizeHeaders(headers));
+    if (!existing.principalFingerprint || !fingerprint) {
+      throw Object.assign(new Error('无法确认 IMA 身份，已保留原登录态'), {
+        statusCode: 409, code: 'ima_identity_unverified',
+      });
+    }
+    return existing.principalFingerprint === fingerprint ? 'same' : 'distinct';
+  }
+
+  addCapturedAccount(options = {}) {
+    // Refresh before the synchronous uniqueness check and generation-guarded write.
+    this.reload();
+    if (!this._identityFingerprint(normalizeHeaders(options.headers))) {
+      throw Object.assign(new Error('无法确认 IMA 身份，未保存账号'), {
+        statusCode: 409, code: 'ima_identity_unverified',
+      });
+    }
+    try {
+      return this.upsertCapturedAccount({ ...options, replace: false });
+    } catch (error) {
+      this.store = null;
+      throw error;
+    }
+  }
+
   replaceCapturedAccount(accountId, options = {}) {
     const existing = this._requireAccount(accountId);
     const headers = normalizeHeaders(options.headers);

@@ -28,6 +28,7 @@ const SAFE_ENROLLMENT_STAGES = new Set([
   'verifying',
   'waiting_for_membership',
   'access_unverified',
+  'identity_conflict',
   'completed',
   'failed',
   'cancelled',
@@ -148,17 +149,18 @@ class WebAgentEnrollmentManager {
 
   async continueVerification(jobId) {
     const job = this.jobs.get(String(jobId || ''));
+    if (job?.continuing) return publicJob(job);
     if (!job || !['waiting_for_membership', 'access_unverified'].includes(job.state)) {
       throw enrollmentError('当前任务不在等待知识库授权验证', 409);
     }
-    if (job.continuing) return publicJob(job);
     if (this.now() >= job.expiresAt) {
       await this._fail(job, enrollmentError('授权任务已超时，未保存账号', 408, { code: 'enrollment_expired' }));
       return publicJob(job);
     }
     job.continuing = true;
     try {
-      const auth = await this.captureAuth(job.context);
+      const auth = job.pendingAuth || await this.captureAuth(job.context);
+      if (!isPending(job)) return publicJob(job);
       if (!auth) {
         job.authorizationStatus = 'login_expired';
         job.detail = '登录态已失效，请取消后重新扫码；尚未保存账号';
@@ -171,7 +173,38 @@ class WebAgentEnrollmentManager {
     } finally { job.continuing = false; }
   }
 
+  async resolveIdentityConflict(jobId, options = {}) {
+    const job = this.jobs.get(String(jobId || ''));
+    if (job?.continuing) return publicJob(job);
+    if (!job || job.state !== 'identity_conflict' || !job.pendingAuth) {
+      throw enrollmentError('当前任务没有待处理的身份冲突', 409);
+    }
+    if (options.action !== 'add') throw enrollmentError('仅支持明确新增账号', 400);
+    const name = cleanAccountName(options.name);
+    job.continuing = true;
+    try {
+      if (!await this._checkPending(job)) return publicJob(job);
+      job.addIdentity = true;
+      job.name = name;
+      job.accountId = normalizeAccountId(name);
+      const auth = job.pendingAuth;
+      if (await this._verifyMembership(job, auth)) await this._acceptAuth(job, auth);
+      return publicJob(job);
+    } catch (error) {
+      await this._fail(job, error);
+      return publicJob(job);
+    } finally { job.continuing = false; }
+  }
+
+  async _checkPending(job) {
+    if (!isPending(job) || job.cleanupRequested) return false;
+    if (this.now() < job.expiresAt) return true;
+    await this._fail(job, enrollmentError('授权任务已超时，未保存账号', 408, { code: 'enrollment_expired' }));
+    return false;
+  }
+
   async _verifyMembership(job, auth) {
+    if (!await this._checkPending(job)) return false;
     if (!job.shareUrl) return true;
     this._setState(job, 'verifying', '正在核验目标知识库权限；尚未保存账号');
     let membership = 'unknown';
@@ -179,7 +212,7 @@ class WebAgentEnrollmentManager {
       membership = (await this.membershipVerifier(job.shareUrl, { headers: auth.headers,
         expectedId: job.knowledgeBaseId, fetchImpl: this.fetch })).membership;
     } catch { /* Keep the window and allow retry without guessing membership. */ }
-    if (!isPending(job)) return false;
+    if (!await this._checkPending(job)) return false;
     job.authorizationStatus = membership;
     if (membership === 'joined') return true;
     const waiting = ['not_joined', 'awaiting_approval'].includes(membership);
@@ -192,21 +225,35 @@ class WebAgentEnrollmentManager {
     return false;
   }
 
+  _stageIdentityConflict(job, auth) {
+    if (job.reauthAccountId && !job.addIdentity &&
+        this.accountDirectory.classifyCapturedIdentity(job.reauthAccountId, auth.headers) === 'distinct') {
+      job.pendingAuth = { ...auth, headers: { ...auth.headers } };
+      job.qr = null;
+      this._setState(job, 'identity_conflict', '扫码身份与原账号不同；原账号保持不变。可命名新增账号或取消。');
+      return true;
+    }
+    return false;
+  }
+
   async _acceptAuth(job, auth) {
-    if (!isPending(job)) return;
+    if (!await this._checkPending(job)) return;
+    if (this._stageIdentityConflict(job, auth)) return;
     this._setState(job, 'verifying', '知识库授权通过，正在检查会话能力');
     const client = this.clientFactory({ id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
       headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3 });
     await client.initSession();
-    if (job.state !== 'verifying') return;
+    if (!await this._checkPending(job) || job.state !== 'verifying') return;
     const capturedAccount = { id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
       headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3,
       tokenExpiresAt: auth.tokenExpiresAt, refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
       source: 'admin-qr-enrollment', replace: job.replace };
-    job.account = job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
-      : this.accountDirectory.upsertCapturedAccount(capturedAccount);
+    job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
+      : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
+        : this.accountDirectory.upsertCapturedAccount(capturedAccount);
     this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
     await this._cleanup(job);
+    if (job.state === 'cancelled') return;
     if (this.onEnrolled) {
       job.detail = '授权通过，正在执行已声明的一次知识库问答验证'; this._touch(job);
       const result = await this.onEnrolled(job.account.id, job.testQuestion); this.onAccountsSynced?.();
@@ -241,6 +288,9 @@ class WebAgentEnrollmentManager {
       throw enrollmentError('当前接入任务没有可继续使用的受控登录窗口', 409);
     }
     if (job.browserControl?.visible === false) {
+      if (job.pendingAuth) {
+        throw enrollmentError('已保留扫码登录态；请继续验证或取消，不能重新启动登录窗口', 409);
+      }
       if (job.relaunchPromise) {
         return publicJob(job, this.now());
       }
@@ -279,7 +329,7 @@ class WebAgentEnrollmentManager {
       return publicJob(job);
     }
     this._setState(job, 'cancelled', '已关闭临时浏览器并清理登录任务');
-    this.onCancelVerification?.(job.account?.id || job.accountId);
+    if (job.account) this.onCancelVerification?.(job.account.id);
     job.error = '已取消账号接入';
     await this._cleanup(job);
     this._releaseActive(job);
@@ -288,6 +338,9 @@ class WebAgentEnrollmentManager {
   }
 
   async shutdown() {
+    for (const job of this.jobs.values()) {
+      if (isPending(job)) this._setState(job, 'cancelled', '服务已关闭接入任务');
+    }
     await Promise.all([...this.jobs.values()].map((job) => this._cleanup(job)));
     this.jobs.clear();
     this.activeJobId = '';
@@ -545,6 +598,7 @@ class WebAgentEnrollmentManager {
             }));
             return;
           }
+          if (this._stageIdentityConflict(job, auth)) return;
           if (await this._verifyMembership(job, auth)) await this._acceptAuth(job, auth);
           return;
         }
@@ -612,6 +666,7 @@ class WebAgentEnrollmentManager {
   }
 
   async _cleanup(job) {
+    job.pendingAuth = null;
     if (job.cleanupPromise) {
       return job.cleanupPromise;
     }
@@ -1356,6 +1411,7 @@ function publicJob(job, now = Date.now()) {
     authorizationStatus: job.authorizationStatus,
     shareUrl: job.shareUrl || null,
     canContinue: ['waiting_for_membership', 'access_unverified'].includes(job.state) && !job.continuing,
+    identityConflict: job.state === 'identity_conflict' ? { actions: ['add', 'cancel'] } : null,
     state: job.state,
     createdAt: new Date(job.createdAt).toISOString(),
     updatedAt: new Date(job.updatedAt || job.createdAt).toISOString(),
@@ -1392,7 +1448,7 @@ function publicJob(job, now = Date.now()) {
 }
 
 function isPending(job) {
-  return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified'].includes(job.state);
+  return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified', 'identity_conflict'].includes(job.state);
 }
 
 function enrollmentError(message, statusCode = 400, details = {}) {
