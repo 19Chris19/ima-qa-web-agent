@@ -5,6 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
 const { WebReadiness } = require('../src/web-readiness');
+const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
+const { accountManagementView } = require('../src/account-management-view');
 
 function fixture(t, streamAsk) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ima-readiness-'));
@@ -26,6 +28,37 @@ async function* success(options) {
   yield { type: 'delta', text: 'Synthetic answer' };
   yield { type: 'done' };
 }
+
+test('session health and classic scheduling do not prove QA or generic web search', async t => {
+  const { directory } = fixture(t, success);
+  const pool = new IMAWebAgentPool({ accounts: directory.getPoolAccounts() }, {
+    clientFactory: () => ({ createFirstPartyClientContext: () => ({}), async initSession() {} }),
+  });
+  const readiness = new WebReadiness({ directory, pool, clientFactory: () => ({ streamAsk: success }) });
+  readiness.setMode('classic_knowledge');
+  const check = await pool.checkAccount('synthetic');
+  directory.recordAccountHealth('synthetic', check.healthCheck);
+  const account = directory.listAccounts()[0];
+  assert.equal(account.health.web_ready, true);
+  assert.equal(account.health.knowledge_ready, true);
+  const before = readiness.snapshot();
+  assert.equal(before.capacity, 1);
+  assert.equal(before.accounts[0].state, 'ready');
+  assert.equal(before.accounts[0].qualified, false);
+  const view = accountManagementView(account, null, before.accounts[0]);
+  assert.equal(view.session.state, 'ready');
+  assert.equal(view.web.state, 'unknown');
+  assert.equal(view.knowledge.state, 'pending');
+  assert.equal(view.schedulable, true);
+  const proved = await readiness.verify('synthetic');
+  assert.equal(proved.success, true);
+  assert.equal(proved.capacity, 1);
+  const after = accountManagementView(directory.listAccounts()[0], null, proved.accounts[0]);
+  assert.equal(after.knowledge.state, 'ready');
+  assert.equal(after.knowledge.qualified, true);
+  assert.equal(after.schedulable, true);
+  assert.equal(after.web.state, 'unknown');
+});
 
 test('one proved answer qualifies without storing question or answer', async t => {
   const { readiness, directory } = fixture(t, success);
@@ -56,6 +89,12 @@ test('web-only revalidation removes an old qualification and releases maintenanc
   assert.equal(result.capacity, 0);
   assert.equal(result.knowledgeAgentCapacity, 0);
   assert.equal(pool.accounts[0].maintenanceOperation, '');
+  const view = accountManagementView(readiness.directory.listAccounts()[0], null, result.accounts[0]);
+  assert.equal(view.knowledge.state, 'pending');
+  assert.equal(view.knowledge.qualified, false);
+  assert.equal(view.knowledge.verifiedAt, null);
+  assert.equal(view.web.state, 'unknown');
+  assert.equal(view.schedulable, false);
 });
 
 test('a concurrent directory change rejects stale probe proof', async t => {

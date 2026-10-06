@@ -47,7 +47,7 @@ test('actual management and identity route responses interoperate with the admin
   const payload = await invoke('GET', '/api/admin/accounts');
   const management = payload.accounts[0].management;
   assert.equal(management.knowledge.state, 'ready');
-  assert.equal(management.web.state, 'unavailable');
+  assert.equal(management.web.state, 'unknown');
   assert.equal(management.session.state, 'ready');
   assert.equal(management.maintenance.state, 'retry_wait');
   assert.equal(management.maintenance.lastSuccessfulRefreshAt, '2026-10-06T00:00:00Z');
@@ -78,7 +78,7 @@ test('actual management and identity route responses interoperate with the admin
   await tick();
   assert.ok(calls.every(call => call.method === 'GET'));
   assert.equal(resolutions.length, 0);
-  assert.match(document.querySelector('#accountList').textContent, /可用于问答.*不可用.*等待重试/s);
+  assert.match(document.querySelector('#accountList').textContent, /可用于问答.*未验证.*等待重试/s);
   assert.match(document.querySelector('.admin-account-details').textContent, /未知（上游未提供）/);
   assert.match(document.querySelector('.admin-account-details').textContent, /上次成功续期2026/);
   document.querySelector('#addAccountButton').click();

@@ -5,13 +5,16 @@ function capability(value) {
 function accountManagementView(account, poolAccount, readiness) {
   const auth = poolAccount?.auth;
   const health = account.health || {};
+  const qualified = readiness?.qualified === true;
+  const knowledgeState = readiness?.state || 'pending';
   return {
     knowledge: {
-      state: readiness?.state || 'pending',
-      qualified: readiness?.qualified === true,
-      verifiedAt: readiness?.verifiedAt || null,
+      state: !qualified && ['ready', 'busy', 'cooling'].includes(knowledgeState) ? 'pending' : knowledgeState,
+      qualified,
+      verifiedAt: qualified ? readiness?.verifiedAt || null : null,
     },
-    web: capability(health.web_ready),
+    // Session/knowledge health is not an independent generic web-search proof.
+    web: capability(undefined),
     session: capability(health.session_valid),
     schedulable: readiness?.schedulable === true,
     maintenance: {
