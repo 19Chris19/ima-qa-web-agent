@@ -24,9 +24,9 @@
 
 ## 它看起来怎样
 
-> 当前改进仍是**未发布候选**，不等同已发布 v0.4.1。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，发布前需随验收版本更新。
+> 本文描述 v0.4.2 源码能力，是否已发布请以 GitHub Releases 为准；不等同 v0.4.1。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
 
-候选还包含[通用问答交互](./docs/QA_EXPERIENCE.md)与[离线账号迁移工具](./docs/ACCOUNT_TRANSFER.md)。工具成功仅代表新增账号以停用状态导入，不代表来源调度已经退出或账号问答资格通过；发布和割接前必须逐项检查[候选验收记录](./docs/MANAGEMENT_CANDIDATE_ACCEPTANCE.md)。
+本版本还包含[通用问答交互](./docs/QA_EXPERIENCE.md)与[离线账号迁移工具](./docs/ACCOUNT_TRANSFER.md)。工具成功仅代表新增账号以停用状态导入，不代表来源调度已经退出或账号问答资格通过；发布和割接前必须逐项检查[候选验收记录](./docs/MANAGEMENT_CANDIDATE_ACCEPTANCE.md)。
 
 ![问答页：3DGS 入门问题的合成演示回答，展示连续会话、流式回答的排版与来源入口](./assets/readme/screenshots/qa-page.png)
 
@@ -41,7 +41,7 @@
 
 ## Agent 一键部署与扫码引导
 
-v0.4.2 候选将扫码助手纳入安装流程；正式发布前不要把本节误认为 v0.4.1 已具备。完整命令、桌面/服务器区别与验收状态见 [Agent 部署说明](./docs/AGENT_DEPLOYMENT.md)。
+v0.4.2 将扫码助手纳入安装流程；v0.4.1 不具备本节的统一引导入口。完整命令、桌面/服务器区别与验收状态见 [Agent 部署说明](./docs/AGENT_DEPLOYMENT.md)。安装前确认该版本已有正式 Release 和对应镜像。
 
 把仓库链接、你的官方知识库分享链接与下面提示词交给 Agent：
 
@@ -76,9 +76,9 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 ## 推荐安装入口
 
-**本候选的新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
+**新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
 
-v0.4.2 尚未发布，候选仅供显式指定已审查源码/镜像的隔离演练。部署已发布 v0.4.1 时使用其 tag 内的说明，不混用候选命令。
+若 GitHub Releases 尚无 v0.4.2，当前源码仅供显式指定已审查源码/镜像的隔离演练。部署 v0.4.1 时使用其 tag 内的说明，不混用不同版本命令。发布状态与已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
 
 标准部署输入是固定 Git tag 的检出，或该 tag 的完整源码归档，必须包含 `package-lock.json`；候选演练同样固定到已审查提交。npm tarball 不推荐作为独立部署目录：它不包含该锁文件，不能直接用于引导脚本的 `npm ci` 或源码 Docker 构建。不要临时生成锁文件代替发布版本的依赖锁定。
 
