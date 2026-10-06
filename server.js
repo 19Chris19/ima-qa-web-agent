@@ -11,11 +11,18 @@ const { LocalRAGClient } = require('./src/local-rag-client');
 const { MIMOClient } = require('./src/mimo-client');
 const { synchronizeProviderAQueueCapacity } = require('./src/provider-a-capacity');
 const { loadRuntimeEnv } = require('./src/runtime-env');
+const { acquireAccountStoreFence } = require('./src/account-store-fence');
+const fs = require('node:fs');
+const path = require('node:path');
 
 async function main() {
   const envLoad = loadRuntimeEnv();
   const config = getConfig(process.env);
   const qaProvider = config.qaProvider || 'openapi-mimo';
+  if (qaProvider === 'ima-web-agent') {
+    fs.mkdirSync(path.dirname(config.webAgent.accountStorePath), { recursive: true, mode: 0o700 });
+    await acquireAccountStoreFence(config.webAgent.accountStorePath);
+  }
   const accountDirectory =
     qaProvider === 'ima-web-agent'
       ? new WebAgentAccountDirectory({
