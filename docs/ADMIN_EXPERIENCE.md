@@ -93,3 +93,27 @@ CI command fails with file-not-found. No out-of-scope governance files were
 added. The parent is handling the separately observed npm audit dependency issue;
 package files are untouched. No live-account, deployment, browser-helper or
 real enrollment success is claimed.
+
+## Opt-in backend contract test
+
+`test/admin-backend-contract.test.js` loads the integrated checkout's actual
+admin route handlers and management projection, then feeds their responses to
+this branch's UI through mocked fetch. Select the checkout explicitly:
+
+```sh
+PROVIDER_ADMIN_CONTRACT_ROOT=/path/to/integrated-checkout node --test test/admin-backend-contract.test.js test/admin-experience.test.js test/admin-ui.test.js
+```
+
+Without that variable, the cross-checkout test is explicitly skipped. No backend
+code is copied into this UI branch. The test uses in-memory directory, pool,
+readiness and enrollment-manager doubles, and never opens a listening socket.
+It verifies actual snapshot field mapping and identity route request/response
+serialization, GET-only loading, independent web/knowledge status, maintenance
+timestamps, unknown expiry and the UI's explicit add choice. It does not exercise
+auth middleware or real enrollment identity preservation; those remain backend
+test responsibilities. Read-only review found no UI/contract mismatch.
+
+The earlier visual preview was an in-memory Ego data-URL page, not a server or
+saved launch script: no port, former TaskSpace 2 (closed). Existing screenshots
+remain in `/tmp`. The parent owns TaskSpace 1; this contract review does not open
+or operate any browser space.

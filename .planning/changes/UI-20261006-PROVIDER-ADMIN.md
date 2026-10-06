@@ -51,3 +51,22 @@ Parent integrates this candidate; enrollment identity contract still requires
 cross-branch integration verification. No live success is claimed. No push,
 release, service restart or real enrollment was performed.
 Rollback: revert the UI commit or restore scoped files from 0db3fc2.
+
+## Cross-branch contract review
+Read-only backend review at management commit 5d3c4198be43d7c2e29dc5cd5eed8cd001b68542.
+Plan: exercise actual management and identity route handlers with in-memory
+dependencies and feed responses into the UI through mocked fetch. No listening
+HTTP server, real account store, browser helper or credentials. Add an opt-in
+contract test selected with PROVIDER_ADMIN_CONTRACT_ROOT so this UI-only branch
+does not require backend files to be copied or merged.
+
+Result: no contract mismatch found. Actual management projection supplies all
+consumed fields; public enrollment uses taskId; identity route forwards only
+action/name and returns success/enrollment. Added test exercises real handlers
+with mocked dependencies, not auth middleware or real identity storage.
+Focused run: 14 passed, 0 failed/skipped. Full regression with
+PROVIDER_ADMIN_CONTRACT_ROOT set: 301 passed, 0 failed/skipped.
+At final run backend HEAD was 3122794e09d8a1445a247a9e4f4d51acd33b5348;
+the three reviewed backend files were unchanged from the review commit.
+No UI/backend implementation edits, running-service access, browser-space
+operations or credential reads. Governance-script absence remains unchanged.
