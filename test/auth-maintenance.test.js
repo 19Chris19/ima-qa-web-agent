@@ -63,6 +63,16 @@ test('disabled maintenance creates no timer', () => {
   m.start(); assert.equal(c.tasks.size, 0); assert.equal(m.snapshot().state, 'disabled');
 });
 
+test('startup never refreshes or persists a disabled imported account', async () => {
+  const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
+  let calls = 0;
+  const pool = new IMAWebAgentPool({ accounts: [{ id: 'synthetic-import', disabled: true }] }, {
+    clientFactory: () => ({ ensureFreshAuth() { calls++; }, persistRuntimeEnv() { calls++; } }),
+  });
+  assert.equal(await pool.ensureFreshAuth(), false);
+  assert.equal(calls, 0);
+});
+
 test('backoff is capped and restarting does not overlap the previous check', async () => {
   const c = clock(); let finish; let calls = 0;
   const m = new AuthMaintenance({ ...c, interval: () => 60000,
