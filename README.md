@@ -26,6 +26,8 @@
 
 > 当前管理体验改造仍是**未发布候选**，不等同已发布 v0.4.1，也不代表现有服务已经升级。候选后台采用账号表格与详情抽屉，区分知识库资格、通用联网、登录有效性和实际维护时间；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，发布前需随验收版本更新。
 
+候选还包含[通用问答交互](./docs/QA_EXPERIENCE.md)与[离线账号迁移工具](./docs/ACCOUNT_TRANSFER.md)。工具成功仅代表新增账号以停用状态导入，不代表来源调度已经退出或账号问答资格通过；发布和割接前必须逐项检查[候选验收记录](./docs/MANAGEMENT_CANDIDATE_ACCEPTANCE.md)。
+
 ![问答页：3DGS 入门问题的合成演示回答，展示连续会话、流式回答的排版与来源入口](./assets/readme/screenshots/qa-page.png)
 
 上图使用的是**合成演示数据**，用来公开展示界面和信息层级，避免泄露任何共享知识库原文或真实会话。实际服务会使用你自行接入、且合法加入目标共享知识库的 IMA 账号完成问答。
