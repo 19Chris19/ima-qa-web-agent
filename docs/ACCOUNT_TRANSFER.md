@@ -15,7 +15,13 @@ for a Git marker; a symlink into a worktree subdirectory is rejected. The output
 is not resumable in place: inspect and retain the partial private directory, then choose a fresh output path.
 The archive contains private conversation text: do not commit, publish, attach or print it.
 
-New candidate accounts are **disabled**, without copied qualification proofs or machine-specific export paths.
+New candidate accounts are **disabled with a pending QA guard**, without copied qualification proofs or machine-specific export paths.
+Ordinary enable and pool observations cannot bypass that guard in either QA mode.
+One successful bound knowledge QA probe clears the guard but preserves
+`migration_verification_required` disablement; scheduling still requires explicit enable.
+Apply rejects older prepared additions without the guard: regenerate the bundle
+from final stopped-service snapshots using this version. Already-applied older bundles
+retain the conservative rollback path; no existing store or bundle is auto-rewritten.
 Existing target records are retained unchanged. Duplicate identities never overwrite target credentials.
 IDs and names share one reserved lookup namespace, including normalized aliases; ambiguous targets fail
 closed and incoming collisions receive unique suffixes. The original account's lookup cannot be shadowed.
@@ -52,8 +58,11 @@ changed imports reject the whole rollback before any write. A normal Provider st
 even if it did not answer a question, this conservative rollback may therefore refuse it.
 
 Rollback removes only unchanged imported IDs from the current target snapshot. Newer unrelated accounts,
-settings, original account changes and all conversation history remain intact. An already absent import is
-left absent; when all are absent, return `already_rolled_back` without writing. This is not a general restore
+settings, original account changes and all conversation history remain intact. Missing imports reject
+rollback unless the durable rollback journal proves their removal. `already_rolled_back` requires
+a released marker for this transaction and no source identity remaining in the target, including
+pre-existing deduplicated accounts. A sealed transaction that never inserted imports can be rolled
+back only against its unchanged original target snapshot. This is not a general restore
 tool and never restores stale credentials from a backup. A changed source requires manual review, not a bypass.
 
 ## Archive Consumer Contract

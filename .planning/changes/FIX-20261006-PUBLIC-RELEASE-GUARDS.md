@@ -9,14 +9,16 @@ for imported accounts while retaining their explicit migration stop; reconcile
 rollback and deployment-artifact documentation without loosening safety.
 No admin UI, live stores, credentials, Docker runtime, service operations or push.
 
-## Plan
-- Add failing synthetic orphan-volume and imported-admission regressions.
+## Completed
+- Added failing synthetic orphan-volume and imported-admission regressions.
 - Reject existing project volumes and the exact generated volume name before
   image pull, configuration generation or service start; fail closed on query errors.
 - Set the existing pending-QA flag on new transfer records, not legacy env seeds.
 - Preserve migration disablement after proof until explicit enable.
-- Correct rollback documentation and identify locked Git source as canonical.
-- Run focused and full synthetic tests; commit named files with structured bodies.
+- Corrected rollback documentation and identified locked Git source as canonical;
+  npm tarballs are not recommended standalone deployment inputs. No distribution
+  or rollback implementation was loosened.
+- Ran focused and full synthetic tests; staged named files with structured commits.
 
 ## Verification
 - Offline dependency installation with lifecycle scripts/audit disabled passed.
@@ -30,7 +32,10 @@ No admin UI, live stores, credentials, Docker runtime, service operations or pus
 - New imports now require QA before enable; a successful proof preserves migration
   stop in both modes. Old unguarded prepared additions are rejected on apply, not
   silently upgraded. Rollback retains its original journal checks.
-- Complete-suite verification is recorded in the documentation follow-up commit.
+- Full `PROVIDER_ADMIN_CONTRACT_ROOT=<this-worktree> npm test`: 550 total,
+  548 passed, zero failed, two optional external-parser tests skipped. This covers
+  both code fixes and the final legacy-rollback assertion. No live QA or Docker.
+- `git diff --check 38e1775` and staged whitespace checks passed.
 - Repository governance command cannot run: scripts/check_governance.py is absent.
   Main owns clean deployment acceptance.
 
@@ -38,3 +43,8 @@ No admin UI, live stores, credentials, Docker runtime, service operations or pus
 Cherry-pick the scoped commits into the release candidate and run clean deployment
 acceptance separately. No existing installation or prepared bundle is rewritten.
 Revert the corresponding commit to roll back code, retaining private live data.
+Code commits: d133093 (installation protection), 322ad17 (migration QA gate).
+No existing prepared bundle or previously imported record is automatically migrated.
+No all-platform deployment acceptance is claimed; volume checks are preflight, not
+a cross-process deployment lock. Operators must avoid concurrent installs using the
+same project name. This branch does not alter runtime state or admin UI files.
