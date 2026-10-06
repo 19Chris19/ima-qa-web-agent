@@ -8,6 +8,16 @@
     <link rel="stylesheet" href="/admin.css" />
   </head>
   <body data-mode="admin">
+    <aside class="admin-sidebar" aria-label="管理导航">
+      <strong class="admin-brand">Provider A</strong>
+      <nav id="adminNavigation" hidden>
+        <a href="#accountsPanel" aria-current="page">账号管理</a>
+        <a href="#enrollPanel">接入账号</a>
+        <a href="#exercisePanel" id="exerciseNav" hidden>并发演练</a>
+        <a href="#exerciseReportsPanel" id="reportsNav" hidden>演练报告</a>
+      </nav>
+      <a class="admin-home-link" href="/">返回问答</a>
+    </aside>
     <main class="admin-shell">
       <header class="admin-topbar">
         <a class="admin-back" href="/" title="返回问答" aria-label="返回问答">
@@ -38,7 +48,7 @@
         <p id="webReadinessSummary"></p>
         <button id="upgradeWebMode" type="button" hidden>升级新会话至原生知识库 Agent</button>
 
-        <section class="admin-enroll" aria-label="接入账号">
+        <section class="admin-enroll" id="enrollPanel" aria-label="接入账号">
           <div class="admin-section-heading">
             <div>
               <h2>接入账号</h2>
@@ -106,14 +116,15 @@
           </section>
         </dialog>
 
-        <section class="admin-accounts" aria-label="账号列表">
+        <section class="admin-accounts" id="accountsPanel" aria-label="账号列表">
           <div class="admin-section-heading">
             <div>
               <h2>账号池</h2>
               <p id="accountCountLabel">0 个账号</p>
             </div>
+            <button class="admin-add-account" id="addAccountButton" type="button">添加账号</button>
           </div>
-          <div class="admin-account-list" id="accountList"></div>
+          <div class="admin-account-list" id="accountList" aria-live="polite"></div>
           <p class="admin-feedback" id="accountFeedback" role="status"></p>
         </section>
 
@@ -128,6 +139,14 @@
           <div class="admin-exercise-report-detail" id="exerciseReportDetail"></div>
         </section>
       </section>
+
+      <dialog class="admin-account-drawer" id="accountDrawer" aria-labelledby="accountDrawerTitle">
+        <header class="admin-dialog-header">
+          <h2 id="accountDrawerTitle">账号详情</h2>
+          <button class="admin-icon-button" id="closeAccountDrawer" type="button" aria-label="关闭账号详情" title="关闭账号详情">×</button>
+        </header>
+        <div id="accountDrawerContent"></div>
+      </dialog>
 
       <dialog class="admin-enrollment-dialog" id="enrollmentDialog" aria-labelledby="enrollmentDialogTitle">
         <section class="admin-dialog-shell">
@@ -169,6 +188,13 @@
               <p id="enrollmentDiagnosticText"></p>
             </section>
             <div class="admin-enrollment-result" id="enrollmentResult" hidden></div>
+            <section id="enrollmentIdentityConflict" class="admin-identity-conflict" hidden aria-labelledby="identityConflictTitle">
+              <h3 id="identityConflictTitle">扫码身份与原账号不一致</h3>
+              <p>原账号身份保持不变。可将本次扫码身份接入为新账号，或取消本次接入。</p>
+              <label for="identityConflictName">新账号名称</label>
+              <input id="identityConflictName" maxlength="80" autocomplete="off" />
+              <button id="addConflictIdentityButton" type="button">作为新账号接入</button>
+            </section>
             <button id="focusEnrollmentWindowButton" type="button" hidden>打开受控登录窗口</button>
             <button id="continueEnrollmentButton" type="button" hidden>已处理，继续验证</button>
             <button id="cancelEnrollmentButton" type="button">取消接入</button>

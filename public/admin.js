@@ -80,6 +80,67 @@
   const accountActionsInFlight = new Set();
   let reauthAccountId = '';
   const accountActionFeedback = new Map();
+  const accountDrawer = document.querySelector('#accountDrawer');
+  const accountDrawerContent = document.querySelector('#accountDrawerContent');
+  const identityConflict = document.querySelector('#enrollmentIdentityConflict');
+  const addConflictIdentityButton = document.querySelector('#addConflictIdentityButton');
+  let selectedAccountId = '';
+  let drawerTrigger = null;
+  document.querySelector('#closeAccountDrawer').addEventListener('click', () => accountDrawer.close());
+  accountDrawer.addEventListener('cancel', (event) => {
+    event.preventDefault();
+    accountDrawer.close();
+  });
+  accountDrawer.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...accountDrawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]')];
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first?.focus();
+    }
+  });
+  accountDrawer.addEventListener('close', () => {
+    accountList.querySelectorAll('.selected').forEach(row => row.classList.remove('selected'));
+    const trigger = [...accountList.querySelectorAll('[data-account-id]')]
+      .find(button => button.dataset.accountId === selectedAccountId);
+    accountCountLabel.tabIndex = -1;
+    (panel.hidden ? tokenInput : trigger || (drawerTrigger?.isConnected && drawerTrigger) || accountCountLabel).focus();
+  });
+  document.addEventListener('click', event => {
+    accountList.querySelectorAll('details[open]').forEach(menu => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+  document.querySelector('#adminNavigation').addEventListener('click', (event) => {
+    const link = event.target.closest('a');
+    if (!link) return;
+    document.querySelectorAll('#adminNavigation a').forEach(item => item.removeAttribute('aria-current'));
+    link.setAttribute('aria-current', 'page');
+  });
+  addConflictIdentityButton.addEventListener('click', async () => {
+    if (addConflictIdentityButton.disabled || enrollment?.state !== 'identity_conflict') return;
+    const name = cleanAccountName(document.querySelector('#identityConflictName').value);
+    if (!name || name === cleanAccountName(enrollmentName.value) || accounts.some(account => cleanAccountName(account.name) === name)) {
+      setFeedback(enrollmentDialogFeedback, '请输入与现有账号不同的新账号名称', true);
+      return;
+    }
+    addConflictIdentityButton.disabled = true;
+    stopEnrollmentPolling();
+    try {
+      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}/identity`, {
+        method: 'POST', body: JSON.stringify({ action: 'add', name }),
+      });
+      enrollment = payload.enrollment;
+      renderEnrollment();
+      if (enrollment.state === 'completed') await finishCompletedEnrollment(enrollment);
+      else if (isActiveEnrollment()) await refreshEnrollment();
+    } catch (error) {
+      setFeedback(enrollmentDialogFeedback, error.message || '新身份接入失败，原账号保持不变', true);
+    } finally { addConflictIdentityButton.disabled = false; }
+  });
 
   tokenInput.value = token;
   tokenForm.addEventListener('submit', async (event) => {
@@ -89,6 +150,7 @@
   });
   reloadButton.addEventListener('click', () => loadAdminState());
   startEnrollmentButton.addEventListener('click', openEnrollmentDialog);
+  document.querySelector('#addAccountButton').addEventListener('click', openEnrollmentDialog);
   closeEnrollmentButton.addEventListener('click', () => void closeEnrollmentDialog());
   enrollmentForm.addEventListener('submit', startEnrollment);
   focusEnrollmentWindowButton.addEventListener('click', focusEnrollmentWindow);
@@ -134,10 +196,11 @@
       if (upgradeWebMode) upgradeWebMode.hidden = !readiness || readiness.mode === 'knowledge_agent';
       const readinessSummary = document.querySelector('#webReadinessSummary');
       if (readinessSummary) readinessSummary.textContent = readiness
-        ? `基础健康 ${readiness.basicHealthy} · 当前可调度 ${readiness.schedulable} · 待验证 ${readiness.pending}` : '';
+        ? `知识库问答 · 待验证 ${readiness.pending ?? '未知'}` : '知识库问答';
       sessionStorage.setItem(tokenStorageKey, token);
       login.hidden = true;
       panel.hidden = false;
+      document.querySelector('#adminNavigation').hidden = false;
       renderSummary(accountPayload.summary, accountPayload.queue);
       startEnrollmentButton.disabled = false;
       startEnrollmentButton.title = bootstrap?.enrollment?.supportsAdminPageQr
@@ -145,6 +208,8 @@
         : '当前服务未启用页面二维码接入';
       renderAccounts();
       exercise = bootstrap?.exercise || null;
+      document.querySelector('#exerciseNav').hidden = !exercise;
+      document.querySelector('#reportsNav').hidden = !exercise;
       renderExerciseShell();
       if (exercise) {
         await refreshExerciseReports();
@@ -162,6 +227,8 @@
       tokenInput.value = '';
       login.hidden = false;
       panel.hidden = true;
+      document.querySelector('#adminNavigation').hidden = true;
+      if (accountDrawer.open) accountDrawer.close();
       stopExercisePolling();
       setFeedback(loginFeedback, error.message || '无法读取账号状态', true);
     } finally {
@@ -187,15 +254,12 @@
 
   function renderSummary(pool, queue) {
     const total = Number(pool?.totalAccounts || accounts.length || 0);
-    const available = Number(pool?.availableAccounts || 0);
-    const busy = Number(pool?.busyAccounts || 0);
-    const cooling = Number(pool?.coolingDownAccounts || 0);
     summary.replaceChildren(
       createMetric('账号总数', total),
-      createMetric(readiness ? '基础健康' : '可用', readiness?.basicHealthy ?? available),
-      createMetric('忙碌', busy),
-      createMetric('冷却', cooling),
-      createMetric('问答并发', readiness?.capacity ?? Number(queue?.maxConcurrent || 1)),
+      createMetric('知识库已合格', accounts.filter(account => managementView(account).knowledge.qualified === true).length),
+      createMetric('当前可调度', readiness?.schedulable ?? accounts.filter(account => managementView(account).schedulable === true).length),
+      createMetric('需重新登录', accounts.filter(account => managementView(account).knowledge.state === 'needs_login').length),
+      createMetric('问答并发', readiness?.capacity ?? queue?.maxConcurrent ?? '未知'),
     );
   }
 
@@ -332,11 +396,12 @@
     const browserWindowAvailable = Boolean(enrollment.diagnostics?.browserWindowAvailable);
     const useVisibleBrowser = active && browserWindowAvailable;
     enrollmentState.textContent = enrollmentStateLabel(enrollment.state);
+    identityConflict.hidden = enrollment.state !== 'identity_conflict';
     enrollmentStatusText.textContent = enrollmentStatus(enrollment);
     cancelEnrollmentButton.hidden = !active;
-    continueEnrollmentButton.hidden = !enrollment.canContinue;
-    enrollmentQr.hidden = !enrollment.qrAvailable || useVisibleBrowser;
-    enrollmentQrNote.hidden = !enrollment.qrAvailable || useVisibleBrowser;
+    continueEnrollmentButton.hidden = !enrollment.canContinue || enrollment.state === 'identity_conflict';
+    enrollmentQr.hidden = !enrollment.qrAvailable || useVisibleBrowser || enrollment.state === 'identity_conflict';
+    enrollmentQrNote.hidden = !enrollment.qrAvailable || useVisibleBrowser || enrollment.state === 'identity_conflict';
     enrollmentResult.hidden = !enrollment.account;
     renderEnrollmentDiagnostic(enrollment.diagnostics);
     focusEnrollmentWindowButton.hidden = !active || (!browserWindowAvailable && !enrollment.diagnostics?.browserFallbackAvailable);
@@ -448,6 +513,8 @@
     enrollment = null;
     completedEnrollmentTaskId = '';
     enrollmentForm.reset();
+    identityConflict.hidden = true;
+    document.querySelector('#identityConflictName').value = '';
     reauthAccountId = '';
     enrollmentName.disabled = false;
     enrollmentForm.hidden = false;
@@ -482,7 +549,7 @@
   }
 
   function isActiveEnrollmentState(state) {
-    return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified'].includes(state);
+    return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified', 'identity_conflict'].includes(state);
   }
 
   function enrollmentStateLabel(state) {
@@ -496,6 +563,7 @@
       verifying: '正在验证共享知识库',
       waiting_for_membership: '等待加入知识库或批准',
       access_unverified: '无法确认访问权限',
+      identity_conflict: '身份不一致，等待选择',
       completed: '账号接入完成',
       failed: '账号接入失败',
       cancelled: '已取消接入',
@@ -503,6 +571,9 @@
   }
 
   function enrollmentStatus(current) {
+    if (current.state === 'identity_conflict') {
+      return current.detail || '本次扫码身份尚未保存为账号，原账号保持不变。请填写新名称接入，或取消。';
+    }
     if (current.state === 'waiting_for_scan') {
       const expiry = new Date(current.expiresAt);
       const prefix = current.diagnostics?.scanDetected
@@ -1262,6 +1333,7 @@
     accountList.replaceChildren();
     accountCountLabel.textContent = `${accounts.length} 个账号`;
     if (!accounts.length) {
+      if (accountDrawer.open) accountDrawer.close();
       const empty = document.createElement('p');
       empty.className = 'admin-empty';
       empty.textContent = '暂无已接入账号';
@@ -1269,55 +1341,206 @@
       return;
     }
 
+    const table = document.createElement('table');
+    table.className = 'admin-account-table';
+    const caption = document.createElement('caption');
+    caption.className = 'admin-sr-only';
+    caption.textContent = '账号池能力与维护状态';
+    const head = table.createTHead().insertRow();
+    const labels = ['账号', '知识库问答', '通用联网', '自动维护', '操作'];
+    labels.forEach(label => {
+      const cell = document.createElement('th');
+      cell.scope = 'col'; cell.textContent = label; head.append(cell);
+    });
+    table.prepend(caption);
+    const body = table.createTBody();
     for (const account of accounts) {
-      const row = document.createElement('article');
-      row.className = 'admin-account-row';
-      const heading = document.createElement('div');
-      heading.className = 'admin-account-heading';
-      const name = document.createElement('h3');
-      name.textContent = account.name;
-      const status = document.createElement('span');
-      status.className = `admin-account-status ${account.availabilityStatus || 'unknown'}`;
-      const qualification = readiness?.accounts?.find(item => item.id === account.id);
-      status.textContent = qualification ? ({ ready: '可用于问答', pending: '待验证', verifying: '验证中', busy: '忙碌', cooling: '冷却', disabled: '已停用', needs_login: '需重新登录' }[qualification.state] || '待验证') : statusLabel(account.availabilityStatus);
-      heading.append(name, status);
-
-      const meta = document.createElement('p');
-      meta.className = 'admin-account-meta';
-      meta.textContent = accountMeta(account);
-
+      const view = managementView(account);
+      const row = body.insertRow();
+      row.className = 'admin-account-table-row';
+      if (account.id === selectedAccountId && accountDrawer.open) row.classList.add('selected');
+      const cells = labels.map(label => { const cell = row.insertCell(); cell.dataset.label = label; return cell; });
+      const name = createAction(account.name, () => openAccountDrawer(account, name));
+      name.className = 'admin-account-name';
+      name.dataset.accountId = account.id;
+      name.setAttribute('aria-haspopup', 'dialog');
+      name.setAttribute('aria-controls', 'accountDrawer');
+      cells[0].append(name);
+      cells[1].append(stateBadge(view.knowledge.state, true));
+      cells[2].append(stateBadge(view.web.state));
+      cells[3].textContent = maintenanceLabel(view.maintenance.state);
+      const next = document.createElement('small');
+      next.textContent = view.maintenance.nextRetryAt
+        ? `下次重试 ${maintenanceDate(view.maintenance.nextRetryAt)}`
+        : `下次检查 ${maintenanceDate(view.maintenance.nextCheckAt)}`;
+      cells[3].append(next);
       const actions = document.createElement('div');
-      actions.className = 'admin-account-actions';
-      const actionInFlight = accountActionsInFlight.has(account.id);
-      const accountActions = [
-        createAction(actionInFlight ? '处理中...' : '检查', () => runAccountAction(account, 'check'), actionInFlight),
-        createAction(actionInFlight ? '处理中...' : '刷新', () => runAccountAction(account, 'refresh'), actionInFlight),
-      ];
-      if (readiness) accountActions.push(createAction('验证问答能力', () => verifyAccount(account), actionInFlight || qualification?.state === 'verifying'));
-      if (['auth_expired', 'auth_rejected'].includes(account.health?.last_check_code)) {
-        accountActions.push(createAction('重新登录', () => {
-          openEnrollmentDialog();
-          if (enrollment) return;
-          reauthAccountId = account.id;
-          enrollmentName.value = account.name;
-          enrollmentName.disabled = true;
-        }, actionInFlight));
+      actions.className = 'admin-row-actions';
+      const busy = accountActionsInFlight.has(account.id);
+      if (view.knowledge.state === 'needs_login') {
+        actions.append(createAction('重新登录', () => reauthenticate(account), busy));
+      } else if (account.status === 'disabled' && !account.identityDuplicate) {
+        actions.append(createAction('启用', () => runAccountAction(account, 'enable'), busy));
+      } else {
+        actions.append(createAction('详情', () => openAccountDrawer(account, name)));
       }
-      if (!account.identityDuplicate) {
-        const disabled = account.status === 'disabled';
-        accountActions.push(createAction(actionInFlight ? '处理中...' : disabled ? '启用' : '停用', () =>
-          runAccountAction(account, disabled ? 'enable' : 'disable'), actionInFlight,
-        ));
-      }
-      accountActions.push(createAction(actionInFlight ? '处理中...' : '删除', () => deleteAccount(account), actionInFlight));
-      actions.append(...accountActions);
+      actions.append(createAccountMenu(account, view));
+      cells[4].append(actions);
       const feedback = accountActionFeedback.get(account.id);
-      const result = document.createElement('p');
-      result.className = `admin-feedback${feedback?.isError ? ' error' : ''}`;
-      result.textContent = feedback?.message || '';
-      row.append(heading, meta, actions, result);
-      accountList.appendChild(row);
+      if (feedback) {
+        const result = document.createElement('p');
+        result.className = `admin-feedback${feedback.isError ? ' error' : ''}`;
+        result.textContent = feedback.message;
+        result.setAttribute('role', 'status');
+        cells[4].append(result);
+      }
+      row.addEventListener('click', event => {
+        if (!event.target.closest('button, details')) openAccountDrawer(account, name);
+      });
     }
+    accountList.append(table);
+    if (accountDrawer.open) {
+      const selected = accounts.find(account => account.id === selectedAccountId);
+      if (selected) renderAccountDetails(selected);
+      else accountDrawer.close();
+    }
+  }
+
+  // Readiness is qualification evidence, never inferred from web/session health.
+  function managementView(account) {
+    const fallback = readiness?.accounts?.find(item => item.id === account.id) || {};
+    const management = account.management || {};
+    const knowledge = management.knowledge || fallback;
+    const states = ['ready', 'pending', 'needs_login', 'disabled', 'verifying', 'busy', 'cooling'];
+    return {
+      knowledge: { ...knowledge, state: states.includes(knowledge.state) ? knowledge.state : 'pending' },
+      web: management.web || { state: 'unknown' },
+      session: management.session || { state: 'unknown' },
+      maintenance: management.maintenance || {},
+      schedulable: management.schedulable ?? fallback.schedulable,
+    };
+  }
+
+  function stateBadge(state, knowledge = false) {
+    const badge = document.createElement('span');
+    const labels = knowledge
+      ? { ready: '可用于问答', pending: '待验证', needs_login: '需重新登录', disabled: '已停用', verifying: '验证中', busy: '忙碌', cooling: '冷却中' }
+      : { ready: '可用', unavailable: '不可用', unknown: '未验证' };
+    badge.className = `admin-state ${Object.hasOwn(labels, state) ? state : 'unknown'}`;
+    badge.textContent = labels[state] || (knowledge ? '待验证' : '未验证');
+    return badge;
+  }
+
+  function maintenanceDate(value, unknown = '未提供') {
+    if (!value) return unknown;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return unknown;
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return `${date.toLocaleString('zh-CN', { hour12: false, timeZoneName: 'short' })} (${zone})`;
+  }
+
+  function maintenanceLabel(state) {
+    return ({ unobserved: '尚无维护记录', idle: '等待巡检', ready: '维护就绪', checking: '检查中', refreshing: '续期中', retrying: '重试中', retry_wait: '等待重试', cooling: '冷却中', needs_login: '需人工登录', disabled: '已停用', scheduled: '已安排', unknown: '状态未知' })[state] || '状态未知';
+  }
+
+  function reauthenticate(account) {
+    if (accountDrawer.open) accountDrawer.close();
+    openEnrollmentDialog();
+    if (enrollment) return;
+    reauthAccountId = account.id;
+    enrollmentName.value = account.name;
+    enrollmentName.disabled = true;
+  }
+
+  function createAccountMenu(account, view) {
+    const menu = document.createElement('details');
+    menu.className = 'admin-more';
+    const trigger = document.createElement('summary');
+    trigger.textContent = '⋯';
+    trigger.title = `${account.name}：更多操作`;
+    trigger.setAttribute('aria-label', trigger.title);
+    const items = document.createElement('div');
+    items.className = 'admin-more-items';
+    items.setAttribute('role', 'group');
+    items.setAttribute('aria-label', `${account.name}的操作`);
+    const busy = accountActionsInFlight.has(account.id);
+    const add = (label, action, disabled = busy) => items.append(createAction(label, () => {
+      menu.open = false; trigger.focus(); action();
+    }, disabled));
+    add('检查', () => runAccountAction(account, 'check'));
+    add('刷新', () => runAccountAction(account, 'refresh'));
+    add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
+    add('重新登录', () => reauthenticate(account));
+    if (!account.identityDuplicate) add(account.status === 'disabled' ? '启用' : '停用', () => runAccountAction(account, account.status === 'disabled' ? 'enable' : 'disable'));
+    add('删除', () => deleteAccount(account));
+    menu.append(trigger, items);
+    menu.addEventListener('toggle', () => {
+      trigger.setAttribute('aria-expanded', String(menu.open));
+      if (menu.open) accountList.querySelectorAll('details[open]').forEach(other => { if (other !== menu) other.open = false; });
+    });
+    trigger.setAttribute('aria-expanded', 'false');
+    menu.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.open = false; trigger.focus(); }
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault(); menu.open = true;
+        const buttons = [...items.querySelectorAll('button:not(:disabled)')];
+        const index = buttons.indexOf(document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' || (event.key === 'ArrowUp' && index < 0) ? buttons.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next]?.focus();
+      }
+    });
+    menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget)) menu.open = false; });
+    return menu;
+  }
+
+  function openAccountDrawer(account, trigger) {
+    selectedAccountId = account.id;
+    drawerTrigger = trigger;
+    renderAccountDetails(account);
+    accountList.querySelectorAll('tbody tr').forEach(row => row.classList.toggle('selected', row.contains(trigger)));
+    if (!accountDrawer.open) accountDrawer.showModal();
+    document.querySelector('#closeAccountDrawer').focus();
+  }
+
+  function renderAccountDetails(account) {
+    const view = managementView(account);
+    const maintenance = view.maintenance;
+    document.querySelector('#accountDrawerTitle').textContent = account.name;
+    accountDrawerContent.replaceChildren();
+    const addSection = (title, entries) => {
+      const section = document.createElement('section');
+      const heading = document.createElement('h3'); heading.textContent = title;
+      const list = document.createElement('dl');
+      for (const [label, value] of entries) {
+        const term = document.createElement('dt'); term.textContent = label;
+        const detail = document.createElement('dd');
+        if (value instanceof Node) detail.append(value); else detail.textContent = value;
+        list.append(term, detail);
+      }
+      section.append(heading, list); accountDrawerContent.append(section);
+    };
+    addSection('服务能力', [
+      ['知识库问答', stateBadge(view.knowledge.state, true)],
+      ['资格证据', view.knowledge.qualified === true ? '已合格' : '尚无合格证据'],
+      ['上次资格验证', maintenanceDate(view.knowledge.verifiedAt)],
+      ['通用联网', stateBadge(view.web.state)], ['会话健康', stateBadge(view.session.state)],
+      ['当前可调度', view.schedulable === true ? '是' : view.schedulable === false ? '否' : '未知'],
+    ]);
+    addSection('登录与维护', [
+      ['维护状态', maintenanceLabel(maintenance.state)],
+      ['上次检查', maintenanceDate(maintenance.lastCheckAt)],
+      ['下次自动检查', maintenanceDate(maintenance.nextCheckAt)],
+      ['下次重试', maintenanceDate(maintenance.nextRetryAt)],
+      ['可续期时间', maintenanceDate(maintenance.refreshEligibleAt)],
+      ['访问令牌到期', maintenanceDate(maintenance.tokenExpiresAt, '未知（上游未提供）')],
+      ['续期凭证到期', maintenanceDate(maintenance.refreshTokenExpiresAt, '未知（上游未提供）')],
+      ['上次成功续期', maintenanceDate(maintenance.lastSuccessfulRefreshAt)],
+    ]);
+    addSection('账号记录', [
+      ['账号 ID', account.id], ['身份核验', account.identityDuplicate ? '身份重复' : account.identityVerified ? '已确认' : '未确认'],
+      ['处理中请求', String(account.activeRequests || 0)], ['最近记录', accountMeta(account) || '暂无记录'],
+    ]);
   }
 
   async function verifyAccount(account) {
@@ -1452,22 +1675,22 @@
     } else if (account.schedulerStatus === 'cooling_down') {
       items.push('本机调度：冷却中');
     }
-    items.push(`本机可调度：${health.local_schedulable ? '是' : '否'}`);
+    items.push(`本机可调度记录：${health.local_schedulable === true ? '是' : health.local_schedulable === false ? '否' : '未知'}`);
     items.push(`会话：${healthFlagLabel(health.session_valid)}`);
-    items.push(`刷新：${health.refreshable ? '可刷新' : '不可刷新'}`);
-    items.push(`知识库：${healthFlagLabel(health.knowledge_ready)}`);
+    items.push(`刷新：${health.refreshable === true ? '可刷新' : health.refreshable === false ? '不可刷新' : '未知'}`);
+    items.push(`知识库访问记录：${health.last_check_code === 'web_context_missing' ? '未确认' : healthFlagLabel(health.knowledge_ready)}`);
     items.push(`Web：${healthFlagLabel(health.web_ready)}`);
     if (health.last_check_at) {
-      items.push(`上次检查 ${formatDate(health.last_check_at)}：${health.last_check_message || '已完成'}`);
+      items.push(`上次检查 ${maintenanceDate(health.last_check_at)}：${health.last_check_message || '已完成'}`);
     }
     if (health.last_refresh_at) {
-      items.push(`上次刷新 ${formatDate(health.last_refresh_at)}${health.last_refresh_code === 'ok' ? '' : `：${health.last_refresh_code || '失败'}`}`);
+      items.push(`上次刷新 ${maintenanceDate(health.last_refresh_at)}${health.last_refresh_code === 'ok' ? '' : `：${health.last_refresh_code || '失败'}`}`);
     }
     if (account.tokenExpiresAt) {
-      items.push(`访问令牌 ${formatDate(account.tokenExpiresAt)}`);
+      items.push(`访问令牌 ${maintenanceDate(account.tokenExpiresAt)}`);
     }
     if (account.refreshTokenExpiresAt) {
-      items.push(`刷新令牌 ${formatDate(account.refreshTokenExpiresAt)}`);
+      items.push(`刷新令牌 ${maintenanceDate(account.refreshTokenExpiresAt)}`);
     }
     if (account.lastError) {
       items.push(account.lastError);
