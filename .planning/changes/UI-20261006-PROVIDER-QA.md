@@ -55,3 +55,17 @@ critical proxy-addr advisory GHSA-jqcg-44mw-7w3h remains out of scope.
 One atomic UI commit intentionally includes its helper, regression tests and
 candidate documentation. Parent must review/integrate; no push/release performed.
 Rollback: revert the candidate commit; no runtime migration.
+
+## Review Follow-up: Markdown Copy
+
+The reviewer identified that answerText flattened answer Markdown. Restore the
+website's token-boundary copy behavior in the generic helper: keep original
+Markdown and whitespace, removing only mapped prose/context-ref citations.
+Code, ordinary links, escaped literals, bare numbers and unmapped citations stay
+unchanged. Selection copy remains the selected plain text. Reset successful copy
+feedback after 1500ms, restarting the timeout for subsequent copies.
+Scope: helper, its synthetic tests, this record and QA_EXPERIENCE.md only.
+Verification: focused 27/27 and full synthetic 306/306 passed; diff checks and
+ownership verification passed. Governance script attempted again, still absent
+(exit 2). No browser/OS clipboard retest, real QA, backend/core changes, push or
+release. Rollback this follow-up independently to restore the initial candidate.

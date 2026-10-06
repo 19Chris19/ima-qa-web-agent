@@ -55,35 +55,61 @@
   }
 
   function answerText(markdown, sources = []) {
-    const container = doc.createElement('div');
-    try {
-      root.ImaAnswerRenderer.updateAnswerElement(container, markdown, {
-        sourceIndexes: sources.map(source => source.index),
-      });
-    } catch {
-      return String(markdown || '');
+    const source = String(markdown ?? '');
+    const marked = root.marked?.marked || root.marked;
+    const known = new Set(sources.map(item => Number(item?.index))
+      .filter(index => Number.isSafeInteger(index) && index > 0));
+    if (!known.size || !marked) return source;
+    const edits = [];
+    // Port the website's token-boundary copy rule, editing the original Markdown
+    // instead of serializing rendered HTML. Protected token contents stay exact.
+    function visit(tokens, lower, upper) {
+      let cursor = lower;
+      for (const token of tokens || []) {
+        const at = token.raw ? source.indexOf(token.raw, cursor) : -1;
+        const located = at >= cursor && at + token.raw.length <= upper;
+        const start = located ? at : cursor;
+        const end = located ? at + token.raw.length : upper;
+        if (token.type === 'link' && /^@context-ref\?id=\d+$/u.test(token.href || '')
+            && known.has(Number(token.text))) {
+          if (located) edits.push([start, end]);
+        } else if (!['code', 'codespan', 'link', 'image', 'html', 'escape'].includes(token.type)) {
+          if (token.type === 'text' && !token.tokens && located) {
+            for (const match of token.raw.matchAll(/(?<!\\)\[(\d+)\]/gu)) {
+              if (known.has(Number(match[1]))) edits.push([start + match.index, start + match.index + match[0].length]);
+            }
+          } else {
+            let childCursor = visit(token.tokens, start, end);
+            for (const item of token.items || []) childCursor = visit(item.tokens, childCursor, end);
+            for (const cell of [...(token.header || []), ...(token.rows || []).flat()]) childCursor = visit(cell.tokens, childCursor, end);
+            if (!located) cursor = childCursor;
+          }
+        }
+        if (located) cursor = end;
+      }
+      return cursor;
     }
-    // Ignore renderer indentation between blocks, but preserve code whitespace.
-    const blocks = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE']);
-    function text(node) {
-      if (node.nodeType === 3) return node.textContent;
-      if (node.nodeName === 'PRE') return `${node.textContent}\n\n`;
-      if (node.nodeName === 'BR') return '\n';
-      if (node.nodeName === 'TR') return `${[...node.children].map(cell => text(cell).trim()).join('\t')}\n`;
-      const children = [...node.childNodes].filter(child => child.nodeType !== 3
-        || child.textContent.trim() || !['DIV', 'TABLE', 'THEAD', 'TBODY', 'UL', 'OL'].includes(node.nodeName));
-      const content = children.map(text).join('');
-      return blocks.has(node.nodeName) ? `${content}\n\n` : content;
-    }
-    return text(container).trim();
+    visit(marked.lexer(source, { gfm: true }), 0, source.length);
+    let result = source;
+    for (const [start, end] of edits.sort((a, b) => b[0] - a[0])) result = result.slice(0, start) + result.slice(end);
+    return result;
   }
 
+  const feedbackTimers = new WeakMap();
   async function copyText(text, host, trigger, valid = () => host.isConnected) {
+    root.clearTimeout(feedbackTimers.get(host));
     host.querySelector('.copy-fallback')?.remove();
     const status = host.querySelector('.copy-status');
+    if (status) status.textContent = '';
     try {
       await root.navigator.clipboard.writeText(text);
-      if (valid() && status) status.textContent = '已复制';
+      if (valid() && status) {
+        status.textContent = '已复制';
+        feedbackTimers.set(host, root.setTimeout(() => {
+          if (valid()) status.textContent = '';
+          feedbackTimers.delete(host);
+        }, 1500));
+      }
     } catch {
       if (!valid()) return;
       if (status) status.textContent = '复制失败，请选择下方文字复制';

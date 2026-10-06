@@ -102,9 +102,9 @@ test('terminal copy reuses renderer citation rules without source or failure met
   p.emit('delta', { text: 'Value 123 [1] [9] `code[1]` [1](@context-ref?id=1)\n\n| A | B |\n| --- | --- |\n| one | two |' });
   p.emit('done', {}); p.finish(); await tick();
   p.d.querySelector('.answer-copy').click(); await tick();
-  assert.match(p.copied[0], /Value 123\s+\[9\] code\[1\]/);
+  assert.match(p.copied[0], /Value 123\s+\[9\] `code\[1\]`/);
   assert.doesNotMatch(p.copied[0], /PRIVATE|@context|未完成/);
-  assert.match(p.copied[0], /one\ttwo/);
+  assert.match(p.copied[0], /\| A \| B \|\n\| --- \| --- \|\n\| one \| two \|/);
   assert.equal(p.d.querySelector('.answer-copy').getAttribute('aria-label'), '复制回答');
 });
 
@@ -129,7 +129,7 @@ test('history uses the same renderer/copy and clipboard fallback is selectable a
   ] });
   const button = p.d.querySelector('.answer-copy'); button.click(); await tick();
   const field = p.d.querySelector('.copy-fallback textarea');
-  assert.equal(field.value, 'Saved 42');
+  assert.equal(field.value, 'Saved 42 ');
   assert.equal(field.readOnly, true);
   assert.equal(field.selectionEnd, field.value.length);
   assert.match(button.getAttribute('aria-label'), /部分/);
@@ -248,3 +248,75 @@ test('normal completion retains a busy draft without auto-submitting it', async 
   assert.equal(p.input.value, 'second draft');
   assert.equal(p.d.querySelector('#sendButton').getAttribute('aria-disabled'), 'false');
 });
+
+test('answer copy preserves table syntax, code fences, indentation and line breaks exactly', async t => {
+  const p = await page(t);
+  const markdown = '\n## Heading\n\n| A | B |\n| :--- | ---: |\n| **item** [1] | `value[1]` |\n\n'
+    + '```js\nconst items = [1];\n  // [1] stays in code\n```\n\n    indented [1]\n\nText  \nnext [1]\n';
+  assert.equal(p.w.ProviderQaExperience.answerText(markdown, [{ index: 1 }]),
+    markdown.replace('**item** [1]', '**item** ').replace('next [1]', 'next '));
+});
+
+test('copy removes only mapped prose/context-ref citations and protects Markdown literals', async t => {
+  const p = await page(t);
+  const markdown = '123 [1] [2] [9] **bold [1]** \\[1] `code[1]` '
+    + '[1](@context-ref?id=1) [9](@context-ref?id=9) [1](https://example.test) '
+    + '![1](https://example.test/image.png)\n\n> quote [2]\n\n- item [1]\n';
+  const expected = '123   [9] **bold ** \\[1] `code[1]` '
+    + ' [9](@context-ref?id=9) [1](https://example.test) '
+    + '![1](https://example.test/image.png)\n\n> quote \n\n- item \n';
+  assert.equal(p.w.ProviderQaExperience.answerText(markdown, [{ index: 1 }, { index: '2' }]), expected);
+  assert.equal(p.w.ProviderQaExperience.answerText(markdown), markdown);
+  assert.equal(p.w.ProviderQaExperience.answerText(markdown, [{ index: 0 }, { index: -1 }, { index: 'unknown' }]), markdown);
+});
+
+test('copy keeps CRLF and incomplete received code fences without normalizing Markdown', async t => {
+  const p = await page(t);
+  const markdown = 'Text [1]\r\n\r\n```text\r\n  unfinished [1]\r\n';
+  assert.equal(p.w.ProviderQaExperience.answerText(markdown, [{ index: 1 }]), markdown.replace('Text [1]', 'Text '));
+});
+
+test('clipboard fallback retains original answer Markdown', async t => {
+  const content = '| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```text\n  code\n```\n';
+  const p = await page(t, { clipboardFails: true, history: [{ role: 'assistant', content }] });
+  p.d.querySelector('.answer-copy').click(); await tick();
+  assert.equal(p.d.querySelector('.copy-fallback textarea').value, content);
+});
+
+for (const selection of [false, true]) {
+  test(`${selection ? 'selection' : 'answer'} copy success resets at 1500ms and repeat restarts timeout`, async t => {
+    const p = await page(t, { history: [{ role: 'assistant', content: '**synthetic words**' }] });
+    let now = 0, id = 100000;
+    const timers = new Map();
+    const originalSet = p.w.setTimeout.bind(p.w), originalClear = p.w.clearTimeout.bind(p.w);
+    p.w.setTimeout = (callback, delay) => {
+      if (delay !== 1500) return originalSet(callback, delay);
+      timers.set(++id, { callback, due: now + delay });
+      return id;
+    };
+    p.w.clearTimeout = key => { if (!timers.delete(key)) originalClear(key); };
+    function advance(ms) {
+      now += ms;
+      for (const [key, timer] of timers) {
+        if (timer.due <= now) { timers.delete(key); timer.callback(); }
+      }
+    }
+    if (selection) {
+      const strong = p.d.querySelector('.answer-markdown strong');
+      select(p, strong);
+    }
+    const host = p.d.querySelector(selection ? '.selection-copy-toolbar' : '.answer-tools');
+    const button = host.querySelector('button'), status = host.querySelector('.copy-status');
+    button.click(); await tick();
+    assert.equal(p.copied[0], selection ? 'synthetic words' : '**synthetic words**');
+    assert.equal(status.textContent, '已复制');
+    advance(1499); assert.equal(status.textContent, '已复制');
+    advance(1); assert.equal(status.textContent, '');
+    button.click(); await tick();
+    advance(1000);
+    button.click(); await tick();
+    advance(500); assert.equal(status.textContent, '已复制');
+    advance(999); assert.equal(status.textContent, '已复制');
+    advance(1); assert.equal(status.textContent, '');
+  });
+}

@@ -23,12 +23,14 @@ No production service, credential, backend, admin, vendor or renderer-core chang
   only received partial text; empty failures expose none. History uses the same
   renderer and copy helper. Partial labels honor explicit `complete: false` or
   `interrupted: true` when supplied, without inventing missing history evidence.
-- Answer copy is **plain text**, not a Markdown export. It passes only answer
-  content and mapped source indexes through the existing safe GFM renderer,
-  preserving its citation rules (including literal numbers, code and unmapped
-  citations). Block/table separators are retained; source cards, status/error
-  text, timers and other metadata are excluded. If the renderer is unavailable,
-  received answer text is copied verbatim, matching the display fallback.
+- Answer copy preserves **original Markdown**, including tables, code fences and
+  whitespace. It ports the website's parser-token-boundary copy rule, removing
+  only prose/context-ref citations mapped by structured source indexes. Code,
+  escaped literals, ordinary links, bare numbers and unmapped citations remain.
+  Source cards, status/error text, timers and other metadata are excluded. With
+  no source mapping or parser, received Markdown is copied verbatim.
+- Successful copy feedback resets after 1.5 seconds; copying again restarts the
+  timer. Selection copy remains only the selected plain text, not Markdown.
 - Selection copy accepts a range wholly inside one assistant answer, never user
   messages, sources or mixed selections. The popover has a named button, retains
   selection, supports Tab to focus and Escape to dismiss, and hides on scrolling,
@@ -46,9 +48,9 @@ bank, queue behavior or animations were ported.
 
 - `npm ci --ignore-scripts`: completed; package manifests/lockfile unchanged.
 - `node --test test/qa-experience.test.js test/client-answer-flow.test.js test/answer-renderer.test.js`:
-  21/21 passed on the final frontend code.
-- `npm test -- --test-reporter=dot`: 300/300 passed; final selection-identity
-  hardening was subsequently covered by the focused 21-case run.
+  27/27 passed after the Markdown-copy review fix, including exact Markdown,
+  citation boundaries, CRLF, clipboard fallback and 1500ms feedback reset tests.
+- `npm test -- --test-reporter=dot`: 306/306 passed after the review fix.
 - Isolated loopback fake HTTP/SSE only, observed in Chromium via Ego Browser:
   desktop main and 390x844 embed; compact dimensions 56px/28px; busy draft
   preservation and partial-copy control; stacked text above tools; no document
@@ -56,6 +58,8 @@ bank, queue behavior or animations were ported.
   panel; compact height/radius also confirmed on mobile. Desktop/mobile
   screenshots were visually inspected outside Git. This is synthetic browser
   evidence, not real QA.
+  Browser checks above cover the initial candidate; the copy-only follow-up was
+  verified with synthetic jsdom tests, not repeated OS clipboard/browser tests.
 - `python3 scripts/check_governance.py --ci`: attempted, unavailable because this
   independent baseline has no such script. Do not interpret as a passing check.
 - `npm audit --omit=dev --json`: reports existing critical `proxy-addr`
