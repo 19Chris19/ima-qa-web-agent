@@ -22,6 +22,14 @@ function registerAdminRoutes(app, options = {}) {
     else options.imaWebAgentClient?.syncAccounts?.(accountDirectory.getPoolAccounts());
     options.onAccountsSynced?.(options.imaWebAgentClient?.stats?.());
   };
+  const replaceCredentials = (input, write) => {
+    const previous = accountDirectory.getAccount?.(normalizeAccountId(input?.id || input?.name))
+      || accountDirectory.getAccount?.(input?.name);
+    const writeAndSync = () => { const account = write(); syncPool(); return account; };
+    const pool = options.imaWebAgentClient;
+    return previous && pool?.withCredentialReplacement
+      ? pool.withCredentialReplacement(previous.id, writeAndSync) : writeAndSync();
+  };
   const managementSnapshot = (includeEvents = false) => buildManagementSnapshot({
     accountDirectory,
     pool: options.imaWebAgentClient,
@@ -271,7 +279,7 @@ function registerAdminRoutes(app, options = {}) {
           return res.status(409).json({ success: false, code: 'membership_unverified', error: '尚未确认目标知识库访问权限；不会保存账号，请加入后继续验证' });
         }
       }
-      const account = accountDirectory.upsertCapturedAccount({
+      const account = replaceCredentials(req.body, () => accountDirectory.upsertCapturedAccount({
         name: req.body?.name,
         id: req.body?.id,
         knowledgeBaseId: requireSharedKnowledgeBaseId(
@@ -287,8 +295,7 @@ function registerAdminRoutes(app, options = {}) {
         source: req.body?.source || 'admin-api',
         requireQualification: true,
         replace: Boolean(req.body?.replace),
-      });
-      syncPool();
+      }));
       res.json({ success: true, account });
     } catch (error) {
       sendAdminError(res, error);
@@ -302,7 +309,7 @@ function registerAdminRoutes(app, options = {}) {
         return res.status(400).json({ success: false, error: 'runtimeEnvText is required and must be under 128KB' });
       }
       rejectDuplicateAccount(accountDirectory, req.body, Boolean(req.body?.replace));
-      const account = accountDirectory.upsertFromRuntimeEnv({
+      const account = replaceCredentials(req.body, () => accountDirectory.upsertFromRuntimeEnv({
         name: req.body?.name,
         id: req.body?.id,
         knowledgeBaseId: requireSharedKnowledgeBaseId(
@@ -314,8 +321,7 @@ function registerAdminRoutes(app, options = {}) {
         source: 'runtime-env-import',
         requireQualification: true,
         replace: Boolean(req.body?.replace),
-      });
-      syncPool();
+      }));
       res.json({ success: true, account });
     } catch (error) {
       sendAdminError(res, error);

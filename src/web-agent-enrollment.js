@@ -250,21 +250,27 @@ class WebAgentEnrollmentManager {
       tokenExpiresAt: auth.tokenExpiresAt, refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
       requireQualification: true,
       source: 'admin-qr-enrollment', replace: job.replace };
-    job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
-      : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
-        : this.accountDirectory.upsertCapturedAccount(capturedAccount);
-    const previousPoolAccount = this.pool.accounts?.find(account => account.id === job.account.id);
-    try {
-      this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
-    } catch {
-      for (const target of new Set([previousPoolAccount, ...(this.pool.accounts || []).filter(account => account.id === job.account.id)])) {
-        if (!target) continue;
-        target.maintenanceOperation = 'qualification';
-        target.webQualification = null;
+    const writeAndSync = () => {
+      job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
+        : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount)
+          : this.accountDirectory.upsertCapturedAccount(capturedAccount);
+      const previousPoolAccount = this.pool.accounts?.find(account => account.id === job.account.id);
+      try {
+        this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
+      } catch {
+        for (const target of new Set([previousPoolAccount, ...(this.pool.accounts || []).filter(account => account.id === job.account.id)])) {
+          if (!target) continue;
+          target.maintenanceOperation = 'qualification';
+          target.webQualification = null;
+        }
+        job.warning = 'pool_sync_failed';
+        throw enrollmentError('登录态已保存，但调度同步失败；账号本机隔离，请先核对状态', 503, { code: 'pool_sync_failed' });
       }
-      job.warning = 'pool_sync_failed';
-      throw enrollmentError('登录态已保存，但调度同步失败；账号本机隔离，请先核对状态', 503, { code: 'pool_sync_failed' });
-    }
+    };
+    const previous = !job.addIdentity && (this.accountDirectory.getAccount(job.reauthAccountId || job.accountId)
+      || this.accountDirectory.getAccount(job.name));
+    if (previous && this.pool.withCredentialReplacement) this.pool.withCredentialReplacement(previous.id, writeAndSync);
+    else writeAndSync();
     // Login expiry ends here. The declared QA probe owns a separate bounded timeout.
     await this._cleanup(job);
     if (job.state === 'cancelled') return;

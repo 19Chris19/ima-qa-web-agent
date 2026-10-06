@@ -98,6 +98,43 @@ capacity exclude it. A sync failure is not classified as an upstream probe error
 and never clears that lock in verification cleanup. No automatic repair/re-probe
 is performed; reconcile the failed pool before service acceptance or further use.
 
+### Captured Credentials and Late Refreshes
+
+Public clients use a process-local credential generation. QR replacement, admin
+capture replacement and runtime-text import replacement invalidate the old client
+and stop its timer before the synchronous store-write/pool-sync boundary. Refresh
+responses recheck their generation after parsing the response body, before changing
+headers or writing a runtime export. Maintenance callbacks carry their generation;
+obsolete or detached clients cannot write the encrypted account directory.
+Stopping a timer alone does not abort an upstream request. The guarantee is that
+its obsolete response cannot apply locally, not that the upstream cancelled it.
+
+Public `applyConfig` still directly accepts headers, including earlier or unknown
+expiry. There is no Air expiry ordering rule or seven-mode qualification here.
+Changed credentials and disabled synchronization invalidate older refreshes;
+an unchanged enabled configuration does not interrupt normal refresh. An obsolete
+refresh's cleanup cannot clear a newer generation's in-flight promise.
+
+Replacement write/sync failure leaves the existing target locally isolated, with
+credential writes suspended. A write failure does not prove new credentials were
+saved; runtime-export failure may occur after the encrypted account commit. Inspect
+the authoritative account store and reconcile the original storage/sync fault first.
+The local `qualification` admission lock is not cleared by ordinary sync, check or
+verification retry. Current recovery requires an explicitly authorized Provider
+restart to reconstruct the pool from the reconciled store. If saved credentials are
+pending-disabled, explicitly authorize one QA verification afterwards; no rescan is
+needed unless login expired. If capture never committed, do not treat the previous
+enabled record as a successful new enrollment. This is a code-supported recovery
+description, not a live recovery rehearsal or a new automatic repair mechanism.
+
+Synthetic coverage in `test/credential-generation.test.js` uses the real public
+client, pool, encrypted directory and capture handlers with deferred fake fetch.
+It covers successful sync, throws before/after sync, runtime/disk preservation,
+ordinary refresh, cancellation, late response bodies/callbacks, multiple generations
+and store/export failures. No live QA, private credential, production runtime,
+cross-process writer race or deployment is exercised. CLI/offline writers in other
+processes are not fenced by this in-process generation.
+
 Verification and cancel responses explicitly include `commitApplied` and `warning`:
 - Quarantine-stage sync failure returns `commitApplied: false`,
   `warning: "pool_sync_failed"`, with no probe dispatch and a disabled disk account.

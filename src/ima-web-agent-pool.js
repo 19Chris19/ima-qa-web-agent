@@ -60,7 +60,7 @@ class IMAWebAgentPool {
         existing.disabledReason = config.disabledReason || '';
         if (existing.disabled) existing.client.stopAutoRefresh?.();
         else if (wasDisabled && this.autoRefreshStarted) {
-          existing.client.startAutoRefresh?.(() => this._notifyCredentials(existing));
+          existing.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(existing, generation));
         }
         next.push(existing);
         seen.add(id);
@@ -104,10 +104,29 @@ class IMAWebAgentPool {
     this.accounts = next;
     if (this.autoRefreshStarted) {
       for (const account of added) {
-        if (!account.disabled) account.client.startAutoRefresh?.(() => this._notifyCredentials(account));
+        if (!account.disabled) account.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(account, generation));
       }
     }
     this._notifyAvailability();
+  }
+
+  withCredentialReplacement(accountId, writeAndSync) {
+    const previous = this.accounts.find(account => account.id === accountId || account.name === accountId);
+    if (!previous) return writeAndSync();
+    // The caller writes and syncs synchronously; no old refresh can persist in between.
+    previous.client.invalidateCredentials?.({ suspend: true });
+    previous.client.stopAutoRefresh?.();
+    try {
+      return writeAndSync();
+    } catch (error) {
+      for (const account of new Set([previous, ...this.accounts.filter(row => row.id === previous.id)])) {
+        account.client.invalidateCredentials?.({ suspend: true });
+        account.client.stopAutoRefresh?.();
+        account.maintenanceOperation = 'qualification';
+        account.webQualification = null;
+      }
+      throw error;
+    }
   }
 
   async ensureFreshAuth() {
@@ -132,7 +151,7 @@ class IMAWebAgentPool {
   startAutoRefresh() {
     this.autoRefreshStarted = true;
     for (const account of this.accounts) {
-      if (!account.disabled) account.client.startAutoRefresh?.(() => this._notifyCredentials(account));
+      if (!account.disabled) account.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(account, generation));
     }
   }
 
@@ -568,7 +587,9 @@ class IMAWebAgentPool {
     }
   }
 
-  _notifyCredentials(account) {
+  _notifyCredentials(account, generation = account.client.credentialGeneration) {
+    if (!this.accounts.includes(account) || account.maintenanceOperation === 'qualification'
+        || account.client.credentialWritesSuspended || generation !== account.client.credentialGeneration) return;
     if (typeof this.onAccountCredentialsChange === 'function') {
       return this.onAccountCredentialsChange(account.id, account.client.getConfigSnapshot?.() || {});
     }
