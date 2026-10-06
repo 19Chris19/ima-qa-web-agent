@@ -28,5 +28,8 @@ Verification: 406/406 synthetic tests passed, zero failures/skips, with PROVIDER
 ## Rollout
 Candidate for parent integration. No production activation.
 
+## Integration acceptance (2026-10-06)
+The clean public integration branch at af9627c merged this fix as 8248c1de65baf65877d8a80f85074457f7452c7c. After clean npm ci with install scripts/audit disabled, the explicit-root full suite passed 406/406 with no skips. Dockerfile and Agent deployment instructions were reviewed read-only; gaps and historical-image boundaries are recorded in docs/ONBOARDING_ACCEPTANCE.md. No deployment implementation changed, and no live/push operation occurred. The original isolated-worktree verification above is historical; this section records the parent candidate verification.
+
 ## Rollback
 Revert the scoped fix commit; no account-store schema or data migration.

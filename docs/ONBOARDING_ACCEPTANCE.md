@@ -1,5 +1,32 @@
 # v0.4.2 onboarding candidate acceptance
 
+## Public integration acceptance (2026-10-06)
+
+Candidate only, not a release. Clean integration branch `codex/INT-20261006-PROVIDER-MANAGEMENT`
+at `af9627c` merged cancellation fix `1f7827a6c26e0f78f8a677156821da5e21fad02b`
+as `8248c1de65baf65877d8a80f85074457f7452c7c`.
+
+- Clean dependency install: `npm ci --ignore-scripts --no-audit --no-fund`, 123 packages installed. Install hooks and vulnerability audit were not run.
+- Integrated full regression: `PROVIDER_ADMIN_CONTRACT_ROOT=/Users/a123/Developer/provider-management-20261006 npm test`, **406 passed, zero failures/skips**. The explicit root includes the opt-in admin contract test.
+- No Docker build/start, helper connection, private configuration/runtime read, real login/question, push or release was performed. Earlier container evidence below belongs to its stated older revision, not this integrated candidate.
+- Public behavior remains one bounded readiness probe, separate from the login deadline; no Air seven-mode qualification was imported. See ACCOUNT_ENROLLMENT.md for cancellation and retained-account semantics.
+
+### Read-only deployment review gaps
+
+- Dockerfile copies the entrypoint, source, scripts and committed public renderer assets, and uses production dependencies. No missing cancellation-fix resource was found. Chromium remains an external desktop-helper responsibility, not an in-container browser.
+- Dockerfile defaults revision/version labels to `local-dev`; plain compose build supplies neither build argument. Candidate image acceptance must explicitly bind both labels to the reviewed revision/version and record its digest. No current candidate image was built here.
+- compose.images.yaml still defaults to v0.4.1. It is not an image of this candidate; use an explicitly reviewed candidate image when rehearsing, never silently combine current source tools with that default.
+- AGENT_DEPLOYMENT.md line 50 overstates cancellation/failure as never adding schedulable capacity: after insertion the account is retained, and classic mode does not require the new knowledge-agent proof. Document phase-specific outcomes rather than implying rollback of insertion. Existing ACCOUNT_ENROLLMENT.md records this boundary.
+- AGENT_DEPLOYMENT.md does not summarize the separate login/probe deadlines or shutdown/late-QR guarantees, and its acceptance table lacks the post-insertion verification state/outcome. Its linked enrollment document is authoritative for these details.
+
+### Governance interpretation
+
+The installed checker (this repository has no scripts/check_governance.py) reports four existing soft warnings: old change verification, an unrelated unclaimed worktree, incomplete scaffold, and no upstream. An empty-index check passes but is not a full-source secret clearance.
+
+The fix's staged full-blob rule04 HARD result remains documented, not waived: check_governance.py lines 45-48 match JavaScript property assignments containing TOKEN/CREDENTIAL/AUTHORIZATION; lines 130-147 treat expressions as non-placeholder secrets; lines 302-315 scan entire staged blobs. Comparing af9627c with 1f7827a found 21 matches in src/ima-web-agent-client.js and 11 in src/web-agent-enrollment.js, all unchanged baseline expressions (for example tokenExpiresAt assigned Number(...), pendingCredentialPersistence assigned false, and authorizationStatus assigned a conditional expression). Both baseline and fixed blobs trigger the rule. This is a baseline scanner false positive, not evidence of newly introduced credentials or a claim that the source-staged gate passed.
+
+## Earlier onboarding evidence (historical)
+
 Date: 2026-10-04. Source baseline: public main d4eb621. This is a local candidate, not a release.
 
 | Area | Result | Boundary |
