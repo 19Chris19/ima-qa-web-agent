@@ -38,6 +38,19 @@ async function setup(t, payload = { accounts: [sample('one')] }, bootstrap = {},
   return { window, document: window.document, calls };
 }
 
+test('account overview stays expanded with maintenance and actions visible without a drawer', async t => {
+  const { document, calls } = await setup(t);
+  const row = document.querySelector('#accountList article.admin-account-row');
+  assert.ok(row);
+  assert.equal(document.querySelector('#accountList table'), null);
+  assert.equal(document.querySelector('#accountDrawer'), null);
+  assert.match(row.textContent, /可用于问答/);
+  assert.match(row.textContent, /下次自动检查/);
+  assert.match(row.textContent, /上游未提供/);
+  assert.ok([...row.querySelectorAll('button')].some(button => button.textContent === '重新登录'));
+  assert.ok(calls.every(call => !call.method || call.method === 'GET'));
+});
+
 test('read-only loading and reload never probe; knowledge is independent of web context failure', async t => {
   const { document, calls } = await setup(t);
   assert.match(document.querySelector('#accountList').textContent, /可用于问答/);
@@ -46,16 +59,15 @@ test('read-only loading and reload never probe; knowledge is independent of web 
   await tick();
   assert.equal(calls.length, 4);
   assert.ok(calls.every(call => !call.method || call.method === 'GET'));
-  assert.equal(document.querySelectorAll('.admin-row-actions > button').length, 1);
-  assert.equal(document.querySelectorAll('.admin-more-items button').length, 6);
+  assert.equal(document.querySelectorAll('.admin-account-actions > button').length, 6);
 });
 
 test('pending-disabled capture offers verification and manual pause, never a bypass enable action', async t => {
   const account = { ...sample('pending', 'pending'), status: 'disabled',
     disabledReason: 'pending_enrollment_qualification', enrollmentQualificationRequired: true };
   const { document, calls } = await setup(t, { accounts: [account] });
-  assert.equal(document.querySelector('.admin-row-actions > button').textContent, '验证问答能力');
-  const labels = [...document.querySelectorAll('.admin-more-items button')].map(button => button.textContent);
+  assert.equal(document.querySelector('.admin-account-actions > button').textContent, '验证问答能力');
+  const labels = [...document.querySelectorAll('.admin-account-actions button')].map(button => button.textContent);
   assert.equal(labels.includes('启用'), false);
   assert.equal(labels.includes('停用'), true);
   assert.equal(calls.length, 2);
@@ -66,62 +78,47 @@ test('missing evidence stays pending and readiness fallback retains separate cap
     { id: 'unknown', name: '<img src=x onerror=alert(1)>', availabilityStatus: 'available' },
     { id: 'fallback', name: 'Synthetic fallback' },
   ], readiness: { accounts: [{ id: 'fallback', state: 'ready', qualified: true, schedulable: true }] } });
-  const rows = document.querySelectorAll('tbody tr');
+  const rows = document.querySelectorAll('article.admin-account-row');
   assert.match(rows[0].textContent, /待验证/);
   assert.match(rows[1].textContent, /可用于问答/);
   assert.match(rows[1].textContent, /未验证/);
   assert.equal(rows[0].querySelector('img'), null);
 });
 
-test('drawer displays actual zoned maintenance dates, explicit unknown expiry, Escape and focus return', async t => {
-  const { document, window, calls } = await setup(t);
-  const trigger = document.querySelector('.admin-account-name');
-  trigger.focus(); trigger.click();
-  const drawer = document.querySelector('#accountDrawer');
-  assert.equal(drawer.open, true);
-  assert.equal(document.activeElement.id, 'closeAccountDrawer');
-  document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
-  assert.equal(document.activeElement.id, 'closeAccountDrawer');
-  document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
-  assert.equal(document.activeElement.id, 'closeAccountDrawer');
-  assert.match(drawer.textContent, /未知（上游未提供）/);
-  assert.match(drawer.textContent, /2026/);
-  assert.ok(drawer.textContent.includes(Intl.DateTimeFormat().resolvedOptions().timeZone));
-  assert.match(drawer.textContent, /下次重试未提供/);
-  assert.match(drawer.textContent, /会话健康可用/);
-  assert.doesNotMatch(drawer.textContent, /知识库.*失败/);
-  drawer.dispatchEvent(new window.Event('cancel', { cancelable: true }));
-  assert.equal(drawer.open, false);
-  assert.equal(document.activeElement, trigger);
+test('expanded details display actual zoned maintenance dates and explicit unknown expiry', async t => {
+  const { document, calls } = await setup(t);
+  const details = document.querySelector('.admin-account-details');
+  assert.match(details.textContent, /未知（上游未提供）/);
+  assert.match(details.textContent, /2026/);
+  assert.ok(details.textContent.includes(Intl.DateTimeFormat().resolvedOptions().timeZone));
+  assert.match(details.textContent, /下次重试未提供/);
+  assert.match(details.textContent, /会话健康可用/);
+  assert.doesNotMatch(details.textContent, /知识库.*失败/);
   assert.equal(calls.length, 2);
 });
 
-test('More supports arrow navigation and Escape; checks require explicit action', async t => {
-  const { document, window, calls } = await setup(t, undefined, {}, () => ({ operation: { message: 'Synthetic check complete' } }));
-  const menu = document.querySelector('.admin-more');
-  const trigger = menu.querySelector('summary');
-  trigger.focus();
-  trigger.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
-  assert.equal(menu.open, true);
-  assert.equal(document.activeElement.textContent, '检查');
-  document.activeElement.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  assert.equal(menu.open, false);
-  assert.equal(document.activeElement, trigger);
-  menu.querySelector('button').click();
+test('visible keyboard-focusable check action only probes after explicit activation', async t => {
+  const { document, calls } = await setup(t, undefined, {}, () => ({ operation: { message: 'Synthetic check complete' } }));
+  const button = [...document.querySelectorAll('.admin-account-actions button')].find(item => item.textContent === '检查');
+  button.focus();
+  assert.equal(document.activeElement, button);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 0);
+  button.click();
   await tick(); await tick();
   assert.equal(calls.filter(call => call.method === 'POST').length, 1);
   assert.equal(calls.find(call => call.method === 'POST').url, '/api/admin/accounts/one/check');
 });
 
-test('status selects a single primary action, all knowledge states remain distinct', async t => {
+test('expanded rows retain distinct knowledge states and guarded actions', async t => {
   const states = ['ready', 'pending', 'needs_login', 'disabled', 'verifying', 'busy', 'cooling'];
   const accounts = states.map(state => ({ ...sample(state, state), status: state === 'disabled' ? 'disabled' : 'active' }));
   const { document } = await setup(t, { accounts });
-  assert.deepEqual([...document.querySelectorAll('.admin-row-actions > button')].map(button => button.textContent),
-    ['详情', '详情', '重新登录', '启用', '详情', '详情', '详情']);
-  assert.equal(document.querySelectorAll('tbody tr').length, 7);
-  const verifying = [...document.querySelectorAll('tbody tr')][4];
-  assert.equal([...verifying.querySelectorAll('.admin-more-items button')].find(button => button.textContent === '验证问答能力').disabled, true);
+  const rows = [...document.querySelectorAll('article.admin-account-row')];
+  assert.equal(rows.length, 7);
+  assert.deepEqual(rows.map(row => row.querySelector('.admin-account-heading .admin-state').textContent),
+    ['可用于问答', '待验证', '需重新登录', '已停用', '验证中', '忙碌', '冷却中']);
+  assert.ok([...rows[3].querySelectorAll('button')].some(button => button.textContent === '启用'));
+  assert.equal([...rows[4].querySelectorAll('button')].find(button => button.textContent === '验证问答能力').disabled, true);
 });
 
 test('identity conflict offers add-as-new only and resumes enrollment through specified contract', async t => {
@@ -192,7 +189,7 @@ for (const commitApplied of [false, true]) {
     const { document, window } = await setup(t, undefined, {}, () => ({
       success: false, code: 'pool_sync_failed', warning: 'pool_sync_failed', commitApplied,
     }));
-    [...document.querySelectorAll('.admin-more-items button')].find(button => button.textContent === '验证问答能力').click();
+    [...document.querySelectorAll('.admin-account-actions button')].find(button => button.textContent === '验证问答能力').click();
     document.querySelector('#webActionDialog form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
     await tick(); await tick();
     const feedback = document.querySelector('#accountList .admin-feedback').textContent;
@@ -202,15 +199,15 @@ for (const commitApplied of [false, true]) {
   });
 }
 
-test('navigation targets only real panels; mobile and reduced-motion rules are present', async t => {
+test('classic layout has no sidebar or drawer and retains mobile and focus rules', async t => {
   const { document } = await setup(t);
-  for (const link of document.querySelectorAll('#adminNavigation a')) assert.ok(document.querySelector(link.getAttribute('href')));
-  assert.equal(document.querySelector('#exerciseNav').hidden, true);
+  assert.equal(document.querySelector('.admin-sidebar'), null);
+  assert.equal(document.querySelector('#accountDrawer'), null);
+  assert.equal(document.querySelector('#exercisePanel').hidden, true);
   const css = fs.readFileSync(path.join(__dirname, '../public/admin.css'), 'utf8');
-  assert.match(css, /@media \(max-width: 680px\)/);
+  assert.ok(css.includes('@media (max-width: 680px)'));
   assert.match(css, /prefers-reduced-motion: reduce/);
   assert.match(css, /:focus-visible/);
-  assert.match(css, /\.admin-account-drawer \{ width: 100%/);
 });
 
 test('maintenance projection states and readiness summary are not legacy basic health counts', async t => {
@@ -221,23 +218,23 @@ test('maintenance projection states and readiness summary are not legacy basic h
     return account;
   });
   const { document } = await setup(t, { accounts, readiness: { basicHealthy: 99, schedulable: 2, pending: 3, capacity: 2 } });
-  const labels = [...document.querySelectorAll('tbody tr')].map(row => row.cells[3].textContent);
-  ['尚无维护记录', '已停用', '检查中', '等待重试', '已安排'].forEach((label, i) => assert.ok(labels[i].startsWith(label)));
+  const labels = [...document.querySelectorAll('article.admin-account-row')].map(row => row.querySelector('.admin-account-details').textContent);
+  ['尚无维护记录', '已停用', '检查中', '等待重试', '已安排'].forEach((label, i) => assert.ok(labels[i].includes(label)));
   assert.match(labels[3], /下次重试.*2026/);
-  assert.match(labels[0], /下次检查 未提供/);
+  assert.match(labels[0], /下次自动检查未提供/);
   assert.equal(document.querySelectorAll('#adminSummary .admin-metric strong')[2].textContent, '2');
   assert.doesNotMatch(document.querySelector('#adminPanel').textContent, /基础健康 99/);
 });
 
-test('drawer closes when selected account disappears and returns focus to account heading', async t => {
+test('removed accounts disappear from expanded details after reload', async t => {
   const payload = { accounts: [sample('removed')] };
   const { document } = await setup(t, payload);
-  document.querySelector('.admin-account-name').click();
+  assert.equal(document.querySelectorAll('article.admin-account-row').length, 1);
   payload.accounts = [];
   document.querySelector('#reloadButton').click();
   await tick();
-  assert.equal(document.querySelector('#accountDrawer').open, false);
-  assert.equal(document.activeElement.id, 'accountCountLabel');
+  assert.equal(document.querySelectorAll('article.admin-account-row').length, 0);
+  assert.match(document.querySelector('#accountList').textContent, /暂无已接入账号/);
 });
 
 test('identity conflict rejects existing names and preserves the choice after a mocked failure', async t => {
@@ -272,8 +269,7 @@ test('all maintenance timestamps use supplied values and invalid expiry is unkno
     lastSuccessfulRefreshAt: '2026-10-05T01:00:00Z',
   };
   const { document } = await setup(t, { accounts: [account] });
-  document.querySelector('.admin-account-name').click();
-  const content = document.querySelector('#accountDrawerContent');
+  const content = document.querySelector('.admin-account-details');
   const value = label => [...content.querySelectorAll('dt')].find(node => node.textContent === label).nextElementSibling.textContent;
   assert.match(value('访问令牌到期'), /未知/);
   for (const label of ['下次自动检查', '下次重试', '上次检查', '可续期时间', '续期凭证到期', '上次成功续期']) {

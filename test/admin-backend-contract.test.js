@@ -79,10 +79,8 @@ test('actual management and identity route responses interoperate with the admin
   assert.ok(calls.every(call => call.method === 'GET'));
   assert.equal(resolutions.length, 0);
   assert.match(document.querySelector('#accountList').textContent, /可用于问答.*不可用.*等待重试/s);
-  document.querySelector('.admin-account-name').click();
-  assert.match(document.querySelector('#accountDrawer').textContent, /未知（上游未提供）/);
-  assert.match(document.querySelector('#accountDrawer').textContent, /上次成功续期2026/);
-  document.querySelector('#closeAccountDrawer').click();
+  assert.match(document.querySelector('.admin-account-details').textContent, /未知（上游未提供）/);
+  assert.match(document.querySelector('.admin-account-details').textContent, /上次成功续期2026/);
   document.querySelector('#addAccountButton').click();
   await tick();
   assert.equal(document.querySelector('#enrollmentIdentityConflict').hidden, false);

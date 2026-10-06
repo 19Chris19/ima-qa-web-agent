@@ -1,27 +1,21 @@
 # Provider Admin Experience
 
-Status: **candidate**, based on `0db3fc2`. Not deployed or verified against live
-accounts. Integration belongs to the parent task. No runtime, credential,
-dependency-lock or backend source changes are included.
+Status: **v0.4.2 release candidate**, aligned from `8b29c37`. The previously
+proposed table/drawer presentation was rejected and is not part of this release.
+This document describes the expanded account list. Live Air deployment and
+public release acceptance are recorded separately.
 
 ## Account workspace
 
-- Compact semantic account table; account name and row background open a right
-  details dialog. On phones the table becomes a labeled two-column row layout
-  and the dialog fills the viewport.
-- One primary row command: re-login when required, enable for a disabled
-  nonduplicate account, otherwise details. Check, refresh, qualification,
-  re-login, enable/disable and delete remain in More. Qualification retains its
-  real-request confirmation; delete retains its confirmation.
-- More uses a native disclosure with labeled action buttons, Tab/arrow/Home/End
-  navigation, Escape, outside-click and focus-out dismissal. It intentionally
-  uses a button group, not a partially implemented ARIA application menu.
-- The native modal dialog has a named heading, initial close-button focus,
-  Tab/Shift-Tab containment, Escape and focus restoration to the account name.
-  If the account disappears, focus returns to the account-count heading.
-- Navigation links target only existing account, enrollment, exercise and report
-  panels. Exercise/report links appear only when their bootstrap feature exists.
-  Existing enrollment IDs, exercise controls and report/review handlers remain.
+- Account rows remain expanded. The heading shows knowledge QA status; service
+  evidence and actual maintenance dates are visible below it, without a drawer.
+  On phones the details become a single column.
+- Check, refresh, QA verification, re-login, enable/disable and delete are labeled
+  buttons. A captured account awaiting qualification offers verification, not a
+  bypass enable command. Verification retains its real-request confirmation;
+  delete retains its confirmation. Duplicate clicks are blocked while running.
+- The management sidebar and account drawer are removed. Existing enrollment,
+  exercise, report and review handlers remain. State refresh is read-only.
 - Motion is disabled under `prefers-reduced-motion: reduce`; visible focus
   indicators and text labels accompany status colors.
 
@@ -82,7 +76,8 @@ Full regression: `npm test`. Browser preview uses an isolated data-URL page,
 synthetic in-memory fetch responses and no real admin requests. Screenshots are
 outside Git at `/tmp/provider-admin-ui-*.png`.
 
-Final candidate run: `npm test -- --test-reporter=spec`, 300 passed, 0 failed
+Historical table/drawer candidate run (superseded presentation):
+`npm test -- --test-reporter=spec`, 300 passed, 0 failed
 (12 new jsdom cases). Chromium previews at 320, 390, 768 and 1440 pixels had no
 horizontal overflow. Tab/Shift-Tab containment, Escape/focus return and reduced
 motion were checked in the browser. Screenshots include desktop and mobile,

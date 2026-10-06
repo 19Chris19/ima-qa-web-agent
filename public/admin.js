@@ -80,46 +80,8 @@
   const accountActionsInFlight = new Set();
   let reauthAccountId = '';
   const accountActionFeedback = new Map();
-  const accountDrawer = document.querySelector('#accountDrawer');
-  const accountDrawerContent = document.querySelector('#accountDrawerContent');
   const identityConflict = document.querySelector('#enrollmentIdentityConflict');
   const addConflictIdentityButton = document.querySelector('#addConflictIdentityButton');
-  let selectedAccountId = '';
-  let drawerTrigger = null;
-  document.querySelector('#closeAccountDrawer').addEventListener('click', () => accountDrawer.close());
-  accountDrawer.addEventListener('cancel', (event) => {
-    event.preventDefault();
-    accountDrawer.close();
-  });
-  accountDrawer.addEventListener('keydown', event => {
-    if (event.key !== 'Tab') return;
-    const focusable = [...accountDrawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), [tabindex="0"]')];
-    const first = focusable[0];
-    const last = focusable.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault(); last?.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault(); first?.focus();
-    }
-  });
-  accountDrawer.addEventListener('close', () => {
-    accountList.querySelectorAll('.selected').forEach(row => row.classList.remove('selected'));
-    const trigger = [...accountList.querySelectorAll('[data-account-id]')]
-      .find(button => button.dataset.accountId === selectedAccountId);
-    accountCountLabel.tabIndex = -1;
-    (panel.hidden ? tokenInput : trigger || (drawerTrigger?.isConnected && drawerTrigger) || accountCountLabel).focus();
-  });
-  document.addEventListener('click', event => {
-    accountList.querySelectorAll('details[open]').forEach(menu => {
-      if (!menu.contains(event.target)) menu.open = false;
-    });
-  });
-  document.querySelector('#adminNavigation').addEventListener('click', (event) => {
-    const link = event.target.closest('a');
-    if (!link) return;
-    document.querySelectorAll('#adminNavigation a').forEach(item => item.removeAttribute('aria-current'));
-    link.setAttribute('aria-current', 'page');
-  });
   addConflictIdentityButton.addEventListener('click', async () => {
     if (addConflictIdentityButton.disabled || enrollment?.state !== 'identity_conflict') return;
     const name = cleanAccountName(document.querySelector('#identityConflictName').value);
@@ -200,7 +162,6 @@
       sessionStorage.setItem(tokenStorageKey, token);
       login.hidden = true;
       panel.hidden = false;
-      document.querySelector('#adminNavigation').hidden = false;
       renderSummary(accountPayload.summary, accountPayload.queue);
       startEnrollmentButton.disabled = false;
       startEnrollmentButton.title = bootstrap?.enrollment?.supportsAdminPageQr
@@ -208,8 +169,6 @@
         : '当前服务未启用页面二维码接入';
       renderAccounts();
       exercise = bootstrap?.exercise || null;
-      document.querySelector('#exerciseNav').hidden = !exercise;
-      document.querySelector('#reportsNav').hidden = !exercise;
       renderExerciseShell();
       if (exercise) {
         await refreshExerciseReports();
@@ -227,8 +186,6 @@
       tokenInput.value = '';
       login.hidden = false;
       panel.hidden = true;
-      document.querySelector('#adminNavigation').hidden = true;
-      if (accountDrawer.open) accountDrawer.close();
       stopExercisePolling();
       setFeedback(loginFeedback, error.message || '无法读取账号状态', true);
     } finally {
@@ -1340,78 +1297,38 @@
     accountList.replaceChildren();
     accountCountLabel.textContent = `${accounts.length} 个账号`;
     if (!accounts.length) {
-      if (accountDrawer.open) accountDrawer.close();
       const empty = document.createElement('p');
       empty.className = 'admin-empty';
       empty.textContent = '暂无已接入账号';
       accountList.appendChild(empty);
       return;
     }
-
-    const table = document.createElement('table');
-    table.className = 'admin-account-table';
-    const caption = document.createElement('caption');
-    caption.className = 'admin-sr-only';
-    caption.textContent = '账号池能力与维护状态';
-    const head = table.createTHead().insertRow();
-    const labels = ['账号', '知识库问答', '通用联网', '自动维护', '操作'];
-    labels.forEach(label => {
-      const cell = document.createElement('th');
-      cell.scope = 'col'; cell.textContent = label; head.append(cell);
-    });
-    table.prepend(caption);
-    const body = table.createTBody();
     for (const account of accounts) {
       const view = managementView(account);
-      const row = body.insertRow();
-      row.className = 'admin-account-table-row';
-      if (account.id === selectedAccountId && accountDrawer.open) row.classList.add('selected');
-      const cells = labels.map(label => { const cell = row.insertCell(); cell.dataset.label = label; return cell; });
-      const name = createAction(account.name, () => openAccountDrawer(account, name));
+      const row = document.createElement('article');
+      row.className = 'admin-account-row';
+      const content = document.createElement('div');
+      const heading = document.createElement('div');
+      heading.className = 'admin-account-heading';
+      const name = document.createElement('h3');
       name.className = 'admin-account-name';
-      name.dataset.accountId = account.id;
-      name.setAttribute('aria-haspopup', 'dialog');
-      name.setAttribute('aria-controls', 'accountDrawer');
-      cells[0].append(name);
-      cells[1].append(stateBadge(view.knowledge.state, true));
-      cells[2].append(stateBadge(view.web.state));
-      cells[3].textContent = maintenanceLabel(view.maintenance.state);
-      const next = document.createElement('small');
-      next.textContent = view.maintenance.nextRetryAt
-        ? `下次重试 ${maintenanceDate(view.maintenance.nextRetryAt)}`
-        : `下次检查 ${maintenanceDate(view.maintenance.nextCheckAt)}`;
-      cells[3].append(next);
-      const actions = document.createElement('div');
-      actions.className = 'admin-row-actions';
-      const busy = accountActionsInFlight.has(account.id);
-      if (view.knowledge.state === 'needs_login') {
-        actions.append(createAction('重新登录', () => reauthenticate(account), busy));
-      } else if (account.enrollmentQualificationRequired && !account.identityDuplicate) {
-        actions.append(createAction('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying'));
-      } else if (account.status === 'disabled' && !account.identityDuplicate) {
-        actions.append(createAction('启用', () => runAccountAction(account, 'enable'), busy));
-      } else {
-        actions.append(createAction('详情', () => openAccountDrawer(account, name)));
-      }
-      actions.append(createAccountMenu(account, view));
-      cells[4].append(actions);
+      name.textContent = account.name;
+      heading.append(name, stateBadge(view.knowledge.state, true));
+      const details = document.createElement('div');
+      details.className = 'admin-account-details';
+      renderAccountDetails(account, details);
+      content.append(heading, details);
+      const actions = createAccountActions(account, view);
+      row.append(content, actions);
       const feedback = accountActionFeedback.get(account.id);
       if (feedback) {
         const result = document.createElement('p');
         result.className = `admin-feedback${feedback.isError ? ' error' : ''}`;
         result.textContent = feedback.message;
         result.setAttribute('role', 'status');
-        cells[4].append(result);
+        row.append(result);
       }
-      row.addEventListener('click', event => {
-        if (!event.target.closest('button, details')) openAccountDrawer(account, name);
-      });
-    }
-    accountList.append(table);
-    if (accountDrawer.open) {
-      const selected = accounts.find(account => account.id === selectedAccountId);
-      if (selected) renderAccountDetails(selected);
-      else accountDrawer.close();
+      accountList.append(row);
     }
   }
 
@@ -1453,7 +1370,6 @@
   }
 
   function reauthenticate(account) {
-    if (accountDrawer.open) accountDrawer.close();
     openEnrollmentDialog();
     if (enrollment) return;
     reauthAccountId = account.id;
@@ -1461,63 +1377,35 @@
     enrollmentName.disabled = true;
   }
 
-  function createAccountMenu(account, view) {
-    const menu = document.createElement('details');
-    menu.className = 'admin-more';
-    const trigger = document.createElement('summary');
-    trigger.textContent = '⋯';
-    trigger.title = `${account.name}：更多操作`;
-    trigger.setAttribute('aria-label', trigger.title);
-    const items = document.createElement('div');
-    items.className = 'admin-more-items';
-    items.setAttribute('role', 'group');
-    items.setAttribute('aria-label', `${account.name}的操作`);
+  function createAccountActions(account, view) {
+    const actions = document.createElement('div');
+    actions.className = 'admin-account-actions';
+    actions.setAttribute('role', 'group');
+    actions.setAttribute('aria-label', `${account.name}的操作`);
     const busy = accountActionsInFlight.has(account.id);
-    const add = (label, action, disabled = busy) => items.append(createAction(label, () => {
-      menu.open = false; trigger.focus(); action();
-    }, disabled));
+    const add = (label, handler, disabled = busy) =>
+      actions.append(createAction(label, handler, disabled));
+    if (view.knowledge.state === 'needs_login') {
+      add('重新登录', () => reauthenticate(account));
+    }
+    if (account.enrollmentQualificationRequired && !account.identityDuplicate) {
+      add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
+    }
     add('检查', () => runAccountAction(account, 'check'));
     add('刷新', () => runAccountAction(account, 'refresh'));
-    add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
-    add('重新登录', () => reauthenticate(account));
+    if (!account.enrollmentQualificationRequired) {
+      add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
+    }
+    if (view.knowledge.state !== 'needs_login') add('重新登录', () => reauthenticate(account));
     const canEnable = account.status === 'disabled' && !account.enrollmentQualificationRequired;
     if (!account.identityDuplicate) add(canEnable ? '启用' : '停用', () => runAccountAction(account, canEnable ? 'enable' : 'disable'));
     add('删除', () => deleteAccount(account));
-    menu.append(trigger, items);
-    menu.addEventListener('toggle', () => {
-      trigger.setAttribute('aria-expanded', String(menu.open));
-      if (menu.open) accountList.querySelectorAll('details[open]').forEach(other => { if (other !== menu) other.open = false; });
-    });
-    trigger.setAttribute('aria-expanded', 'false');
-    menu.addEventListener('keydown', event => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.open = false; trigger.focus(); }
-      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-        event.preventDefault(); menu.open = true;
-        const buttons = [...items.querySelectorAll('button:not(:disabled)')];
-        const index = buttons.indexOf(document.activeElement);
-        const next = event.key === 'Home' ? 0 : event.key === 'End' || (event.key === 'ArrowUp' && index < 0) ? buttons.length - 1
-          : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
-        buttons[next]?.focus();
-      }
-    });
-    menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget)) menu.open = false; });
-    return menu;
+    return actions;
   }
 
-  function openAccountDrawer(account, trigger) {
-    selectedAccountId = account.id;
-    drawerTrigger = trigger;
-    renderAccountDetails(account);
-    accountList.querySelectorAll('tbody tr').forEach(row => row.classList.toggle('selected', row.contains(trigger)));
-    if (!accountDrawer.open) accountDrawer.showModal();
-    document.querySelector('#closeAccountDrawer').focus();
-  }
-
-  function renderAccountDetails(account) {
+  function renderAccountDetails(account, container) {
     const view = managementView(account);
     const maintenance = view.maintenance;
-    document.querySelector('#accountDrawerTitle').textContent = account.name;
-    accountDrawerContent.replaceChildren();
     const addSection = (title, entries) => {
       const section = document.createElement('section');
       const heading = document.createElement('h3'); heading.textContent = title;
@@ -1528,7 +1416,7 @@
         if (value instanceof Node) detail.append(value); else detail.textContent = value;
         list.append(term, detail);
       }
-      section.append(heading, list); accountDrawerContent.append(section);
+      section.append(heading, list); container.append(section);
     };
     addSection('服务能力', [
       ['知识库问答', stateBadge(view.knowledge.state, true)],

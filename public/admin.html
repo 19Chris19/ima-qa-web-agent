@@ -8,16 +8,6 @@
     <link rel="stylesheet" href="/admin.css" />
   </head>
   <body data-mode="admin">
-    <aside class="admin-sidebar" aria-label="管理导航">
-      <strong class="admin-brand">Provider A</strong>
-      <nav id="adminNavigation" hidden>
-        <a href="#accountsPanel" aria-current="page">账号管理</a>
-        <a href="#enrollPanel">接入账号</a>
-        <a href="#exercisePanel" id="exerciseNav" hidden>并发演练</a>
-        <a href="#exerciseReportsPanel" id="reportsNav" hidden>演练报告</a>
-      </nav>
-      <a class="admin-home-link" href="/">返回问答</a>
-    </aside>
     <main class="admin-shell">
       <header class="admin-topbar">
         <a class="admin-back" href="/" title="返回问答" aria-label="返回问答">
@@ -139,14 +129,6 @@
           <div class="admin-exercise-report-detail" id="exerciseReportDetail"></div>
         </section>
       </section>
-
-      <dialog class="admin-account-drawer" id="accountDrawer" aria-labelledby="accountDrawerTitle">
-        <header class="admin-dialog-header">
-          <h2 id="accountDrawerTitle">账号详情</h2>
-          <button class="admin-icon-button" id="closeAccountDrawer" type="button" aria-label="关闭账号详情" title="关闭账号详情">×</button>
-        </header>
-        <div id="accountDrawerContent"></div>
-      </dialog>
 
       <dialog class="admin-enrollment-dialog" id="enrollmentDialog" aria-labelledby="enrollmentDialogTitle">
         <section class="admin-dialog-shell">
