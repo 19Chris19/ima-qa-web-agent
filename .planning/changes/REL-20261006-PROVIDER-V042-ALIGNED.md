@@ -70,6 +70,8 @@ The onboarding acceptance page now leads with the aligned candidate evidence
 and remaining review blockers. Earlier independent-branch evidence is explicitly
 historical. Agent instructions identify v0.4.2's expanded account presentation;
 they do not claim publication or successful real enrollment.
+Release preparation notes now cover the complete shipped scope, fixed-source
+installation, upgrade/rollback and explicit platform/real-account boundaries.
 
 ## Clean-source follow-up
 Git archive of 38e1775 extracted into a fresh temporary directory; npm ci
