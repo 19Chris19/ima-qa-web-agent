@@ -49,6 +49,16 @@ with isolated visitor history and protected native keyed SSE.
 
 ## Rollout / Rollback
 
+## Integration Documentation (2026-10-07)
+
+The gateway, dependency selector and private-network guide are now integrated in
+one candidate. README and Agent instructions distinguish the released v0.4.2
+baseline from candidate-only commands. Explorer supports both old and explicit
+deployment-mode runtime syntax. Read-only Air checks found no Tailscale executable
+or standard app and a wildcard Provider listener; opening remains blocked.
+No live configuration was changed. Final integrated verification is recorded in
+the candidate acceptance documentation, not implied by component test counts.
+
 Opt-in direct Node script with private local configuration. No deployment in this
 change. Stop the gateway and revert this atomic commit to roll back; Provider
 history remains untouched. Preserve deployment IDs and HMAC key across rotation.

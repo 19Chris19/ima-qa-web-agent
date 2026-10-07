@@ -4,7 +4,7 @@
 
 三路径选择器、只读依赖预检和 `--allow-bootstrap` 是从 v0.4.2 开始开发的**后续候选**，已发布 v0.4.2 不包含本页新增 CLI 语法。以下原安装器说明沿用 v0.4.2；部署必须固定与入口语法匹配的源码。Gateway 同样是独立候选，不可据本页宣布已发布或共享可用。
 
-本流程对应 **v0.4.2** 源码；v0.4.1 没有这套统一引导入口。先确认 GitHub Releases 中存在对应正式版本及镜像验收清单。若尚未发布，只能使用经审查的候选源码和候选镜像隔离演练，不能把不存在的 tag 当作已发布版本。
+已发布基线是 **v0.4.2**；v0.4.1 没有统一扫码引导入口。本页新增的三路径工具和共享网关仅在后续候选中，版本号尚未确定。安装已发布版本必须阅读对应 tag 的文档，不能混用本文的新参数与 v0.4.2 工具。
 
 Agent 必须先查 Releases，选择最新已发布稳定 tag 和对应镜像。不要直接部署浮动 main，不混用 tag 的工具和其他版本镜像。不要求人手工寻找知识库数字 ID。
 
@@ -24,9 +24,9 @@ Agent 必须先查 Releases，选择最新已发布稳定 tag 和对应镜像。
 
 ### 共享候选与网络阻塞
 
-Gateway 是另行开发的候选，**不在 v0.4.2 内**，本分支也不包含其实现。只有取得该候选时才参考其中的 `docs/SHARED_GATEWAY.md`：运营方 CLI 为 `node scripts/shared-gateway.cjs`，`SHARED_GATEWAY_CONFIG` 指向 Git 外的私有配置文件。这里记录的是候选合同，不是要求用户立即执行的命令；选择器不读取、生成或输出该配置。共享 Explorer 接入者不安装 Provider，运营方凭证留在运营方服务端。
+本候选已包含 [共享网关](SHARED_GATEWAY.md)，但**不在 v0.4.2 内**。运营方 CLI 为 `node scripts/shared-gateway.cjs`，`SHARED_GATEWAY_CONFIG` 指向 Git 外的私有配置文件；开放前必须完成 [私有网络验收](SHARED_NETWORK.md)。选择器不自动开通网关，不读取、生成或输出该配置。共享网站接入者不安装 Provider，运营方凭证留在运营方服务端。
 
-2026-10-07 用户提供的 Air 状态：PATH 和 `/Applications` 均未发现 Tailscale，Provider 3117 仍为 `*` 监听。此状态下真实共享开放被阻塞，须另行审批网络配置并核验访问控制和监听边界。此记录不是本任务执行的实时探测。本任务不改监听、不安装 Tailscale、不启动 gateway、不开放隧道或端口；不能宣称 ready、shared working 或可供外部使用。
+2026-10-07 集成任务的只读检查：PATH 和标准 `/Applications/Tailscale.app` 均未发现 Tailscale，Provider 3117 仍为 `*` 监听。此状态下真实共享开放被阻塞，须另行审批网络配置并核验访问控制和监听边界。本任务未改监听、未安装 Tailscale、未启动实际 gateway、未开放隧道或端口；不能宣称已可供外部使用。此记录有日期，不作为其他机器或未来运行状态的判断。
 
 ## 给 Agent 的提示词
 
@@ -68,7 +68,7 @@ Compose 门禁检查 `docker compose version --short` 是否成功且主版本 >
 
 ### 下游 Wrapper 语法变更
 
-这是候选工具的破坏性 CLI 变更，不改写已发布 v0.4.2。现有 Explorer 的 `onboard.sh` 和 `onboard.ps1` 在调用 Provider `runtime` 前没有部署模式参数，需要下游 installer 同步更新，不能原样配套发布。
+这是候选工具的 CLI 变更，不改写已发布 v0.4.2。知天下适配候选按所选 Provider 源码是否包含部署选择器，分别调用旧版或下列新版语法；独立部署版本锁仍固定 v0.4.2，新旧工具不能混搭。
 
 仅在用户已选 independent 且批准私有运行时/依赖准备后，下游替换为：
 
@@ -81,7 +81,7 @@ $node = (& (Join-Path $source 'onboard.ps1') runtime --deployment-mode independe
 if ($LASTEXITCODE -ne 0) { throw 'Provider runtime preparation failed' }
 ```
 
-运行时已备齐时可以省略 `--allow-bootstrap`，但不能省略 `--deployment-mode independent`。新增语法只适用于本候选，旧 tag 不识别该参数，须固定匹配的版本合同。Explorer 的 online/shared 分支必须在 Provider clone/runtime 调用前退出，不安装 Provider；预检也不能为了找 Node 调用带 bootstrap 的 runtime。`node scripts/onboard.mjs` 不执行 bootstrap，依赖准备必须经过上述原生 wrapper。此任务不修改 Explorer 文件；跨仓库集成仍待其 installer 负责人完成。
+运行时已备齐时可以省略 `--allow-bootstrap`，但不能省略 `--deployment-mode independent`。新增语法只适用于本候选，旧 tag 不识别该参数，须固定匹配的版本合同。Explorer 的 online/shared 分支在 Provider clone/runtime 调用前分流，不安装 Provider；预检不能为了找 Node 调用带 bootstrap 的 runtime。`node scripts/onboard.mjs` 不执行 bootstrap，依赖准备必须经过上述原生 wrapper。
 
 配置写入 `.onboarding/`，权限私有，必须在 Git 和备份分享中排除。初始化会检查已有配置、端口、Compose 项目、镜像摘要和 Playwright 协议版本。即使容器已删除，同项目标签的遗留卷或将使用的同名数据卷也会阻止新安装；卷查询失败同样停止，不自动接管或删除数据。保留原安装配置并使用 `resume`，或经审查选择独立项目名。检测到旧安装时停止，不生成新密钥覆盖它。维护源码目录及依赖必须保持固定，不能移走正在使用的助手脚本。
 

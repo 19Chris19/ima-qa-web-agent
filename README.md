@@ -45,8 +45,8 @@
 
 公开 Provider 主要用于**独立部署通用问答服务**，不包含私有 Explorer 网站的源码、部署权限或访问授权。Agent 必须先用原生提问工具（没有则展示编号菜单）询问以下三项并等待回答，不能默认安装，也不能先 clone、下载运行时或安装依赖。
 
-1. **online**：使用运营方提供的网站地址；私有 Explorer 需另行申请访问权限，不在本机安装。
-2. **shared**：等待运营方邀请；共享 Explorer 不安装 Provider。本入口不实现共享 gateway 开通，不索取 cookie、refresh token 或原始密钥。Gateway 属于独立候选，不在 v0.4.2 内，不能据此声称共享已可用。
+1. **online**：使用运营方提供的网站地址，不在本机安装。在线体验的访问条件由运营方说明；私有 Explorer 源码权限与网页访问权限是两回事。
+2. **shared**：等待运营方邀请；共享网站不安装 Provider。本入口不自动开通 gateway，不索取 cookie、refresh token 或原始密钥。本候选包含[网关实现](./docs/SHARED_GATEWAY.md)与[网络验收](./docs/SHARED_NETWORK.md)，不在 v0.4.2 内，尚未开放共享服务。
 3. **independent**：自行维护独立 Provider 通用服务；选择后先只读预检，再分别确认依赖安装与服务安装。
 
 已有源码时运行 `sh onboard.sh choose`（Windows：`.\onboard.ps1 choose`）。非交互调用必须显式传 `--deployment-mode online|shared|independent`，缺省拒绝；路径选择不会安装任何内容。
@@ -92,7 +92,7 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 不要求全局 Node：预检可复用原有私有运行时；明确批准后可执行 `sh onboard.sh runtime --deployment-mode independent --allow-bootstrap`，保留原有私有 Node 校验下载与锁定依赖准备。选择器及只读预检始终不 bootstrap。
 
-若 GitHub Releases 尚无 v0.4.2，当前源码仅供显式指定已审查源码/镜像的隔离演练。部署 v0.4.1 时使用其 tag 内的说明，不混用不同版本命令。发布状态与已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
+v0.4.2 已发布；本页新增三路径入口属于后续候选，尚无新版本镜像。部署 v0.4.2 或更早版本时使用其 tag 内的说明，不混用不同版本命令。发布状态与已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
 
 标准部署输入是固定 Git tag 的检出，或该 tag 的完整源码归档，必须包含 `package-lock.json`；候选演练同样固定到已审查提交。npm tarball 不推荐作为独立部署目录：它不包含该锁文件，不能直接用于引导脚本的 `npm ci` 或源码 Docker 构建。不要临时生成锁文件代替发布版本的依赖锁定。
 
