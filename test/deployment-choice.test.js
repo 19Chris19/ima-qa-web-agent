@@ -350,7 +350,7 @@ test('PowerShell clears Node overrides before the deployment gate', () => {
   const ps = fs.readFileSync(path.join(root, 'onboard.ps1'), 'utf8');
   const gate = ps.indexOf('Invoke-DeploymentGate @args');
   for (const key of Object.keys(unsafeNodeEnv)) assert.ok(ps.indexOf(`'${key}'`) >= 0 && ps.indexOf(`'${key}'`) < gate, key);
-  assert.match(ps.slice(0, gate), /\[Environment\]::SetEnvironmentVariable\(\$name, \$null, 'Process'\)/);
+  assert.match(ps.slice(0, gate), /Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue/);
 });
 test('PowerShell entry removes unsafe variables before invoking any gate code', { skip: pwsh.status !== 0 }, t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-env-powershell-'));
