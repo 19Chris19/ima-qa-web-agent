@@ -1,5 +1,12 @@
 # Provider Installer Environment Safety
 
+## CI Follow-up (2026-10-07)
+
+Linux PowerShell CI exercised a locally skipped test and found that the .NET
+setter left an environment entry visible to PowerShell. Use explicit Env-provider
+removal instead. The existing strict test remains unchanged; rerun CI before
+acceptance. No Windows desktop validation is implied.
+
 Change-ID: FIX-20261007-PROVIDER-ENV-SAFETY
 Base: 98455bd045a3632dd28e7af65342a104ce01eaa3
 Branch: codex/provider-shared-env-safety-20261007
