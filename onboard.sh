@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+# Clear Node execution overrides before the gate's first probe or bootstrap/npm.
+unset NODE_OPTIONS NODE_PATH NODE_TLS_REJECT_UNAUTHORIZED
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$ROOT/scripts/deployment-choice.sh"
 deployment_gate "$@"

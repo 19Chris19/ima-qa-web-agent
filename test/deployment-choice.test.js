@@ -302,6 +302,75 @@ finally:
   assert.ifError(r.error); assert.equal(r.status, 0, r.stderr);
 });
 const pwsh = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' });
+
+const unsafeNodeEnv = {
+  NODE_OPTIONS: '--import=data:text/javascript,console.log(%22SYNTHETIC_PRELOAD_EXECUTED%22)',
+  NODE_PATH: '/synthetic/unapproved-modules',
+  NODE_TLS_REJECT_UNAUTHORIZED: '0',
+};
+for (const action of ['preflight', 'runtime', 'bootstrap']) {
+  test(`environment safety before first Node and ${action} dispatch`, { skip: !shell }, t => {
+    const f = fixture(t, { env: unsafeNodeEnv });
+    // Real Node only executes this probe; npm and installer dispatch are doubles.
+    const probe = path.join(f.dir, 'environment-probe.cjs');
+    fs.writeFileSync(probe, `const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.CALLS, JSON.stringify({ args,
+  unsafe: Object.keys(process.env).filter(key => ${JSON.stringify(Object.keys(unsafeNodeEnv))}.includes(key)) }) + '\\n');
+if (args[1]?.includes('require("playwright-core")')) process.exit(1);
+if (args[0] === 'scripts/onboard.mjs') console.log('synthetic_runtime');
+`);
+    f.write('node', `exec '${process.execPath}' '${probe}' "$@"`);
+    f.write('npm', `exec '${process.execPath}' '${probe}' synthetic-npm "$@"`);
+    // A user configuration file must never be sourced to restore unsafe settings.
+    fs.writeFileSync(path.join(f.dir, '.env'), 'echo SYNTHETIC_USER_CONFIG_SOURCED\n');
+    const args = action === 'bootstrap'
+      ? ['runtime', '--deployment-mode', 'independent', '--allow-bootstrap']
+      : [action, '--deployment-mode', 'independent'];
+    const r = spawnSync('/bin/sh', [path.join(f.dir, 'onboard.sh'), ...args], {
+      env: f.env, encoding: 'utf8', timeout: 5000,
+    });
+    assert.ifError(r.error);
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stdout + r.stderr, /SYNTHETIC_PRELOAD_EXECUTED|SYNTHETIC_USER_CONFIG_SOURCED/);
+    const events = fs.readFileSync(f.env.CALLS, 'utf8').split('\n').filter(line => line.startsWith('{')).map(JSON.parse);
+    assert.ok(events.length >= 2);
+    assert.match(events[0].args.join(' '), /process.versions/);
+    for (const event of events) assert.deepEqual(event.unsafe, [], JSON.stringify(event.args));
+    if (action === 'bootstrap') assert.ok(events.some(event => event.args.join(' ') === 'synthetic-npm ci --omit=dev'));
+    if (action !== 'preflight') assert.equal(events.at(-1).args[0], 'scripts/onboard.mjs');
+  });
+}
+test('unsafe ambient Node settings do not add dependencies to choice or missing-mode refusal', { skip: !shell }, t => {
+  const f = fixture(t, { node: false, docker: false, env: unsafeNodeEnv });
+  assert.equal(f.run(['choose', '--deployment-mode', 'online']).calls, '');
+  assert.equal(f.run(['choose']).calls, '');
+});
+test('PowerShell clears Node overrides before the deployment gate', () => {
+  const ps = fs.readFileSync(path.join(root, 'onboard.ps1'), 'utf8');
+  const gate = ps.indexOf('Invoke-DeploymentGate @args');
+  for (const key of Object.keys(unsafeNodeEnv)) assert.ok(ps.indexOf(`'${key}'`) >= 0 && ps.indexOf(`'${key}'`) < gate, key);
+  assert.match(ps.slice(0, gate), /\[Environment\]::SetEnvironmentVariable\(\$name, \$null, 'Process'\)/);
+});
+test('PowerShell entry removes unsafe variables before invoking any gate code', { skip: pwsh.status !== 0 }, t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-env-powershell-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'scripts'));
+  fs.copyFileSync(path.join(root, 'onboard.ps1'), path.join(dir, 'onboard.ps1'));
+  fs.writeFileSync(path.join(dir, 'scripts/deployment-choice.ps1'), `function Invoke-DeploymentGate {
+foreach ($name in @('NODE_OPTIONS', 'NODE_PATH', 'NODE_TLS_REJECT_UNAUTHORIZED')) {
+  if (Test-Path "Env:$name") { throw 'synthetic_unsafe_environment' }
+}
+Write-Output 'synthetic_clean_gate'
+exit 0
+}`);
+  const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', path.join(dir, 'onboard.ps1'), 'choose'], {
+    env: { ...process.env, ...unsafeNodeEnv }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.ifError(r.error);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), 'synthetic_clean_gate');
+});
 test('PowerShell choice and noninteractive refusal (no external probes)', { skip: pwsh.status !== 0 }, () => {
   for (const mode of ['online', 'shared', 'independent']) {
     const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'onboard.ps1'), 'choose', '--deployment-mode', mode], { encoding: 'utf8' });
