@@ -47,8 +47,6 @@ with isolated visitor history and protected native keyed SSE.
   worktree ownership and older change-record warnings remain out of scope.
 - No live Provider/IMA credentials, questions, deployment or push performed.
 
-## Rollout / Rollback
-
 ## Integration Documentation (2026-10-07)
 
 The gateway, dependency selector and private-network guide are now integrated in
@@ -58,6 +56,11 @@ deployment-mode runtime syntax. Read-only Air checks found no Tailscale executab
 or standard app and a wildcard Provider listener; opening remains blocked.
 No live configuration was changed. Final integrated verification is recorded in
 the candidate acceptance documentation, not implied by component test counts.
+Final integrated code at 9ba954c passed the full Node test suite. Companion BFF
+at 5cb5711 passed the cross-repository synthetic gateway tests and full suite.
+Actual Tailscale, second-device access and Windows execution remain unverified.
+
+## Rollout / Rollback
 
 Opt-in direct Node script with private local configuration. No deployment in this
 change. Stop the gateway and revert this atomic commit to roll back; Provider
