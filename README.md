@@ -39,13 +39,25 @@
 
 左图是可嵌入网站的完整问答界面；右图是仅给维护者使用的账号管理页。两张图同样使用合成账号、来源和状态数据，不含 cookie、token、共享库 ID 或真实历史。
 
-## Agent 一键部署与扫码引导
+## 先选择部署路径
+
+本节的选择器与显式 bootstrap 语法是**基于 v0.4.2 的后续候选**，不是已发布 v0.4.2 的 CLI 合同。与 Explorer 集成前必须同步[下游 wrapper 调用](./docs/AGENT_DEPLOYMENT.md#下游-wrapper-语法变更)。
+
+公开 Provider 主要用于**独立部署通用问答服务**，不包含私有 Explorer 网站的源码、部署权限或访问授权。Agent 必须先用原生提问工具（没有则展示编号菜单）询问以下三项并等待回答，不能默认安装，也不能先 clone、下载运行时或安装依赖。
+
+1. **online**：使用运营方提供的网站地址；私有 Explorer 需另行申请访问权限，不在本机安装。
+2. **shared**：等待运营方邀请；共享 Explorer 不安装 Provider。本入口不实现共享 gateway 开通，不索取 cookie、refresh token 或原始密钥。Gateway 属于独立候选，不在 v0.4.2 内，不能据此声称共享已可用。
+3. **independent**：自行维护独立 Provider 通用服务；选择后先只读预检，再分别确认依赖安装与服务安装。
+
+已有源码时运行 `sh onboard.sh choose`（Windows：`.\onboard.ps1 choose`）。非交互调用必须显式传 `--deployment-mode online|shared|independent`，缺省拒绝；路径选择不会安装任何内容。
+
+## Agent 部署与扫码引导
 
 v0.4.2 将扫码助手纳入安装流程；v0.4.1 不具备本节的统一引导入口。完整命令、桌面/服务器区别与验收状态见 [Agent 部署说明](./docs/AGENT_DEPLOYMENT.md)。安装前确认该版本已有正式 Release 和对应镜像。
 
 把仓库链接、你的官方知识库分享链接与下面提示词交给 Agent：
 
-> 请部署此仓库最新已发布稳定版本，先阅读 README 和 docs/AGENT_DEPLOYMENT.md。检查系统、Docker、端口及已有安装，使用仓库引导工具完成配置与扫码通路。不要输出凭证、覆盖数据或开放管理接口。打开官方 IMA 窗口前提醒我账号必须加入目标知识库；需要扫码、手机确认、加入知识库或系统授权时暂停。处理后继续验证，报告版本、访问地址、接入状态、未通过项目和恢复方式。真实问答须先说明并授权，不仅凭健康检查宣布成功。
+> 先阅读 README 和 docs/AGENT_DEPLOYMENT.md，用原生提问或编号菜单问我选 online、shared 还是 independent，并等待回答。不要先 clone、下载或安装。online 询问运营方地址与权限；shared 等待邀请，不索取原始凭证；只有 independent 才做只读依赖预检。缺依赖时说明官方安装来源、Docker 许可和系统人工步骤，征得明确同意后再操作。选择路径不等于同意安装。独立部署使用已发布稳定版本，检查端口及已有安装，不覆盖数据、不开放管理接口、不输出凭证。扫码、手机确认及知识库加入由我完成；真实问答须另行授权，不仅凭健康检查宣布成功。
 
 ## 先找到自己的入口
 
@@ -76,7 +88,9 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 ## 推荐安装入口
 
-**新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
+**先选路径，独立新安装使用 [Agent 引导](./docs/AGENT_DEPLOYMENT.md)。**运行 `sh onboard.sh preflight --deployment-mode independent` 检查系统架构、Docker CLI、daemon、Compose v2、权限与维护依赖。入口不再隐式下载 Node 或执行 npm ci；缺项返回 `stage/missing/next`，详见[依赖与人工步骤](./docs/DEPENDENCIES.md)。安装授权后工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
+
+不要求全局 Node：预检可复用原有私有运行时；明确批准后可执行 `sh onboard.sh runtime --deployment-mode independent --allow-bootstrap`，保留原有私有 Node 校验下载与锁定依赖准备。选择器及只读预检始终不 bootstrap。
 
 若 GitHub Releases 尚无 v0.4.2，当前源码仅供显式指定已审查源码/镜像的隔离演练。部署 v0.4.1 时使用其 tag 内的说明，不混用不同版本命令。发布状态与已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
 
