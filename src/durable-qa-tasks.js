@@ -9,6 +9,7 @@ class DurableQATasks {
     this.queue = queue;
     this.execute = execute;
     this.controllers = new Map();
+    this.activeConversations = new Map();
     this.pending = new Map();
     this.subscribers = new Map();
     this.closed = false;
@@ -41,10 +42,10 @@ class DurableQATasks {
   get available() { return !this.closed && this.store.available; }
   ensure() { if (!this.available) throw fault('task_store_unavailable'); }
 
-  hasUnfinishedConversation(conversationId, ownerKey) {
+  hasUnfinishedConversation(conversationId, ownerKey, excludedScope) {
     this.ensure();
     // Conversations are shared across API scopes, including queued recovery work.
-    return [...this.store.tasks.values()].some(task => task.ownerKey === ownerKey &&
+    return [...this.store.tasks.values()].some(task => task.ownerKey === ownerKey && task.scope !== excludedScope &&
       task.input.conversationId === conversationId &&
       (!TERMINAL.has(task.status) || task.completion || task.bindingPending));
   }
@@ -53,6 +54,12 @@ class DurableQATasks {
     this.ensure();
     const existing = this.store.find(ownerKey, scope, key, input);
     if (existing) return { task: this.store.publicTask(existing), isNew: false };
+    const conversation = this.conversations.require(input.conversationId, ownerKey);
+    const activeTask = this.activeConversations.get(input.conversationId);
+    if (this.hasUnfinishedConversation(input.conversationId, ownerKey, scope) ||
+        (conversation.activeRequest && (activeTask?.ownerKey !== ownerKey || activeTask?.scope !== scope))) {
+      throw fault('conversation_busy', 409);
+    }
     if (this.pending.size || !this.canSchedule({ scope, ownerKey, input })) throw fault('queue_full', 429);
     validateNew();
     const claim = this.store.create({ ownerKey, scope, key, input });
@@ -72,6 +79,7 @@ class DurableQATasks {
       if (controller.signal.aborted) return;
       this.conversations.beginRequest(task.input.conversationId, task.ownerKey);
       acquired = true;
+      this.activeConversations.set(task.input.conversationId, { ownerKey: task.ownerKey, scope: task.scope });
       this.store.update(task.id, current => { current.trace.executionStartedAt = this.store.now(); });
       let upstream = this.conversations.getUpstream(task.input.conversationId, task.ownerKey);
       let turn;
@@ -129,7 +137,10 @@ class DurableQATasks {
       catch { this.store.unavailable(); }
     }).finally(() => {
       this.controllers.delete(task.id);
-      if (acquired) this.conversations.endRequest(task.input.conversationId, task.ownerKey);
+      if (acquired) {
+        this.conversations.endRequest(task.input.conversationId, task.ownerKey);
+        this.activeConversations.delete(task.input.conversationId);
+      }
     });
   }
 

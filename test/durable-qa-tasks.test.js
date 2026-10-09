@@ -510,6 +510,70 @@ test('conversation deletion fails closed on unavailable durable storage after ow
   assert.ok(f.conversationStore.require(f.conversationId, owner));
 });
 
+test('cross-scope conversation conflict rejects before receipt and preserves exact replay', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { async *stream() {
+    await gate;
+    yield { type: 'delta', text: 'synthetic answer' };
+    yield { type: 'done' };
+  } });
+  t.after(() => release());
+  const manager = f.app.locals.durableQATasks;
+  const first = await (await f.submit('ordinary')).json();
+  const rejected = await f.submit('internal', {}, '/internal/provider-a/tasks', 'synthetic-service');
+  assert.equal(rejected.status, 409);
+  assert.equal((await rejected.json()).failureReason, 'conversation_busy');
+  assert.equal(manager.store.tasks.size, 1);
+  assert.equal((await f.submit('ordinary')).status, 200);
+  assert.equal(f.calls.length, 1);
+  release();
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal(manager.store.tasks.get(first.task.id).status, 'succeeded');
+  const accepted = await f.submit('internal', {}, '/internal/provider-a/tasks', 'synthetic-service');
+  assert.equal(accepted.status, 202);
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.conversationStore.getHistory(f.conversationId, owner).length, 4);
+});
+
+test('queued internal task blocks ordinary admission even without activeRequest', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { async *stream() {
+    await gate;
+    yield { type: 'delta', text: 'synthetic answer' };
+    yield { type: 'done' };
+  } });
+  t.after(() => release());
+  await f.submit('occupied');
+  const conversationId = f.conversationStore.create(owner).conversationId;
+  const queued = await f.submit('internal-queued', { conversationId }, '/internal/provider-a/tasks', 'synthetic-service');
+  assert.equal(queued.status, 202);
+  assert.equal(f.conversationStore.require(conversationId, owner).activeRequest, false);
+  const rejected = await f.submit('ordinary-conflict', { conversationId });
+  assert.equal(rejected.status, 409);
+  assert.equal((await rejected.json()).failureReason, 'conversation_busy');
+  assert.equal(f.app.locals.durableQATasks.store.tasks.size, 2);
+  release();
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+});
+
+test('legacy-owned active conversation rejects new durable admission without reserving the key', async t => {
+  const f = await fixture(t);
+  f.conversationStore.beginRequest(f.conversationId, owner);
+  const response = await f.submit('after-legacy');
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).failureReason, 'conversation_busy');
+  assert.equal(f.app.locals.durableQATasks.store.tasks.size, 0);
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.conversationStore.require(f.conversationId, owner).activeRequest, true);
+  f.conversationStore.endRequest(f.conversationId, owner);
+  assert.equal((await f.submit('after-legacy')).status, 202);
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal(f.calls.length, 1);
+});
+
 test('explicit empty upstream success fails without fabricated answer or history', async t => {
   const f = await fixture(t, { async *stream() { yield { type: 'done' }; } });
   const { task } = await (await f.submit()).json();
