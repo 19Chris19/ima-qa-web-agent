@@ -18,15 +18,17 @@ This API separates QA execution from HTTP subscribers. Legacy `/api/ask` and
   In configured-token mode, the bundled browser needs an authenticated proxy or
   client that supplies the ordinary bearer, as with the legacy APIs. Cookies alone
   never bypass the bearer check; no shared or internal token is embedded in JS.
-  An unconfigured internal service token still disables internal routes with 404.
-- Scheduler application identity is the trusted route scope, never an application
-  identity header supplied by a browser. Visitor is owner; lane is conversation ID.
-- Exact scheduler groups are `ordinary` and `internal` for durable routes, plus
-  the companion queue's `legacy` default for existing ask callers. This separates
-  internal website tasks from legacy bot asks, but all deployments using the same
-  configured service token share the internal group. The current single-token
-  auth infrastructure provides no finer trusted deployment identity; this is not
-  a claim of per-deployment fairness.
+  With no legacy or mapped internal credential, internal routes remain disabled (404).
+- Optional maintainer-managed `IMA_QA_APPLICATIONS_JSON` maps ordinary/internal
+  credentials to stable `application:<id>` scheduler/owner identities. Visitor and
+  conversation isolation follow that application identity, never browser-selected
+  application headers. See [Application Identity](APPLICATION_IDENTITY.md) for the
+  configuration, rotation and migration contract. The companion executor must
+  forward applicationKey for mapped durable tasks.
+- Legacy single-token/tokenless requests retain groups `ordinary` and `internal`
+  and their existing owner space. Independent deployments sharing one credential
+  are not independently fair; configure separate application IDs to distinguish
+  them. Legacy asks also pass trusted application/visitor/conversation keys.
 
 ## HTTP Contract
 
