@@ -3,12 +3,45 @@
 
   const terminal = status => ['succeeded', 'failed', 'cancelled', 'indeterminate'].includes(status);
 
-  function create(requestOptions) {
+  function create(requestOptions, { requestTimeoutMs = 15000, streamIdleMs = 45000 } = {}) {
+    async function observe(url, options, read) {
+      const controller = new AbortController();
+      let timer;
+      let rejectAbort;
+      const aborted = new Promise((_, reject) => { rejectAbort = () => reject(controller.signal.reason); });
+      controller.signal.addEventListener('abort', rejectAbort, { once: true });
+      const abort = () => controller.abort(options.signal.reason);
+      options.signal?.addEventListener('abort', abort, { once: true });
+      const arm = ms => {
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(new DOMException('任务连接超时，状态尚未确认', 'TimeoutError')), ms);
+      };
+      arm(requestTimeoutMs);
+      if (options.signal?.aborted) abort();
+      try {
+        return await Promise.race([aborted, (async () => {
+          controller.signal.throwIfAborted();
+          const response = await fetch(url, requestOptions({
+            ...options, credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+          }));
+          controller.signal.throwIfAborted();
+          return read(response, { signal: controller.signal, arm });
+        })()]);
+      } finally {
+        clearTimeout(timer);
+        options.signal?.removeEventListener('abort', abort);
+        controller.signal.removeEventListener('abort', rejectAbort);
+      }
+    }
+
     async function json(url, options = {}) {
-      const response = await fetch(url, requestOptions({ credentials: 'same-origin', cache: 'no-store', ...options }));
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw Object.assign(new Error(data.error || `请求失败 (${response.status})`), { status: response.status });
-      return data;
+      // Includes body consumption, not just response headers. A timed-out POST
+      // has an unknown outcome; callers must recover its requestKey via GET.
+      return observe(url, options, async response => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw Object.assign(new Error(data.error || `请求失败 (${response.status})`), { status: response.status });
+        return data;
+      });
     }
 
     async function identity() {
@@ -96,31 +129,36 @@
           onStatus(status);
           if (terminal(status)) return { task: snapshot.task };
 
-          const response = await fetch(`/api/tasks/${encodeURIComponent(id)}/events?after=${cursor}`, requestOptions({
-            signal, credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'text/event-stream' },
-          }));
-          if (!response.ok) throw Object.assign(new Error(`订阅失败 (${response.status})`), { status: response.status });
-          if (!response.body) throw new Error('浏览器不支持流式响应');
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = '';
-          const abort = () => { void reader.cancel().catch(() => {}); };
-          signal.addEventListener('abort', abort, { once: true });
-          try {
-            while (!signal.aborted) {
-              const { value, done } = await reader.read();
-              if (signal.aborted || done) break;
-              buffer += decoder.decode(value, { stream: true });
-              const parsed = consume(buffer);
-              buffer = parsed.remainder;
-              for (const event of parsed.events) receive(event);
-              if (terminal(status)) return { task: { id, status } };
+          const result = await observe(`/api/tasks/${encodeURIComponent(id)}/events?after=${cursor}`, {
+            signal, headers: { Accept: 'text/event-stream' },
+          }, async (response, observer) => {
+            if (!response.ok) throw Object.assign(new Error(`订阅失败 (${response.status})`), { status: response.status });
+            if (!response.body) throw new Error('浏览器不支持流式响应');
+            observer.arm(streamIdleMs);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            const abort = () => { void reader.cancel().catch(() => {}); };
+            observer.signal.addEventListener('abort', abort, { once: true });
+            try {
+              while (!observer.signal.aborted) {
+                const { value, done } = await reader.read();
+                if (observer.signal.aborted || done) break;
+                // Heartbeats and partial frames count as transport activity.
+                if (value.byteLength) observer.arm(streamIdleMs);
+                buffer += decoder.decode(value, { stream: true });
+                const parsed = consume(buffer);
+                buffer = parsed.remainder;
+                for (const event of parsed.events) receive(event);
+                if (terminal(status)) return { task: { id, status } };
+              }
+            } finally {
+              observer.signal.removeEventListener('abort', abort);
+              await reader.cancel().catch(() => {});
+              reader.releaseLock();
             }
-          } finally {
-            signal.removeEventListener('abort', abort);
-            await reader.cancel().catch(() => {});
-            reader.releaseLock();
-          }
+          });
+          if (result) return result;
           if (signal.aborted) return null;
         } catch (error) {
           if (signal.aborted) return null;

@@ -67,6 +67,11 @@ No production service, credential, backend, admin, vendor or renderer-core chang
   network errors and EOF reconnect only to that same task. No-progress retries
   wait 1/2/4/8/8 seconds, then expose a reconnect command. Progress resets the
   retry budget; a healthy long-running task has no total UI deadline.
+- JSON requests, including POST acknowledgement/body reads, and SSE headers
+  have a 15-second observer deadline. SSE byte inactivity has a 45-second
+  deadline reset by any received bytes, including heartbeat comments and
+  partial frames. Timeouts abort only that HTTP observation; ambiguous submit
+  identity is retained and recovery uses GET, never POST replay or DELETE.
 - The single stop control calls DELETE only after an explicit click. Lost stop
   acknowledgement is not reported as successful cancellation. GET confirms the
   terminal outcome; cancelled/failed/indeterminate never cause another POST.

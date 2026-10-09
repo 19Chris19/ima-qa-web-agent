@@ -29,6 +29,7 @@ async function page(t, options = {}) {
   if (options.reference) w.localStorage.setItem('ima-qa-task-reference', JSON.stringify(options.reference));
   const originalTimeout = w.setTimeout.bind(w);
   w.setTimeout = (callback, ms, ...args) => {
+    if (options.blackholePost && ms === 15000) return originalTimeout(callback, 10, ...args);
     if ([500, 1000, 2000, 4000, 8000].includes(ms)) { delays.push(ms); return originalTimeout(callback, 1, ...args); }
     return originalTimeout(callback, ms, ...args);
   };
@@ -56,6 +57,7 @@ async function page(t, options = {}) {
         requestKey: createHash('sha256').update(init.headers['Idempotency-Key']).digest('hex'),
       }, events: [] };
       records.push(record);
+      if (options.blackholePost) return new Promise(() => {});
       if (options.losePost) throw new TypeError('synthetic lost POST acknowledgement');
       return Response.json({ task: metadata(record) }, { status: 202 });
     }
@@ -184,6 +186,21 @@ test('lost POST acknowledgement recovers exact requestKey through GET, never res
   const key = p.records[0].task.requestKey;
   assert.ok(p.calls.some(call => call.url.includes(`requestKey=${key}`)));
   assert.equal(p.calls.filter(call => call.url === '/api/tasks').length, 1);
+  p.complete();
+  await waitFor(() => p.d.querySelector('#sendButton').getAttribute('aria-label') === '发送');
+});
+
+test('blackholed POST acknowledgement retains request identity and recovers with GET only', async t => {
+  const p = await page(t, { blackholePost: true });
+  p.submit(); await waitFor(() => p.streams.size === 1);
+  const posted = p.calls.find(call => call.url === '/api/tasks');
+  assert.equal(posted.signal.aborted, true);
+  const reference = JSON.parse(p.w.localStorage.getItem('ima-qa-task-reference'));
+  assert.equal(reference.requestKey, p.records[0].task.requestKey);
+  assert.equal(reference.id, p.records[0].task.id);
+  assert.ok(p.calls.some(call => call.url.includes(`requestKey=${reference.requestKey}`)));
+  assert.equal(p.calls.filter(call => call.url === '/api/tasks').length, 1);
+  assert.equal(p.calls.some(call => call.method === 'DELETE'), false);
   p.complete();
   await waitFor(() => p.d.querySelector('#sendButton').getAttribute('aria-label') === '发送');
 });
