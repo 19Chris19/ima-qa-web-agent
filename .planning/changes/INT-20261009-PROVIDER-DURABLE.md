@@ -26,5 +26,14 @@ storage failure aborts reception instead of falsely claiming durable progress.
 Known boundary: scheduler application groups are trusted route classes, not
 individually registered deployments. See docs/DURABLE_QA_TASKS.md.
 
+Final isolated verification (2026-10-09): 637 tests, 632 passed, 5 optional
+skips, no failures. Runtime source 866b731. The final paired Node chain ran
+370717ms, rotated its viewing connection once, dispatched once and completed
+once with exact whitespace. Final ARM64 Docker pair passed replay, ownership,
+history uniqueness, explicit stop, management blocking and restart recovery.
+An interrupted dispatched task became indeterminate and was not resubmitted.
+See the website docs/DURABLE_TASK_ACCEPTANCE.md for paired image identities.
+No actual IMA, Vercel, ngrok or live bot compatibility acceptance was performed.
+
 Rollback: stop task admission and drain active work before code rollback. Keep
 task ledgers and new conversations; never restore stale runtime snapshots.
