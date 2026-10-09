@@ -141,6 +141,7 @@ function seedAccountDirectory(accountDirectory, accounts = []) {
       continue;
     }
     if (accountDirectory.getAccount(account.id || account.name)) {
+      if (account.maxConcurrent !== undefined) accountDirectory.setMaxConcurrent(account.id || account.name, account.maxConcurrent);
       continue;
     }
     accountDirectory.upsertCapturedAccount({
@@ -151,6 +152,7 @@ function seedAccountDirectory(accountDirectory, accounts = []) {
       runtimeEnvPath: account.runtimeEnvPath,
       modelId: account.modelId,
       modelType: account.modelType,
+      maxConcurrent: account.maxConcurrent,
       tokenExpiresAt: account.tokenExpiresAt,
       refreshTokenExpiresAt: account.refreshTokenExpiresAt,
       refreshSkewMs: account.refreshSkewMs,

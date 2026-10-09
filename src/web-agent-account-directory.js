@@ -127,6 +127,7 @@ class WebAgentAccountDirectory {
         headers: config.headers,
         modelId: account.modelId,
         modelType: account.modelType,
+        maxConcurrent: normalizeAccountCapacity(account.maxConcurrent),
         runtimeEnvPath: account.runtimeEnvPath,
         tokenExpiresAt: account.runtime.tokenExpiresAt,
         refreshTokenExpiresAt: account.runtime.refreshTokenExpiresAt,
@@ -147,6 +148,16 @@ class WebAgentAccountDirectory {
     });
   }
 
+  setMaxConcurrent(accountId, value) {
+    const maxConcurrent = normalizeAccountCapacity(value);
+    this.reload();
+    const account = this.getAccount(accountId);
+    if (!account) throw new Error('account_not_found');
+    if (account.maxConcurrent === maxConcurrent) return;
+    account.maxConcurrent = maxConcurrent;
+    this._writeStore();
+  }
+
   upsertFromRuntimeEnv(options = {}, target = resolveAccountWriteTarget(this.load().accounts, options, { runtimeEnv: true })) {
     const { id, name, runtimeConfig } = target;
     const runtimeEnvPath = options.runtimeEnvPath || runtimeConfig.runtimeEnvPath || '';
@@ -156,6 +167,7 @@ class WebAgentAccountDirectory {
       knowledgeBaseId: options.knowledgeBaseId || runtimeConfig.knowledgeBaseId,
       modelId: runtimeConfig.modelId,
       modelType: runtimeConfig.modelType,
+      maxConcurrent: options.maxConcurrent,
       runtimeEnvPath,
       source: options.source || 'runtime-env',
       principalFingerprint: this._identityFingerprint(runtimeConfig.headers),
@@ -208,6 +220,7 @@ class WebAgentAccountDirectory {
       knowledgeBaseId: cleanRequired(options.knowledgeBaseId, 'knowledgeBaseId'),
       modelId: String(options.modelId || 'official_3'),
       modelType: Number(options.modelType || 3),
+      maxConcurrent: options.maxConcurrent,
       runtimeEnvPath,
       source: options.source || 'browser-capture',
       principalFingerprint: this._identityFingerprint(headers),
@@ -566,6 +579,7 @@ class WebAgentAccountDirectory {
     account.knowledgeBaseId = nextAccount.knowledgeBaseId;
     account.modelId = nextAccount.modelId;
     account.modelType = nextAccount.modelType;
+    account.maxConcurrent = normalizeAccountCapacity(nextAccount.maxConcurrent ?? existing?.maxConcurrent);
     account.runtimeEnvPath = nextAccount.runtimeEnvPath;
     account.source = nextAccount.source;
     account.principalFingerprint = nextAccount.principalFingerprint || account.principalFingerprint || '';
@@ -771,6 +785,7 @@ function normalizeStoredAccount(account) {
     knowledgeBaseId: cleanText(account.knowledgeBaseId),
     modelId: cleanText(account.modelId) || 'official_3',
     modelType: Number(account.modelType || 3),
+    maxConcurrent: normalizeAccountCapacity(account.maxConcurrent),
     runtimeEnvPath: cleanText(account.runtimeEnvPath),
     source: cleanText(account.source) || 'unknown',
     principalFingerprint: cleanText(account.principalFingerprint),
@@ -780,6 +795,12 @@ function normalizeStoredAccount(account) {
     events: Array.isArray(account.events) ? account.events.slice(-DEFAULT_EVENT_LIMIT) : [],
     secret: account.secret || null,
   };
+}
+
+function normalizeAccountCapacity(value = 1) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 1) throw new TypeError('Account maxConcurrent must be a positive integer');
+  return number;
 }
 
 function parseRuntimeEnvText(text) {

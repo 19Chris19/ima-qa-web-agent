@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { writePrivateJson } = require('./durable-qa-store');
 
 const DEFAULT_CONVERSATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_CONVERSATION_MAX_TURNS = 12;
@@ -135,6 +136,24 @@ class ConversationStore {
     return this.setUpstream(id, {}, ownerKey);
   }
 
+  bindTaskUpstream(id, upstream, ownerKey = '') {
+    const conversation = this.require(id, ownerKey);
+    const previous = structuredClone(conversation);
+    try {
+      for (const key of ['accountId', 'sessionId']) {
+        const next = cleanText(upstream[key]);
+        if (!next) continue;
+        if (conversation.upstream[key] && conversation.upstream[key] !== next) throw new Error('task_affinity_conflict');
+        conversation.upstream[key] = next;
+      }
+      this.touch(conversation);
+      this._write();
+    } catch (error) {
+      this.conversations.set(id, previous);
+      throw error;
+    }
+  }
+
   getUpstream(id, ownerKey = '') {
     const conversation = this.require(id, ownerKey);
     return {
@@ -166,6 +185,31 @@ class ConversationStore {
     return this.publicState(conversation);
   }
 
+  appendTaskTurn(id, taskId, question, answer, metadata = {}, ownerKey = '', upstream = {}) {
+    const conversation = this.require(id, ownerKey);
+    if (Object.hasOwn(conversation.completedTasks || {}, taskId)) return this.publicState(conversation);
+    const previous = structuredClone(conversation);
+    const now = this.now();
+    try {
+      conversation.completedTasks ||= {};
+      if (Object.keys(conversation.completedTasks).length >= 10000) throw new Error('task_history_capacity');
+      // Never age out receipts: old completion journals can recover after newer turns.
+      conversation.completedTasks[taskId] = now;
+      conversation.turns.push({ taskId, question, answer, createdAt: now,
+        sources: normalizePublicSources(metadata.sources, answer),
+        searchSummary: normalizeSearchSummary(metadata.searchSummary), evidence: normalizeEvidence(metadata) });
+      conversation.turns = conversation.turns.slice(-this.maxTurns);
+      conversation.upstream = { accountId: cleanText(upstream.accountId), sessionId: cleanText(upstream.sessionId) };
+      if (!conversation.title) conversation.title = conversationTitle(question);
+      this.touch(conversation, now);
+      this._write();
+      return this.publicState(conversation);
+    } catch (error) {
+      this.conversations.set(conversation.id, previous);
+      throw error;
+    }
+  }
+
   getHistory(id, ownerKey = '') {
     const conversation = this.require(id, ownerKey);
     return conversation.turns.flatMap((turn) => [
@@ -192,11 +236,13 @@ class ConversationStore {
         {
           role: 'user',
           content: turn.question,
+          ...(turn.taskId ? { taskId: turn.taskId } : {}),
           createdAt: new Date(turn.createdAt).toISOString(),
         },
         {
           role: 'assistant',
           content: turn.answer,
+          ...(turn.taskId ? { taskId: turn.taskId } : {}),
           createdAt: new Date(turn.createdAt).toISOString(),
           ...(turn.sources?.length ? { sources: turn.sources } : {}),
           ...(turn.searchSummary ? { searchSummary: turn.searchSummary } : {}),
@@ -297,22 +343,13 @@ class ConversationStore {
         title: conversation.title,
         mode: conversation.mode,
         turns: conversation.turns,
+        completedTasks: conversation.completedTasks || {},
         upstream: conversation.upstream,
       })),
     };
     const directory = path.dirname(this.storePath);
-    const tempPath = path.join(
-      directory,
-      `.${path.basename(this.storePath)}.${process.pid}.${Date.now()}.tmp`,
-    );
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
-    fs.renameSync(tempPath, this.storePath);
-    try {
-      fs.chmodSync(this.storePath, 0o600);
-    } catch {
-      // Best effort only; write mode covers normal creation.
-    }
+    writePrivateJson(this.storePath, payload);
   }
 }
 
@@ -332,11 +369,13 @@ function normalizeConversation(value) {
     expiresAt,
     title: conversationTitle(value?.title),
     mode: value.mode === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge',
+    completedTasks: value.completedTasks && typeof value.completedTasks === 'object' ? value.completedTasks : {},
     turns: Array.isArray(value.turns)
       ? value.turns
           .map((turn) => ({
-            question: truncate(turn?.question, 2000),
-            answer: truncate(turn?.answer, 8000),
+            ...(turn?.taskId ? { taskId: turn.taskId } : {}),
+            question: turn?.taskId ? String(turn.question || '') : truncate(turn?.question, 2000),
+            answer: turn?.taskId ? String(turn.answer || '') : truncate(turn?.answer, 8000),
             createdAt: Number(turn?.createdAt) || updatedAt,
             sources: normalizePublicSources(turn?.sources),
             searchSummary: normalizeSearchSummary(turn?.searchSummary),
