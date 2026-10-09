@@ -71,6 +71,7 @@ function createApp({
   app.locals.imaQaAskQueue = askQueue;
   app.locals.askLimits = config.limits;
   app.locals.accountPoolExerciseManager = accountPoolExerciseManager || null;
+  const qualificationMaintenanceActive = () => Boolean(app.locals.knowledgeAgentQualificationManager?.isMaintenanceActive?.());
   const rateLimiter = createRateLimiter(config.rateLimit);
   const internalIdempotency = config.conversations?.storePath
     ? new InternalAskIdempotency({ storePath: `${config.conversations.storePath}.internal-idempotency.json` }) : null;
@@ -126,6 +127,9 @@ function createApp({
   });
   registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
     ordinaryAuth, internalAuth, getConversationOwnerKey, validateAskRequest, botCompatibility, assertBotPolicy, assertBotMode,
+    checkMaintenance() {
+      if (qualificationMaintenanceActive()) throw taskFault('maintenance_exercise', 503);
+    },
     admit(req, res, scope) {
       if (scope === 'ordinary' && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) throw taskFault('maintenance_exercise', 503);
       const limit = rateLimiter.consume(getClientIp(req));
@@ -249,13 +253,15 @@ function createApp({
   const askHandler = async (req, res) => {
     const requestId = crypto.randomUUID();
     const isSse = wantsSse(req);
-    if (!req.isInternalProviderADeepAsk && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) {
+    const qualificationMaintenance = qualificationMaintenanceActive();
+    if (qualificationMaintenance ||
+        (!req.isInternalProviderADeepAsk && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.())) {
       return rejectAskRequest({
         req,
         res,
         requestId,
         statusCode: 503,
-        message: '管理员正在进行账号池容量演练，请稍后重试',
+        message: qualificationMaintenance ? '管理员正在进行账号池维护，请稍后重试' : '管理员正在进行账号池容量演练，请稍后重试',
         failureReason: 'maintenance_exercise',
       });
     }
@@ -400,6 +406,12 @@ function createApp({
     '/internal/provider-a/deep-ask',
     internalAuth,
     markInternalProviderADeepAsk,
+    (req, res, next) => {
+      // Reject before claiming a key; askHandler rechecks after async ledger I/O.
+      if (!qualificationMaintenanceActive()) return next();
+      return rejectAskRequest({ req, res, requestId: crypto.randomUUID(), statusCode: 503,
+        message: '管理员正在进行账号池维护，请稍后重试', failureReason: 'maintenance_exercise' });
+    },
     ...(botCompatibility ? [(req, res, next) => isExtendedBotRequest(req.body) ? requireProviderAIdempotencyKey(req, res, next) : next()] : []),
     createInternalIdempotencyMiddleware({ ledger: internalIdempotency, conversations, config, webReadiness, botCompatibility }),
     askHandler,

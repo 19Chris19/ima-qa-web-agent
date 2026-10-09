@@ -15,6 +15,7 @@ RUN npm ci --omit=dev
 COPY public ./public
 COPY src ./src
 COPY scripts ./scripts
+COPY eval/questions.jsonl ./eval/questions.jsonl
 COPY provider-a-server.js ./
 
 EXPOSE 3000

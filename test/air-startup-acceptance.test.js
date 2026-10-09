@@ -8,7 +8,7 @@ const os = require('node:os');
 const http = require('node:http');
 const net = require('node:net');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { setTimeout: delay } = require('node:timers/promises');
 const { getConfig } = require('../src/config');
 const { createApp } = require('../src/app');
@@ -47,6 +47,36 @@ function environment(directory) {
     IMA_QA_EXERCISE_REPORT_STORE_PATH: path.join(directory, 'exercise-reports.json'),
     IMA_QA_API_TOKEN: 'your-synthetic-api', IMA_QA_INTERNAL_SERVICE_TOKEN: 'your-synthetic-internal',
     IMA_QA_ADMIN_TOKEN: 'your-synthetic-admin', IMA_QA_RATE_LIMIT_MAX: '0' };
+}
+
+function dockerCopyLayout(t) {
+  const directory = temporaryDirectory(t);
+  const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
+  const instructions = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8').split('\n').filter(line => /^COPY\s/u.test(line));
+  const publicInputs = new Set(['package.json', 'package-lock.json', 'public', 'src', 'scripts',
+    'provider-a-server.js', 'eval/questions.jsonl']);
+  // Materialize only tracked, named COPY inputs, never untracked runtime files.
+  for (const instruction of instructions) {
+    const fields = instruction.trim().split(/\s+/u).slice(1);
+    const destination = fields.pop();
+    assert.ok(destination && !path.isAbsolute(destination) && !destination.split('/').includes('..'));
+    for (const source of fields) {
+      assert.ok(publicInputs.has(source), `Unreviewed Docker COPY input: ${source}`);
+      const directorySource = fs.statSync(path.join(root, source)).isDirectory();
+      const selected = tracked.filter(file => directorySource ? file.startsWith(`${source}/`) : file === source);
+      assert.ok(selected.length, `Missing tracked COPY input: ${source}`);
+      for (const file of selected) {
+        const relative = directorySource ? path.relative(source, file)
+          : destination.endsWith('/') || destination === '.' ? path.basename(file) : '';
+        const target = path.join(directory, destination, relative);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.join(root, file), target);
+      }
+    }
+  }
+  // Reuse installed dependencies only; this is COPY-layout acceptance, not an image build.
+  fs.symlinkSync(path.join(root, 'node_modules'), path.join(directory, 'node_modules'), 'dir');
+  return directory;
 }
 
 async function listen(server) {
@@ -96,10 +126,11 @@ test('Air opt-in alone cannot declare missing runtime dependencies mounted', t =
     'A constant flag is not evidence of Air runtime mounting');
 });
 
-test('real Air entrypoint mounts health, capacity and admin with no outbound traffic', { timeout: 20000 }, async t => {
+for (const dockerLayout of [false, true]) test(`${dockerLayout ? 'Docker COPY layout' : 'real Air entrypoint'} mounts health, capacity and admin with no outbound traffic`, { timeout: 20000 }, async t => {
   const directory = temporaryDirectory(t);
+  const startupRoot = fs.realpathSync(dockerLayout ? dockerCopyLayout(t) : root);
   // Runtime loader probes this exact path. Refuse to run against any local env file.
-  assert.equal(fs.existsSync(path.join(root, '.env')), false, 'Do not read a real app .env');
+  assert.equal(fs.existsSync(path.join(startupRoot, '.env')), false, 'Do not read a real app .env');
   const env = environment(directory);
   let port = 0;
   try { getConfig({ ...env, PORT: '0' }); }
@@ -113,13 +144,13 @@ test('real Air entrypoint mounts health, capacity and admin with no outbound tra
   // Fail the process even if application code catches a network error.
   const guard = `import net from 'node:net'; import fs from 'node:fs';
     import { createRequire } from 'node:module';
-    const require = createRequire(${JSON.stringify(path.join(root, 'provider-a-server.js'))});
+    const require = createRequire(${JSON.stringify(path.join(startupRoot, 'provider-a-server.js'))});
     const blocked = () => { process.stderr.write('AIR_ACCEPTANCE_OUTBOUND_BLOCKED\\n'); process.exit(86); };
     net.Socket.prototype.connect = blocked; globalThis.fetch = blocked;
-    const allowedEnvPaths = ${JSON.stringify([path.join(root, '.env'), env.IMA_WEB_AGENT_RUNTIME_ENV_PATH])};
+    const allowedEnvPaths = ${JSON.stringify([path.join(startupRoot, '.env'), env.IMA_WEB_AGENT_RUNTIME_ENV_PATH])};
     require('dotenv').config = options => {
       if (!allowedEnvPaths.includes(options?.path) || fs.existsSync(options.path)) {
-        process.stderr.write('AIR_ACCEPTANCE_ENV_FILE_BLOCKED\\n'); process.exit(87);
+        process.stderr.write('AIR_ACCEPTANCE_ENV_FILE_BLOCKED ' + JSON.stringify(options?.path) + '\\n'); process.exit(87);
       }
       return { parsed: undefined };
     };
@@ -137,7 +168,7 @@ test('real Air entrypoint mounts health, capacity and admin with no outbound tra
       return app;
     };`;
   const child = spawn(process.execPath, ['--import', `data:text/javascript,${encodeURIComponent(guard)}`,
-    path.join(root, 'provider-a-server.js')], { cwd: directory, env: { ...env, PORT: String(port) },
+    path.join(startupRoot, 'provider-a-server.js')], { cwd: directory, env: { ...env, PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '', exited = false;
   child.stdout.on('data', chunk => { output += chunk; });
@@ -189,9 +220,10 @@ test('real Air entrypoint mounts health, capacity and admin with no outbound tra
     const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
     const result = await exit;
     clearTimeout(timer);
+    t.diagnostic(`${dockerLayout ? 'Docker COPY layout' : 'Source entrypoint'} child closed: code=${result.code}, signal=${result.signal}`);
     assert.notEqual(result.signal, 'SIGKILL', 'Child must terminate without forced kill');
     assert.notEqual(result.code, 86, 'Startup attempted an outbound connection');
-    assert.notEqual(result.code, 87, 'Startup attempted to read an actual env file');
+    assert.notEqual(result.code, 87, `Startup attempted to read an actual env file:\n${output}`);
   }
 });
 
@@ -328,5 +360,10 @@ test('five Air basic proofs mount through app and execute five native durable HT
     await runtime?.close();
     if (server) await close(server);
     await close(upstream);
+    t.diagnostic(`Synthetic resources closed: providerListening=${Boolean(server?.listening)}, upstreamListening=${upstream.listening}, activeRequests=${app?.locals.imaQaAskQueue.stats().activeRequests}, accountLeases=${pool?.accounts.reduce((sum, row) => sum + row.activeRequests, 0)}, blockedConnections=${blockedConnections}`);
+    assert.equal(server?.listening, false);
+    assert.equal(upstream.listening, false);
+    assert.equal(app?.locals.imaQaAskQueue.stats().activeRequests, 0);
+    assert.equal(pool?.accounts.reduce((sum, row) => sum + row.activeRequests, 0), 0);
   }
 });
