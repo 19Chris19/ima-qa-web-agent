@@ -31,6 +31,12 @@ tests passed 114/114. Historical SSE/task wire tests verify one exclusion record
 two distinct accounts, no context consume, and durable restart preservation.
 Whitespace checks pass. Parent owns the final combined full/container run.
 
+Follow-up for website c796016: publish mode in both nested and legacy capacity
+shapes using snapshot mode then config mode. Use the same effective mode for
+capability support. One eight-case regression (nested/legacy, native/classic,
+missing snapshot mode and explicit snapshot overrides) failed before the fix;
+post-fix app/mount/Air-startup tests passed 107/107. Whitespace checks pass.
+
 ## Rollout and Rollback
 
 Parent cherry-picks this commit and coordinates BFF website-snapshot preference.

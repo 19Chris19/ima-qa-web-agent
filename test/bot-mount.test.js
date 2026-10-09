@@ -65,7 +65,7 @@ async function fixture(t, options = {}) {
   };
   const adapter = { snapshot: () => state, ...(options.adapter || {}) };
   const app = createApp({ config, conversationStore: store, imaWebAgentClient: options.pool || pool,
-    webReadiness: { mode: options.serverMode || mode, snapshot: () => ({ mode: options.serverMode || mode, generation: 4, capacity: options.websiteCapacity ?? 2, totalSlots: 2, accounts: [],
+    webReadiness: { mode: options.serverMode || mode, snapshot: () => ({ mode: options.omitSnapshotMode ? undefined : options.serverMode || mode, generation: 4, capacity: options.websiteCapacity ?? 2, totalSlots: 2, accounts: [],
       schedulable: 2, eligibleAccounts: 2, totalAccounts: 2, schedulableAccounts: 2, knowledgeAgentCapacity: 2 }) },
     ...(options.disabled ? {} : options.airPolicyCapacity ? { airPolicyCapacity: {
       profileSnapshot: () => state.profile, policyCapacitySnapshot: () => state.policyCapacity,
@@ -458,6 +458,26 @@ test('native empty pool keeps contract support separate from zero account capaci
     const website = capacity.website || capacity;
     assert.equal(website.features.knowledge_agent_keyed_sse_v1, true);
     assert.equal(website.policies.knowledge_agent.max_concurrent, 0);
+  }
+});
+
+test('website mode uses snapshot then config fallback in nested and legacy empty-pool shapes', async t => {
+  for (const disabled of [false, true]) for (const options of [
+    { mode: 'knowledge_agent', omitSnapshotMode: true, expected: 'knowledge_agent' },
+    { mode: 'classic_knowledge', omitSnapshotMode: true, expected: 'classic_knowledge' },
+    { mode: 'knowledge_agent', serverMode: 'classic_knowledge', expected: 'classic_knowledge' },
+    { mode: 'classic_knowledge', serverMode: 'knowledge_agent', expected: 'knowledge_agent' },
+  ]) {
+    const f = await fixture(t, { ...options, disabled, websiteCapacity: 0 });
+    const response = await f.request('/internal/provider-a/capacity');
+    assert.equal(response.status, 200);
+    const capacity = await response.json();
+    const website = capacity.website || capacity;
+    assert.equal(website.schemaVersion, 1);
+    assert.equal(website.mode, options.expected);
+    assert.equal(website.features.knowledge_agent_keyed_sse_v1, options.expected === 'knowledge_agent');
+    assert.equal(website.policies.knowledge_agent.max_concurrent, 0);
+    if (disabled) assert.equal(capacity.website, undefined);
   }
 });
 

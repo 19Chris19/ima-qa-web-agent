@@ -183,17 +183,18 @@ function createApp({
   app.get('/internal/provider-a/capacity', internalAuth, (_req, res) => {
     const state = webReadiness?.snapshot();
     const queue = askQueue.stats();
-    const nativeCapacity = config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent'
-      ? Math.max(0, Math.min(Number(state.knowledgeAgentCapacity) || 0, Number(state.capacity) || 0)) : 0;
+    const mode = state?.mode || config.webAgent?.mode;
+    const nativeCapacity = config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent'
+      ? Math.max(0, Math.min(Number(state?.knowledgeAgentCapacity) || 0, Number(state?.capacity) || 0)) : 0;
     res.setHeader('Cache-Control', 'no-store');
-    const website = { schemaVersion: 1, generation: state?.generation || 0,
+    const website = { schemaVersion: 1, generation: state?.generation || 0, mode,
       maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
       totalSlots: state?.totalSlots ?? 0, eligibleAccounts: state?.eligibleAccounts ?? 0,
       totalAccounts: state?.totalAccounts ?? 0, schedulableAccounts: state?.schedulableAccounts ?? 0,
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
       features: {
-        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent',
+        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
       },
