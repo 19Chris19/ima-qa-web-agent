@@ -62,6 +62,7 @@ function createAskQueue(options = {}) {
         if (entry.started) {
           return;
         }
+        entry.rejected = true;
         const index = queue.indexOf(entry);
         if (index >= 0) {
           queue.splice(index, 1);
@@ -120,6 +121,12 @@ function createAskQueue(options = {}) {
     preparing = true;
     try {
       entry.resource = entry.tryAcquire();
+      if (entry.rejected || entry.signal?.aborted) {
+        try { entry.resource?.release(); }
+        catch { resourceReleaseErrors += 1; }
+        entry.resource = null;
+        return false;
+      }
       return Boolean(entry.resource);
     } catch (error) {
       const index = queue.indexOf(entry);

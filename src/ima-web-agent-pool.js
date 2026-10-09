@@ -30,6 +30,7 @@ class IMAWebAgentPool {
     this.now = options.now || Date.now;
     this.waiters = new Set();
     this.availabilityListeners = new Set();
+    this.availabilityObserverErrors = 0;
     this.taskLeases = new WeakMap();
     this.cooldownMs = Number(config.accountCooldownMs || DEFAULT_ACCOUNT_COOLDOWN_MS);
     this.maxConsecutiveErrors = Number(
@@ -525,32 +526,39 @@ class IMAWebAgentPool {
 
   _drainWaiters() {
     for (const waiter of [...this.waiters]) {
-      if (waiter.kind === 'any') {
-        const account = this._leaseAccount(waiter.eligible);
-        if (account) {
-          waiter.resolve(account);
-        } else if (!this._hasPotentialAvailability(waiter.eligible)) {
-          waiter.reject(new NoAvailableWebAgentAccountError());
+      try {
+        if (waiter.kind === 'any') {
+          const account = this._leaseAccount(waiter.eligible);
+          if (account) {
+            waiter.resolve(account);
+          } else if (!this._hasPotentialAvailability(waiter.eligible)) {
+            waiter.reject(new NoAvailableWebAgentAccountError());
+          }
+          continue;
         }
-        continue;
-      }
-      if (waiter.account.disabled) {
-        waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号已不可用，请新建会话后继续'));
-        continue;
-      }
-      if (waiter.account.cooldownUntil > this.now()) {
-        waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号正在冷却，请稍后重试'));
-        continue;
-      }
-      if (!waiter.account.maintenanceOperation && waiter.account.activeRequests < waiter.account.maxConcurrent && waiter.account.cooldownUntil <= this.now()) {
-        waiter.resolve(this._reserveAccount(waiter.account));
+        if (waiter.account.disabled) {
+          waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号已不可用，请新建会话后继续'));
+          continue;
+        }
+        if (waiter.account.cooldownUntil > this.now()) {
+          waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号正在冷却，请稍后重试'));
+          continue;
+        }
+        if (!waiter.account.maintenanceOperation && waiter.account.activeRequests < waiter.account.maxConcurrent && waiter.account.cooldownUntil <= this.now()) {
+          waiter.resolve(this._reserveAccount(waiter.account));
+        }
+      } catch (error) {
+        waiter.reject(error);
       }
     }
   }
 
   _notifyAvailability() {
     this._drainWaiters();
-    for (const listener of this.availabilityListeners) listener();
+    for (const listener of this.availabilityListeners) {
+      try { listener(); }
+      catch { this.availabilityObserverErrors += 1; }
+    }
   }
 
   _markSuccess(account) {
