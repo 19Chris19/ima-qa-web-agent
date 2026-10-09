@@ -59,3 +59,18 @@ One atomic commit keeps transport, both entrypoints, regression coverage and
 contract documentation together. Rollback: revert this frontend commit; no
 runtime migration or task deletion. Local reference stores IDs/request hash
 only; refreshed task events/history remain the server's authority.
+
+## Follow-up: Bounded Observer Connections
+
+Parent review identified half-open connections that never reach EOF or reject.
+Bound task JSON requests (including POST confirmation and body reads) to 15s;
+bound SSE response headers to 15s and byte inactivity to 45s. Heartbeat and
+partial-frame bytes reset the stream watchdog. These deadlines abort only the
+observer request, never DELETE or resubmit a task. Ambiguous POST recovery keeps
+the saved request hash and uses GET lookup. Existing finite GET backoff remains.
+Legacy non-IMA transport is unchanged. Synthetic virtual-clock and jsdom tests
+cover headers/body blackholes, heartbeat resets, cleanup and ambiguous recovery.
+Verification: 55/55 focused frontend tests passed; full `npm test --
+--test-reporter=dot` passed (exit 0, 577 reported tests). `stopTask` retains its
+existing GET confirmation after explicit DELETE. No backend edits, live IMA,
+service changes or pushes. Rollback this follow-up commit only.
