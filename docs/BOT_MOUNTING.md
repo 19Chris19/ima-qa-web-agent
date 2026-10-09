@@ -37,10 +37,31 @@ Pair keys are hashes of trusted application identity, the full normalized contex
 binding (account/group/route and both generations), and the pair ref. Exact binding
 permits distinct visitor IDs to join; absent a binding, the trusted owner is the
 fallback scope. Neither raw group identifiers nor the internal pair key reach the
-upstream client. The specified immutable release's bot caller has no parallel
-wire fields; historical `5a675cbe` supplies those client fields, while its runner's
-client identity is account/group/sender. Current paired caller parity requires
-its exact code revision, not an assumption that both visitors match.
+upstream client.
+
+Prior paired caller parity is verified from Git code, not production traffic:
+`836ebe17` and its later `a1e43e0d` version of
+`apps/wechat-qa-bot/src/dual-source-retrieval.js` both pass the same
+`clientIdentity: [task.account_id, task.group_id, task.sender_id]` to both legs.
+`provider-a-client.js` hashes that identity into `X-IMA-Client-ID`; leg/policy are
+not part of the visitor identity. The pair ref is shared, while request keys and
+conversation IDs are leg-specific. These callers pass no recent-context binding,
+so both legs correctly join the trusted application/owner fallback namespace.
+Synthetic SSE/task tests reproduce that wire and assert one shared exclusion
+record, two distinct accounts, no context consume and durable recovery. Separate
+tests cover exact-binding cross-visitor requests.
+
+Actual caller code was separately checked in release
+`0ac50d7a49da0ba6a1808f58f91e0730ac4d0136c43781d8ad7e89aae3f4e001`:
+`src/task-runner.js:529` constructs account/group/route/route-generation/feature-
+generation binding; `:557` makes one ask with identity account/group/sender.
+`src/ima/provider-a-client.js:93` serializes its body and `:201` hashes visitor
+identity. There is no dual-source module and no parallel ref/leg sender in this
+release's `src` JavaScript; only the capacity reader retains paired fields.
+Consequently there are no two active wire legs whose bindings or visitors can be
+compared in this version. Historical paired parity and current single-ask binding
+compatibility are separate findings, not evidence of live paired execution.
+No env, runtime data, logs, private questions or live traffic were read.
 
 Active and incomplete pair records never expire. Only two consumed, released legs
 start the five-minute cleanup period. Records are capped at 4096; no protected
@@ -75,7 +96,11 @@ the additive `website` object retains the website-native mode-specific snapshot.
 The bot execution ceiling uses the shared eligible-account union helper, not the
 website's current native-only capacity; busy eligible slots remain in that ceiling.
 The top-level website feature `knowledge_agent_keyed_sse_v1` is false in classic
-website mode so existing BFFs cannot confuse bot qualification with website readiness.
+website mode, but remains true in native mode even with zero accounts. It reports
+contract support, not readiness. Website consumers must read `capacity.website`
+when present (falling back to the legacy top-level shape), so bot qualifications
+cannot become website capacity. The BFF's contract and account-capacity checks are
+separate; a native empty pool is compatible with zero capacity, not incompatible.
 
 `healthCapabilities` is also an app option for sanitized existing capability
 declarations. Recent-context v1/v2 is advertised only with the bot adapter and

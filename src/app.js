@@ -193,7 +193,7 @@ function createApp({
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
       features: {
-        knowledge_agent_keyed_sse_v1: nativeCapacity > 0,
+        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
       },
