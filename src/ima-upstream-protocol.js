@@ -1,5 +1,7 @@
 'use strict';
 
+const { setImmediate: yieldToEventLoop } = require('node:timers/promises');
+
 const DEFAULT_MAX_EVENT_BYTES = 896 * 1024;
 const DEFAULT_MAX_STREAM_BYTES = 1024 * 1024;
 const MAX_NORMALIZED_SOURCES = 100;
@@ -50,6 +52,8 @@ async function* parseIMAWebAgentStream(response, options = {}) {
   let terminalSeen = false;
   let semanticEventSeen = false;
   let statusNoticeSeen = false;
+  let uninterruptedEvents = 0;
+  let sliceStartedAt = Date.now();
 
   try {
     for await (const chunk of response.body) {
@@ -63,6 +67,14 @@ async function* parseIMAWebAgentStream(response, options = {}) {
       buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n/gu, '\n');
       let boundary = buffer.indexOf('\n\n');
       while (boundary >= 0) {
+        // Durable consumers may synchronously persist each frame. Let observers,
+        // cancellation and lease heartbeats run even for one dense network chunk.
+        if (uninterruptedEvents >= 32 || Date.now() - sliceStartedAt >= 8) {
+          await yieldToEventLoop();
+          uninterruptedEvents = 0;
+          sliceStartedAt = Date.now();
+        }
+        uninterruptedEvents += 1;
         const block = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
         if (Buffer.byteLength(block, 'utf8') > maxEventBytes) {
