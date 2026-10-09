@@ -12,6 +12,7 @@ const { IMAUpstreamProtocolError } = require('./ima-upstream-protocol');
 const { DurableQATasks } = require('./durable-qa-tasks');
 const { registerDurableQARoutes } = require('./durable-qa-routes');
 const { fault: taskFault } = require('./durable-qa-store');
+const { safeTaskFailureReason } = require('./durable-qa-failure');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -62,13 +63,14 @@ function createApp({
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   let durableTasks = null;
-  if (config.qaProvider === 'ima-web-agent' && imaWebAgentClient && conversations.persist &&
-      config.conversations?.storePath && config.durableTasks?.enabled !== false) {
+  const durableTasksConfigured = Boolean(config.qaProvider === 'ima-web-agent' && imaWebAgentClient && conversations.persist &&
+      config.conversations?.storePath && config.durableTasks?.enabled !== false);
+  if (durableTasksConfigured) {
     try {
       durableTasks = new DurableQATasks({
         directory: config.durableTasks?.storePath || `${config.conversations.storePath}.tasks`,
         conversations, queue: askQueue,
-        execute: ({ task, signal, res, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding }) => dispatchAsk({
+        execute: ({ task, signal, res, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity }) => dispatchAsk({
           config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
           history: conversations.getHistory(task.input.conversationId, task.ownerKey),
           question: task.input.question,
@@ -78,7 +80,7 @@ function createApp({
             headersMs: config.concurrency?.taskConnectTimeoutMs || 60000,
             idleMs: config.concurrency?.taskIdleTimeoutMs || 600000,
           },
-          onDispatch, onUpstreamEvent, onUpstreamBinding,
+          onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity, durableTask: true,
           isTimedOut: () => false, conversationId: task.input.conversationId,
           conversationStore: taskConversations, ownerKey: task.ownerKey,
         }),
@@ -179,11 +181,16 @@ function createApp({
 
   app.delete('/api/conversations/:conversationId', requireApiToken(config.security?.apiToken), (req, res) => {
     const ownerKey = getConversationOwnerKey(req, res);
+    let conversation;
     try {
-      if (conversations.require(req.params.conversationId, ownerKey).activeRequest) {
-        return res.status(409).json({ success: false, error: 'conversation_busy' });
-      }
-    } catch { /* Preserve the legacy not-found response below. */ }
+      conversation = conversations.require(req.params.conversationId, ownerKey);
+    } catch { return res.status(404).json({ success: false }); }
+    if (durableTasksConfigured && !durableTasks?.available) {
+      return res.status(503).json({ success: false, error: 'task_store_unavailable' });
+    }
+    if (conversation.activeRequest || durableTasks?.hasUnfinishedConversation(req.params.conversationId, ownerKey)) {
+      return res.status(409).json({ success: false, error: 'conversation_busy' });
+    }
     const deleted = conversations.delete(req.params.conversationId, ownerKey);
     res.status(deleted ? 200 : 404).json({ success: deleted });
   });
@@ -669,6 +676,7 @@ async function handleStreamingWebAgentAsk(context) {
       signal,
       ...(context.transportTimeouts ? { transportTimeouts: context.transportTimeouts } : {}),
       ...(context.onDispatch ? { onDispatch: context.onDispatch } : {}),
+      ...(context.onUpstreamActivity ? { onActivity: context.onUpstreamActivity } : {}),
       onSession(nextSessionId) {
         sessionId = nextSessionId;
         context.onUpstreamBinding?.({ accountId, sessionId });
@@ -719,6 +727,7 @@ async function handleStreamingWebAgentAsk(context) {
       writeSse(res, 'delta', { text: finalText, requestId });
     }
 
+    if (context.durableTask && answer === '') throw new IMAUpstreamProtocolError('upstream_empty_answer');
     const answerForHistory = answer || noReliableContentAnswer();
     const evidence = sourceEvidence(sourceKinds, sources.length, sourceIntent);
     conversationStore.setUpstream(conversationId, { accountId, sessionId }, ownerKey);
@@ -1323,6 +1332,8 @@ function getErrorStatusCode(error) {
 }
 
 function classifyFailureReason(error) {
+  const safeCode = safeTaskFailureReason(error?.code, null);
+  if (safeCode) return safeCode;
   if (error instanceof IMAUpstreamProtocolError) {
     return error.code;
   }
