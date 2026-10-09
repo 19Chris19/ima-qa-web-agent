@@ -26,6 +26,7 @@
 > 参见[任务接口与恢复边界](./docs/DURABLE_QA_TASKS.md)：断开观看不取消任务，
 > 内置问答页要求 `durable_qa_tasks_v1`，旧接口继续兼容。
 > 合成验收不代表真实 IMA、公网链路或现有 Air 服务已经升级。
+> 最终固定候选、镜像身份与尚未通过的上线门槛见[长回答验收记录](./docs/DURABLE_TASK_ACCEPTANCE_20261009.md)。
 
 ## 它看起来怎样
 

@@ -187,4 +187,6 @@ redispatch uncertain work or restore old ledgers to manufacture missing metadata
 It covers auth/ownership, replay/conflict, admission/cancel, native-vs-bot mode,
 JSON/SSE/task evidence, actual profile, capacity, observer safety and recovery.
 No live IMA question, release process, runtime directory or credential is used.
-Air client/pool/startup acceptance remains a combined integration test gate.
+Combined synthetic client/pool/actual-entrypoint acceptance passed on the final
+candidate; see DURABLE_TASK_ACCEPTANCE_20261009.md. Real Air maintenance and IMA
+acceptance remain separate gates. Existing robot calls still use the legacy API.
