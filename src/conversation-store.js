@@ -123,10 +123,7 @@ class ConversationStore {
 
   setUpstream(id, upstream = {}, ownerKey = '') {
     const conversation = this.require(id, ownerKey);
-    conversation.upstream = {
-      accountId: cleanText(upstream.accountId),
-      sessionId: cleanText(upstream.sessionId),
-    };
+    conversation.upstream = normalizeUpstream(upstream, conversation.upstream);
     this.touch(conversation);
     this._write();
     return this.publicState(conversation);
@@ -146,6 +143,13 @@ class ConversationStore {
         if (conversation.upstream[key] && conversation.upstream[key] !== next) throw new Error('task_affinity_conflict');
         conversation.upstream[key] = next;
       }
+      const profile = normalizeSessionProfile(upstream.sessionAnswerProfile);
+      if (profile) {
+        if (conversation.upstream.sessionAnswerProfile && conversation.upstream.sessionAnswerProfile !== profile) {
+          throw Object.assign(new Error('session_profile_conflict'), { code: 'session_profile_conflict', statusCode: 409 });
+        }
+        conversation.upstream.sessionAnswerProfile = profile;
+      }
       this.touch(conversation);
       this._write();
     } catch (error) {
@@ -159,6 +163,7 @@ class ConversationStore {
     return {
       accountId: conversation.upstream.accountId,
       sessionId: conversation.upstream.sessionId,
+      ...(conversation.upstream.sessionAnswerProfile ? { sessionAnswerProfile: conversation.upstream.sessionAnswerProfile } : {}),
       ...(conversation.mode === 'knowledge_agent' ? { mode: 'knowledge_agent' } : {}),
     };
   }
@@ -199,7 +204,7 @@ class ConversationStore {
         sources: normalizePublicSources(metadata.sources, answer),
         searchSummary: normalizeSearchSummary(metadata.searchSummary), evidence: normalizeEvidence(metadata) });
       conversation.turns = conversation.turns.slice(-this.maxTurns);
-      conversation.upstream = { accountId: cleanText(upstream.accountId), sessionId: cleanText(upstream.sessionId) };
+      conversation.upstream = normalizeUpstream(upstream, conversation.upstream);
       if (!conversation.title) conversation.title = conversationTitle(question);
       this.touch(conversation, now);
       this._write();
@@ -383,10 +388,7 @@ function normalizeConversation(value) {
           }))
           .filter((turn) => turn.question && turn.answer)
       : [],
-    upstream: {
-      accountId: cleanText(value.upstream?.accountId),
-      sessionId: cleanText(value.upstream?.sessionId),
-    },
+    upstream: normalizeUpstream(value.upstream),
     activeRequest: false,
   };
 }
@@ -453,7 +455,7 @@ function normalizeSearchSummary(value) {
 
 function normalizeEvidence(value) {
   const raw = value && typeof value === 'object' ? value : {};
-  const basis = ['knowledge', 'web', 'mixed', 'agent_general'].includes(raw.answer_basis) ? raw.answer_basis : '';
+  const basis = ['knowledge', 'web', 'mixed', 'agent_general', 'provider_fallback'].includes(raw.answer_basis) ? raw.answer_basis : '';
   const intent = raw.source_intent === 'web_requested' ? 'web_requested' : '';
   if (!basis && !intent && raw.source_count === undefined) return {};
   const count = key => Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 100 ? raw[key] : 0;
@@ -463,7 +465,35 @@ function normalizeEvidence(value) {
     source_count: count('source_count'),
     knowledge_source_count: count('knowledge_source_count'),
     web_source_count: count('web_source_count'),
+    ...normalizeContextEvidence(raw),
   };
+}
+
+function normalizeContextEvidence(raw) {
+  const fields = ['l0_context_count', 'l0_source_count', 'l0_snapshot_count', 'l0_injected_count', 'l0_omitted_count'];
+  if (!fields.every(key => Number.isSafeInteger(raw[key]) && raw[key] >= 0) ||
+      raw.l0_context_count !== raw.l0_injected_count || raw.l0_injected_count > raw.l0_snapshot_count ||
+      raw.l0_snapshot_count > raw.l0_source_count || raw.l0_snapshot_count > 256 ||
+      raw.l0_omitted_count !== raw.l0_source_count - raw.l0_injected_count ||
+      !['none', 'payload_bytes', 'safety_count', 'prompt_budget'].includes(raw.l0_truncation_reason)) return {};
+  return Object.fromEntries([...fields, 'l0_truncation_reason'].map(key => [key, raw[key]]));
+}
+
+function normalizeSessionProfile(value) {
+  return ['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(value) ? value : '';
+}
+
+function normalizeUpstream(value = {}, previous = {}) {
+  const accountId = cleanText(value?.accountId);
+  const sessionId = cleanText(value?.sessionId);
+  const profile = normalizeSessionProfile(value?.sessionAnswerProfile) ||
+    (sessionId && sessionId === previous.sessionId && accountId === previous.accountId
+      ? normalizeSessionProfile(previous.sessionAnswerProfile) : '');
+  if (sessionId && sessionId === previous.sessionId && previous.sessionAnswerProfile && profile &&
+      previous.sessionAnswerProfile !== profile) {
+    throw Object.assign(new Error('session_profile_conflict'), { code: 'session_profile_conflict', statusCode: 409 });
+  }
+  return { accountId, sessionId, ...(sessionId && profile ? { sessionAnswerProfile: profile } : {}) };
 }
 
 function conversationTitle(value) {

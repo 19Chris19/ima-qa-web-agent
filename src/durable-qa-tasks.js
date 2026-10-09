@@ -4,12 +4,13 @@ const { DurableQATaskStore, TERMINAL, fault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
 
 class DurableQATasks {
-  constructor({ directory, conversations, queue, execute, accountPool = null, mode, storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
+  constructor({ directory, conversations, queue, execute, accountPool = null, mode, routingOptions = () => ({}), storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
     this.conversations = conversations;
     this.queue = queue;
     this.execute = execute;
     this.accountPool = accountPool;
     this.mode = mode;
+    this.routingOptions = routingOptions;
     this.unsubscribeAvailability = accountPool?.onAvailability?.(() => this.queue.wake?.());
     this.controllers = new Map();
     this.activeConversations = new Map();
@@ -53,10 +54,11 @@ class DurableQATasks {
       (!TERMINAL.has(task.status) || task.completion || task.bindingPending));
   }
 
-  submit({ ownerKey, scope, applicationKey = scope, key, input, validateNew = () => {} }) {
+  submit({ ownerKey, scope, applicationKey = scope, key, input, validateInput = () => {}, validateNew = () => {} }) {
     this.ensure();
     const existing = this.store.find(ownerKey, scope, key, input, applicationKey);
     if (existing) return { task: this.store.publicTask(existing), isNew: false };
+    validateInput();
     const conversation = this.conversations.require(input.conversationId, ownerKey);
     const activeTask = this.activeConversations.get(input.conversationId);
     if (this.hasUnfinishedConversation(input.conversationId, ownerKey, scope) ||
@@ -88,8 +90,16 @@ class DurableQATasks {
       let turn;
       const bindUpstream = binding => {
         this.ensure();
-        const next = { accountId: binding.accountId || upstream.accountId || '', sessionId: binding.sessionId || upstream.sessionId || '' };
-        if (next.accountId === upstream.accountId && next.sessionId === upstream.sessionId) return;
+        const next = { accountId: binding.accountId || upstream.accountId || '', sessionId: binding.sessionId || upstream.sessionId || '',
+          ...(binding.sessionAnswerProfile || upstream.sessionAnswerProfile
+            ? { sessionAnswerProfile: binding.sessionAnswerProfile || upstream.sessionAnswerProfile } : {}) };
+        if (next.sessionAnswerProfile && !['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(next.sessionAnswerProfile)) {
+          throw fault('bot_evidence_invalid', 503);
+        }
+        if (upstream.sessionAnswerProfile && next.sessionAnswerProfile !== upstream.sessionAnswerProfile) {
+          throw fault('session_profile_conflict', 409);
+        }
+        if (next.accountId === upstream.accountId && next.sessionId === upstream.sessionId && next.sessionAnswerProfile === upstream.sessionAnswerProfile) return;
         this.store.update(task.id, current => { current.upstreamBinding = next; current.bindingPending = true; }, true);
         try { this.applyBinding(task.id); } catch { this.store.unavailable(); throw fault('task_store_unavailable'); }
         upstream = next;
@@ -159,8 +169,9 @@ class DurableQATasks {
     const options = { signal, applicationKey: task.applicationKey || task.scope,
       visitorKey: task.ownerKey, laneKey: task.input.conversationId };
     if (this.accountPool?.tryAcquireSlot) {
-      const accountOptions = () => ({ ...this.conversations.getUpstream(task.input.conversationId, task.ownerKey),
-        mode: task.input.retrieval_policy || this.conversations.require(task.input.conversationId, task.ownerKey).mode || this.mode, signal });
+      const accountOptions = () => ({ ...this.routingOptions(task), ...this.conversations.getUpstream(task.input.conversationId, task.ownerKey),
+        mode: task.input.botContract ? this.conversations.require(task.input.conversationId, task.ownerKey).mode :
+          task.input.retrieval_policy || this.conversations.require(task.input.conversationId, task.ownerKey).mode || this.mode, signal });
       options.isRunnable = () => this.accountPool.canAcquireSlot(accountOptions());
       options.tryAcquire = () => this.accountPool.tryAcquireSlot(accountOptions());
     }

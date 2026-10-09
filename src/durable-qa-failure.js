@@ -15,6 +15,9 @@ const SAFE_FAILURES = new Set([
   'protocol_signature_depth_exceeded', 'protocol_signature_fields_exceeded',
   'protocol_signature_field_forbidden', 'protocol_signature_array_exceeded', 'upstream_limit_invalid',
   'task_capacity', 'timeout', 'openapi_quota_exceeded', 'local_rag_index_missing',
+  'recent_context_unavailable', 'retrieval_policy_unsatisfied', 'bot_capacity_unavailable',
+  'bot_evidence_invalid', 'bot_policy_unavailable', 'conversation_mode_conflict',
+  'session_profile_conflict', 'retrieval_mode_conflict',
 ]);
 
 function safeTaskFailureReason(code, fallback = 'upstream_failed') {

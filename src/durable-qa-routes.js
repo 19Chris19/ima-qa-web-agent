@@ -4,7 +4,8 @@ const express = require('express');
 const { fault } = require('./durable-qa-store');
 
 function registerDurableQARoutes(app, { tasks, config, conversations, webReadiness,
-  ordinaryAuth, internalAuth, requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest, admit }) {
+  ordinaryAuth, internalAuth, requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest, admit,
+  botCompatibility, assertBotPolicy, assertBotMode }) {
   for (const [base, scope, auth] of [
     ['/api/tasks', 'ordinary', ordinaryAuth || requireApiToken(config.security?.apiToken)],
     ['/internal/provider-a/tasks', 'internal', internalAuth || requireInternalServiceToken(config.security?.internalServiceToken)],
@@ -32,15 +33,22 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
           typeof req.body.conversationId !== 'string' || !req.body.conversationId ||
           ['retrieval_policy', 'knowledge_scope_ref', 'source_intent'].some(field =>
             Object.hasOwn(req.body, field) && typeof req.body[field] !== 'string')) throw fault('invalid_task_request', 400);
-      const validation = validateAskRequest(req.body, config.limits, { internal: scope === 'internal', config });
+      const validation = validateAskRequest(req.body, config.limits, { internal: scope === 'internal', config, botCompatibility, applicationKey: req.applicationKey });
+      if (validation.botContract && !/^[a-f0-9]{64}$/u.test(key)) throw fault('idempotency_key_required', 400);
       if (!validation.ok || req.body.question.length > config.limits.maxQuestionLength) throw fault('invalid_task_request', validation.statusCode || 400);
-      if (validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') throw fault('knowledge_agent_unavailable', 409);
+      if (!validation.botContract && validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') throw fault('knowledge_agent_unavailable', 409);
       const input = { question: req.body.question, conversationId: validation.conversationId,
-        retrieval_policy: validation.retrievalPolicy, knowledge_scope_ref: validation.knowledgeScopeRef, source_intent: validation.sourceIntent };
-      const result = tasks.submit({ ownerKey: req.taskOwner, scope, applicationKey: req.applicationKey || scope, key, input, validateNew() {
+        retrieval_policy: validation.retrievalPolicy, knowledge_scope_ref: validation.knowledgeScopeRef, source_intent: validation.sourceIntent,
+        ...(validation.botContract ? { botContract: validation.botContract } : {}) };
+      const result = tasks.submit({ ownerKey: req.taskOwner, scope, applicationKey: req.applicationKey || scope, key, input,
+      validateInput() {
+        if (!validation.botContract) return;
+        assertBotMode(validation.botContract, conversations.require(input.conversationId, req.taskOwner).mode);
+        assertBotPolicy(validation.botContract, botCompatibility);
+      }, validateNew() {
         admit(req, res, scope);
         const conversation = conversations.require(input.conversationId, req.taskOwner);
-        if (input.retrieval_policy === 'knowledge_agent' && conversation.mode !== 'knowledge_agent') throw fault('conversation_mode_conflict', 409);
+        if (!validation.botContract && input.retrieval_policy === 'knowledge_agent' && conversation.mode !== 'knowledge_agent') throw fault('conversation_mode_conflict', 409);
       } });
       res.status(result.isNew ? 202 : 200).json({ task: result.task });
     }));
