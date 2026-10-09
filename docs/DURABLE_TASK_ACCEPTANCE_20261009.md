@@ -2,8 +2,9 @@
 
 Started 2026-10-09; final container/documentation closeout 2026-10-10 (Asia/Shanghai).
 Runtime source: 350bc8bdf663e963c8b7bfb0fdd597f40f6348a0.
-Branch: codex/INT-20261009-PROVIDER-DURABLE. Unreleased, not deployed.
-Documentation-only closeout commits do not change the tested runtime source.
+Branch: codex/INT-20261009-PROVIDER-DURABLE. These isolated results predate the
+authorized Air preview rollout below; no new Release has been published.
+Documentation-only closeout commits do not change that tested runtime source.
 
 ## Verified with synthetic data
 
@@ -53,7 +54,7 @@ scanner's unchanged callback assignment warning was reviewed as a false positive
 that scanner is not claimed all green. Named staged diffs require whitespace and
 private-file checks before commit.
 
-No account/credential read, real question, production restart, robot restart,
+During the isolated phase, no account/credential read, real question, production restart, robot restart,
 remote push, PR or release occurred. Fixed private Air artifact is prepared only.
 Renew maintenance authorization before 3117/4318 rollout; preserve old admin UI,
 five accounts, conversations and rollback code. Confirm queues idle and back up
@@ -64,3 +65,29 @@ Do not claim equivalence to native IMA or publish using an existing released tag
 Rollback stops admission and drains work. Keep new histories and task journals;
 never restore stale data, delete unfamiliar ledgers or reask dispatched uncertain
 work. Already-pruned pair metadata from an older binary cannot be reconstructed.
+
+## Authorized Air preview addendum, 2026-10-10
+
+3117/4318 were updated after idle checks and private backups. Five accounts,
+old admin assets, original data and legacy robot contracts remain intact. The
+legacy Air website mode was explicitly set to knowledge_agent before admission
+reopened. 4317, Docker website and public proxy code were not updated.
+
+One real long first question and one serial follow-up succeeded through 4318:
+312709ms and 146294ms execution, one success terminal each, exact event replay
+and history, same account/session, two history answers. Viewer disconnection did
+not cancel the first task; its body rendered three tables, the follow-up one.
+No extra real probe was sent when an inspection transport read failed.
+
+Those real results cover Provider 350bc8bd and website 418cbdb0. A separately
+tested cooperative-parser correction (97dbb5c) addressed health-read starvation
+during dense output and was subsequently installed at idle. Full Node tests,
+three observer regressions and fixed-artifact startup/admin checks pass. Finished
+tasks/history survive its restart without redispatch. Earlier Docker identities
+above do not include this last correction; rebuild before publishing images.
+
+Fresh browser visual/public-network acceptance remains pending. This is not
+evidence of native IMA equivalence, real five-way parallel capacity, or a public
+release. See the dated OPS change record for rollout and code-only rollback.
+Cooperative yielding is not a throughput optimization for synchronous task
+snapshot writes; profile dense-stream persistence before production load claims.

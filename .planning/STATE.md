@@ -1,7 +1,7 @@
 # Durable QA candidate handoff
 
-As of 2026-10-10, branch codex/INT-20261009-PROVIDER-DURABLE is an isolated
-candidate, not a deployed or published release. Earlier verified runtime: 866b731.
+As of 2026-10-10, branch codex/OPS-20261010-PROVIDER-DURABLE-PREVIEW records an
+authorized Air preview rollout, not a published release. Earlier verified runtime: 866b731.
 That earlier acceptance is historical evidence, not the latest code.
 
 Implemented: durable owned tasks, sequenced replay, explicit cancellation,
@@ -24,21 +24,34 @@ Final native task/queue/pool/HTTP real-clock test: 365738ms, upstream silent
 370977ms run used Provider 81f24de / Explorer 9adec552 before the final bounded
 pair receipt and safe proxy-error follow-ups. Pair retention tests: 100/100,
 including 8196 synthetic receipts and non-renewing restart deadlines.
-No real IMA probe.
+No real IMA probe was used for the isolated evidence above.
 Final ARM64/AMD64 image builds, isolated Nginx/BFF/Provider chain and restart
 recovery passed. Image identities: docs/DURABLE_TASK_ACCEPTANCE_20261009.md.
 Private image paths absent; fixed paired Air artifact short chain passed 2221ms.
 Only synthetic test containers were stopped; their volumes remain retained.
 
+Authorized preview update: 3117 now runs fixed 97dbb5c with old admin assets;
+4318 runs 418cbdb0. Five accounts/capacity five and original private data preserved.
+Legacy Air native website mode is explicitly retained as knowledge_agent.
+Real first task succeeded in 312709ms; follow-up in 146294ms, same account/session,
+exact replay/history, one success each and two history turns. Viewer disconnect
+did not cancel. Dense stream health starvation prompted independent 97dbb5c fix;
+three focused regressions, full suite and fixed-artifact startup tests passed.
+After its idle rollout completed tasks/history remain unchanged. No extra real
+probe or new container build covers the final small yield patch.
+Old admin hashes match, unauthorized management routes remain blocked, gates OPEN.
+Robot job was not loaded initially and was neither started nor restarted.
+4317/4417/public code unchanged; legacy clients do not inherit task reconnection.
+
 Remaining before full plan acceptance:
-- Fixed Air artifact is prepared, not deployed; production Node 22 startup and
-  old-admin consent tests passed 7/7. Only three named old admin assets are overlaid;
-  the private manifest records their hashes. No runtime data or credentials copied.
 - Legacy credentials remain legacy groups; per-deployment fairness requires
   distinct private registrations. Existing Air keys were not reconfigured.
-- Renew maintenance authorization before shared Provider or website cutover.
-- Verify actual public proxy/network recovery, screenshots, and authorized real
-  long question/follow-up. Synthetic results are not native IMA equivalence.
+- Verify actual public proxy/network recovery and fresh authorized screenshots;
+  true phone keyboard/long-term behavior is not proven by API or DOM checks.
+- Rebuild/recheck final yield-patch images before registry publication. Earlier
+  platform evidence remains tied to 350bc8bd. Do not claim native IMA equivalence.
+- Profile per-event persistence throughput before a production load claim;
+  cooperative yielding improves responsiveness, not disk-write complexity.
 - Review and publish compatible paired releases/images only after those gates.
 
 Keep branches, task ledgers and new histories. Never roll back by restoring an
