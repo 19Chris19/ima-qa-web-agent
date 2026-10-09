@@ -17,7 +17,16 @@
   let conversationId = localStorage.getItem(conversationStorageKey) || '';
   let conversationSummaries = [];
   let isBusy = false;
-  let activeController = null;
+  let activeView = null;
+  let viewEpoch = 0;
+  let tasksEnabled = false;
+  let legacyProvider = false;
+  let navigating = true;
+  let recoveryRequired = false;
+  let connectionNotice = '';
+  const taskStorageKey = 'ima-qa-task-reference';
+  const tasks = window.ProviderQaTasks.create(requestOptions);
+  const terminal = window.ProviderQaTasks.terminal;
   let followStreamingAnswer = true;
   let lastScrollTop = 0;
   const experience = window.ProviderQaExperience;
@@ -26,6 +35,19 @@
   const latest = experience.button('返回最新回答', 'latest', 'return-latest');
   latest.hidden = true;
   document.querySelector('#readingActions').append(latest);
+  const reconnect = document.createElement('button');
+  reconnect.type = 'button';
+  reconnect.className = 'source-toggle task-reconnect';
+  reconnect.textContent = '重新连接';
+  reconnect.hidden = true;
+  document.querySelector('#readingActions').append(reconnect);
+  reconnect.addEventListener('click', () => {
+    if (!activeView) { void openConversation(conversationId); return; }
+    reconnect.hidden = true;
+    if (activeView.task) void watchTask(activeView);
+    else void recoverSubmission(activeView);
+  });
+  window.addEventListener('pagehide', () => activeView?.controller?.abort());
   experience.selectionCopy(chatLog);
   latest.addEventListener('click', () => {
     followStreamingAnswer = true;
@@ -39,15 +61,19 @@
     sendButton.classList.toggle('is-busy', stop);
     sendButton.title = stop ? '停止回答' : '发送';
     sendButton.setAttribute('aria-label', sendButton.title);
-    sendButton.setAttribute('aria-disabled', 'false');
-    notice.textContent = isBusy && hasDraft ? '草稿已保留。请先停止或等待当前回答完成，再发送。' : '';
+    sendButton.disabled = navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)
+      || (isBusy && ((!legacyProvider && !activeView?.task) || activeView.stopping));
+    sendButton.setAttribute('aria-disabled', String(sendButton.disabled));
+    notice.textContent = connectionNotice || (!tasksEnabled && !legacyProvider ? '持久任务暂不可用。'
+      : isBusy && hasDraft ? '草稿已保留。请先停止或等待当前回答完成，再发送。' : '');
+    newConversationButton.disabled = navigating;
     resizeComposer();
   }
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (isBusy) {
-      activeController?.abort();
+      void stopTask();
       return;
     }
     submitQuestion(input.value);
@@ -86,49 +112,54 @@
 
   async function initialize() {
     renderWelcome();
-    await Promise.all([loadHealth(), refreshConversationList()]);
+    updateComposer();
+    await Promise.all([loadHealth(), loadCapabilities()]);
+    // Establish the ordinary owner cookie before concurrent owner-scoped reads.
+    await refreshConversationList();
     if (conversationId) {
       await openConversation(conversationId, { refreshOnMissing: false });
     }
+    navigating = false;
+    updateComposer();
     input.focus();
   }
 
   async function createConversation() {
-    if (isBusy) {
-      setStatus('error', '请等待当前回答完成');
-      return;
-    }
-
+    const epoch = detachView();
+    navigating = true;
+    updateComposer();
     try {
       const response = await fetch('/api/conversations', requestOptions({ method: 'POST' }));
       const data = await response.json().catch(() => ({}));
+      if (epoch !== viewEpoch) return;
       if (!response.ok || !data.conversation?.conversationId) {
         throw new Error(data.error || '无法新建会话');
       }
       setCurrentConversation(data.conversation.conversationId);
       renderWelcome();
       await refreshConversationList();
+      if (epoch !== viewEpoch) return;
       setSidebarOpen(false);
       setStatus('', 'ready');
       input.focus();
     } catch (error) {
-      setStatus('error', '新建失败');
+      if (epoch === viewEpoch) setStatus('error', '新建失败');
+    } finally {
+      if (epoch === viewEpoch) { navigating = false; updateComposer(); }
     }
   }
 
   async function openConversation(nextConversationId, options = {}) {
-    if (!nextConversationId || isBusy) {
-      if (isBusy) {
-        setStatus('error', '请等待当前回答完成');
-      }
-      return;
-    }
-
+    if (!nextConversationId) return;
+    const epoch = detachView();
+    navigating = true;
+    updateComposer();
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(nextConversationId)}`,
         requestOptions(),
       );
+      if (epoch !== viewEpoch) return;
       if (!response.ok) {
         if (response.status === 404 && nextConversationId === conversationId) {
           clearCurrentConversation();
@@ -141,13 +172,20 @@
         throw new Error('无法读取会话');
       }
       const data = await response.json();
+      if (epoch !== viewEpoch) return;
       setCurrentConversation(data.conversation.conversationId);
       renderHistory(data.messages || []);
       renderConversationList();
       setSidebarOpen(false);
       setStatus('', 'ready');
+      if (tasksEnabled) await restoreTask(epoch, nextConversationId);
     } catch (error) {
-      setStatus('error', '读取会话失败');
+      if (epoch === viewEpoch) {
+        recoveryRequired = true;
+        showReconnect('读取会话或任务失败，请重新连接');
+      }
+    } finally {
+      if (epoch === viewEpoch) { navigating = false; updateComposer(); }
     }
   }
 
@@ -239,168 +277,250 @@
 
   async function submitQuestion(rawQuestion) {
     const question = rawQuestion.trim();
-    if (!question || isBusy) {
-      return;
-    }
-
-    isBusy = true;
-    activeController = new AbortController();
+    if (!question || isBusy || navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)) return;
+    const view = beginView();
     followStreamingAnswer = true;
-    setStatus('busy', '回答中');
-    newConversationButton.disabled = true;
+    setStatus('busy', '提交中');
     input.value = '';
     updateComposer();
-
     appendMessage('user', question);
-    const assistantMessage = appendMessage('assistant', '', { pending: true });
-
-    let complete = false;
+    view.message = appendMessage('assistant', '', { pending: true });
+    if (legacyProvider) {
+      try {
+        await tasks.legacyAsk(question, conversationId, {
+          signal: view.controller.signal,
+          onEvent: event => {
+            if (!current(view)) return;
+            if (['conversation', 'done'].includes(event.event) && event.data.conversationId) setCurrentConversation(event.data.conversationId);
+            renderTaskEvent(view, event);
+          },
+        });
+        finishTask(view, 'succeeded');
+      } catch (error) {
+        finishTask(view, view.controller.signal.aborted ? 'cancelled' : 'failed', error.message);
+      }
+      return;
+    }
     try {
-      await streamAnswer(question, assistantMessage);
-      complete = true;
-      assistantMessage.bubble.classList.remove('pending');
-      experience.answerCopy(assistantMessage);
-      await refreshConversationList();
-      setStatus('', 'ready');
+      if (!conversationId) {
+        const response = await fetch('/api/conversations', requestOptions({ method: 'POST' }));
+        const data = await response.json();
+        if (!current(view)) return;
+        if (!response.ok || !data.conversation?.conversationId) throw new Error('无法新建会话');
+        setCurrentConversation(data.conversation.conversationId);
+      }
+      const identity = await tasks.identity();
+      if (!current(view)) return;
+      view.reference = { conversationId, requestKey: identity.requestKey };
+      localStorage.setItem(taskStorageKey, JSON.stringify(view.reference));
+      view.submitted = true;
+      const task = await tasks.submit(question, conversationId, identity.key);
+      if (!current(view)) return;
+      attachTask(view, task);
+      void refreshConversationList();
+      void watchTask(view);
     } catch (error) {
-      assistantMessage.bubble.classList.remove('pending');
-      if (assistantMessage.answer) {
-        renderAnswer(assistantMessage.text, assistantMessage.answer, {
-          sourceIndexes: sourceIndexes(assistantMessage.sources),
-        });
+      if (!current(view)) return;
+      if (view.submitted && (!error.status || error.status >= 500)) {
+        await recoverSubmission(view);
+      } else {
+        finishTask(view, 'failed', error.message);
       }
-      const failure = document.createElement('p');
-      failure.className = 'answer-failure';
-      failure.textContent = activeController?.signal.aborted
-        ? '已停止，以上回答未完成。'
-        : `回答未完成：${error.message || '连接中断'}`;
-      assistantMessage.bubble.appendChild(failure);
-      setStatus('error', '未完成');
+    }
+  }
+
+  function detachView() {
+    activeView?.controller?.abort();
+    activeView = null;
+    isBusy = false;
+    recoveryRequired = false;
+    connectionNotice = '';
+    reconnect.hidden = true;
+    return ++viewEpoch;
+  }
+
+  function beginView(epoch = detachView()) {
+    const view = { epoch, controller: new AbortController(), message: null, restored: false, subscription: 0 };
+    activeView = view;
+    isBusy = true;
+    return view;
+  }
+
+  function current(view) { return activeView === view && view.epoch === viewEpoch; }
+
+  function attachTask(view, task) {
+    view.task = task;
+    if (view.restored && task.status !== 'succeeded' && !task.eventsExpired && !view.userRendered && typeof task.question === 'string') {
+      appendMessage('user', task.question);
+      view.userRendered = true;
+    }
+    view.reference = { ...view.reference, id: task.id, conversationId: task.conversationId };
+    localStorage.setItem(taskStorageKey, JSON.stringify(view.reference));
+    updateComposer();
+  }
+
+  async function recoverSubmission(view) {
+    connectionNotice = '';
+    setStatus('busy', '确认提交结果');
+    try {
+      const matches = await tasks.list({ conversationId: view.reference.conversationId, requestKey: view.reference.requestKey });
+      if (!current(view)) return;
+      const match = matches.find(task => task.requestKey === view.reference.requestKey);
+      if (!match) throw new Error('提交结果未知');
+      attachTask(view, match);
+      void watchTask(view);
+    } catch {
+      if (current(view)) showReconnect('提交结果未知，请重新连接或稍后查看历史');
+    }
+  }
+
+  async function restoreTask(epoch, id) {
+    const candidates = await tasks.list({ conversationId: id });
+    if (epoch !== viewEpoch) return;
+    let reference;
+    try { reference = JSON.parse(localStorage.getItem(taskStorageKey)); } catch { /* No valid saved task. */ }
+    if (reference?.conversationId !== id) reference = null;
+    const remembered = candidates.find(item => item.id === reference?.id || (reference?.requestKey && item.requestKey === reference.requestKey));
+    const task = (remembered && !terminal(remembered.status) ? remembered : null)
+      || candidates.find(item => !terminal(item.status)) || remembered;
+    if (!task && !reference?.requestKey) return;
+    const view = beginView(epoch);
+    view.restored = true;
+    view.reference = reference || { conversationId: id };
+    if (task) { attachTask(view, task); void watchTask(view); }
+    else void recoverSubmission(view);
+  }
+
+  function showReconnect(message) {
+    connectionNotice = message;
+    setStatus('error', '待恢复');
+    reconnect.hidden = false;
+    updateComposer();
+  }
+
+  async function watchTask(view) {
+    if (!current(view) || view.watching) return;
+    view.watching = true;
+    connectionNotice = '';
+    updateComposer();
+    const subscription = ++view.subscription;
+    const subscribed = () => current(view) && subscription === view.subscription;
+    reconnect.hidden = true;
+    // A fresh subscription replays the full snapshot into the same answer slot.
+    if (view.message) {
+      view.message.answer = '';
+      view.message.sources = [];
+      view.message.bubble.querySelector('.sources')?.remove();
+    }
+    view.error = '';
+    try {
+      const result = await tasks.follow(view.task.id, {
+        signal: view.controller.signal,
+        onEvent: event => {
+          if (subscribed() && !(view.restored && view.task.status === 'succeeded')) renderTaskEvent(view, event);
+        },
+        onStatus: status => {
+          if (subscribed()) setStatus('busy', status === 'queued' ? '排队中' : '回答中');
+        },
+        onReconnect: () => { if (subscribed()) setStatus('busy', '重新连接中'); },
+      });
+      if (!subscribed() || !result) return;
+      if ((view.restored && result.task.status === 'succeeded') || result.eventsExpired) {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(view.reference.conversationId)}`, requestOptions());
+        if (!response.ok) throw new Error('无法恢复会话历史');
+        const data = await response.json();
+        if (!subscribed()) return;
+        renderHistory(data.messages || []);
+        view.message = null;
+      }
+      finishTask(view, result.task.status, view.error);
+    } catch (error) {
+      if (subscribed()) showReconnect(error.message || '连接中断，任务仍在后台');
     } finally {
-      assistantMessage.settled = true;
-      experience.answerCopy(assistantMessage, !complete);
-      isBusy = false;
-      activeController = null;
-      updateComposer();
-      newConversationButton.disabled = false;
+      if (subscription === view.subscription) view.watching = false;
     }
   }
 
-  async function streamAnswer(question, assistantMessage) {
-    const response = await fetch('/api/ask', requestOptions({
-      method: 'POST',
-      signal: activeController.signal,
-      headers: {
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        question,
-        ...(conversationId ? { conversationId } : {}),
-      }),
-    }));
-
-    if (!response.ok) {
-      throw new Error(await readResponseError(response));
+  function renderTaskEvent(view, event) {
+    if (!['sources', 'delta', 'process', 'error'].includes(event.event)) return;
+    const message = view.message ||= appendMessage('assistant', '', { pending: true });
+    if (event.event === 'sources') {
+      message.sources = event.data.sources || [];
+      message.searchSummary = event.data.searchSummary || '';
+      renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary });
     }
-    if (!response.body) {
-      throw new Error('浏览器不支持流式响应');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let answer = '';
-    let sourceMeta = { count: 0, searchSummary: '' };
-    let sourceList = [];
-    let renderScheduled = false;
-    let streamingFinished = false;
-    let terminalCount = 0;
-    const renderStreamingAnswer = () => {
-      if (renderScheduled) {
-        return;
-      }
-      renderScheduled = true;
-      window.requestAnimationFrame(() => {
-        renderScheduled = false;
-        if (streamingFinished || assistantMessage.settled) {
-          return;
+    if (event.event === 'delta') message.answer += event.data.text || '';
+    if (event.event === 'error') view.error = event.data.error || '回答未完成';
+    if (event.event === 'process') {
+      const text = event.data.message || event.data.text || event.data.label;
+      if (typeof text === 'string' && text) {
+        let process = message.bubble.querySelector('.task-process');
+        if (!process) {
+          process = document.createElement('p');
+          process.className = 'task-process';
+          message.bubble.prepend(process);
         }
-        renderAnswer(assistantMessage.text, answer, {
-          streaming: true,
-          sourceIndexes: sourceIndexes(sourceList),
-        });
-        updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
-        scrollToBottom({ force: followStreamingAnswer });
-      });
-    };
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const parsed = consumeSseBuffer(buffer);
-      buffer = parsed.remainder;
-
-      for (const event of parsed.events) {
-        if (event.event === 'conversation' || event.event === 'done') {
-          if (event.data.conversationId) {
-            setCurrentConversation(event.data.conversationId);
-          }
-        }
-
-        if (event.event === 'sources') {
-          sourceList = event.data.sources || [];
-          assistantMessage.sources = sourceList;
-          sourceMeta = renderSources(assistantMessage.bubble, sourceList, {
-            searchSummary: event.data.searchSummary || '',
-          });
-        }
-
-        if (event.event === 'delta') {
-          const text = event.data.text || '';
-          answer += text;
-          assistantMessage.answer = answer;
-          renderStreamingAnswer();
-        }
-
-        if (event.event === 'done') terminalCount += 1;
-
-        if (event.event === 'error') {
-          throw new Error(event.data.error || '服务暂时不可用');
-        }
+        process.textContent = text;
       }
     }
-
-    if (terminalCount !== 1) throw new Error('连接中断，上游回答未完整结束');
-
-    if (sourceList.length) {
-      sourceMeta = renderSources(assistantMessage.bubble, sourceList, {
-        searchSummary: sourceMeta.searchSummary,
-        answer,
-      });
-    }
-
-    streamingFinished = true;
-    renderAnswer(assistantMessage.text, answer, { sourceIndexes: sourceIndexes(sourceList) });
-    updateSourceAnchorText(assistantMessage.bubble, sourceMeta);
+    renderAnswer(message.text, message.answer, { streaming: true, sourceIndexes: sourceIndexes(message.sources) });
     scrollToBottom({ force: followStreamingAnswer });
-
-    return answer;
   }
 
-  async function readResponseError(response) {
-    const contentType = String(response.headers.get('content-type') || '');
-    if (contentType.includes('text/event-stream')) {
-      const text = await response.text();
-      const event = consumeSseBuffer(`${text}\n\n`).events.find((item) => item.event === 'error');
-      return event?.data?.error || `请求失败 (${response.status})`;
+  function finishTask(view, status, error = '') {
+    if (!current(view)) return;
+    const message = view.message;
+    if (message) {
+      message.settled = true;
+      message.bubble.classList.remove('pending');
+      message.bubble.querySelector('.task-process')?.remove();
+      renderAnswer(message.text, message.answer, { sourceIndexes: sourceIndexes(message.sources) });
+      renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary, answer: message.answer });
+      if (status !== 'succeeded') {
+        const failure = document.createElement('p');
+        failure.className = 'answer-failure';
+        failure.textContent = status === 'cancelled' ? '已停止，以上回答未完成。' : `回答未完成：${error || status}`;
+        message.bubble.append(failure);
+      }
+      experience.answerCopy(message, status !== 'succeeded');
     }
-    const data = await response.json().catch(() => ({}));
-    return data.error || `请求失败 (${response.status})`;
+    setStatus(status === 'succeeded' ? '' : 'error', {
+      succeeded: 'ready', cancelled: '已停止', failed: '未完成', indeterminate: '结果未知',
+    }[status] || '未完成');
+    localStorage.removeItem(taskStorageKey);
+    isBusy = false;
+    connectionNotice = '';
+    activeView = null;
+    reconnect.hidden = true;
+    updateComposer();
+    void refreshConversationList();
+  }
+
+  async function stopTask() {
+    const view = activeView;
+    if (legacyProvider) { view?.controller.abort(); return; }
+    if (!view?.task || view.stopping) return;
+    view.stopping = true;
+    updateComposer();
+    try {
+      await tasks.cancel(view.task.id);
+      if (!current(view)) return;
+      // Cancellation's response is not a replay snapshot; GET confirms the outcome.
+      view.controller.abort();
+      view.controller = new AbortController();
+      view.watching = false;
+      void watchTask(view);
+    } catch {
+      if (current(view)) showReconnect('停止结果尚未确认，请重新连接');
+    } finally {
+      view.stopping = false;
+      if (current(view)) updateComposer();
+    }
+  }
+
+  async function loadCapabilities() {
+    try { tasksEnabled = (await tasks.capabilities()).features?.durable_qa_tasks_v1 === true; }
+    catch { tasksEnabled = false; }
   }
 
   function renderHistory(messages) {
@@ -447,43 +567,6 @@
   function setSidebarOpen(open) {
     workspace.classList.toggle('sidebar-open', open);
     sidebarToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  }
-
-  function consumeSseBuffer(buffer) {
-    const events = [];
-    let boundary = findSseBoundary(buffer);
-    while (boundary) {
-      const block = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary.length);
-      const event = parseSseBlock(block);
-      if (event) {
-        events.push(event);
-      }
-      boundary = findSseBoundary(buffer);
-    }
-    return { events, remainder: buffer };
-  }
-
-  function findSseBoundary(buffer) {
-    const match = /\r?\n\r?\n/.exec(buffer);
-    return match ? { index: match.index, length: match[0].length } : null;
-  }
-
-  function parseSseBlock(block) {
-    const lines = block.split(/\r?\n/);
-    const eventName = lines.find((line) => line.startsWith('event:'))?.slice(6).trim();
-    const data = lines
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-      .join('\n');
-    if (!eventName || !data) {
-      return null;
-    }
-    try {
-      return { event: eventName, data: JSON.parse(data) };
-    } catch {
-      return null;
-    }
   }
 
   function appendMessage(role, content, options = {}) {
@@ -618,16 +701,6 @@
     }).slice(0, 10);
   }
 
-  function updateSourceAnchorText(bubble, sourceMeta) {
-    if (!sourceMeta.count) {
-      return;
-    }
-    const toggle = bubble.querySelector('.source-toggle span');
-    if (toggle) {
-      toggle.textContent = sourceMeta.searchSummary || `找到 ${sourceMeta.count} 篇知识库资料`;
-    }
-  }
-
   function setStatus(className, text) {
     statusPill.className = className ? `status-pill ${className}` : 'status-pill';
     statusPill.textContent = text;
@@ -637,6 +710,7 @@
     try {
       const response = await fetch('/healthz', requestOptions());
       const data = await response.json();
+      legacyProvider = ['openapi-mimo', 'local-rag-mimo'].includes(data.provider);
       const provider = data.provider === 'ima-web-agent' ? 'IMA Web Agent' : data.provider === 'local-rag-mimo' ? '本地知识库' : 'OpenAPI + MIMO';
       providerLabel.textContent = `${provider} · ${data.model || 'ready'}`;
     } catch {

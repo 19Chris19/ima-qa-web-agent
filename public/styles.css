@@ -845,6 +845,9 @@ body[data-mode="embed"] .composer {
 .qa-tool:disabled, #sendButton[aria-disabled="true"] { opacity: .5; }
 .reading-actions { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 1; }
 .return-latest { border-radius: 50%; border: 1px solid var(--line); background: var(--panel); box-shadow: 0 3px 12px #18212f14; }
+.task-reconnect { width: max-content; max-width: 240px; min-height: 44px; margin-top: 4px; }
+.task-reconnect[hidden] { display: none; }
+.task-process { margin: 0 0 8px; color: var(--muted); font: 12px/18px sans-serif; overflow-wrap: anywhere; }
 .answer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .copy-status { color: var(--muted); font: 12px/1.5 sans-serif; }
 .copy-fallback { display: flex; align-items: start; gap: 4px; width: 100%; }
