@@ -1,6 +1,7 @@
 'use strict';
 
 const { DurableQATaskStore, TERMINAL, fault } = require('./durable-qa-store');
+const { safeTaskFailureReason } = require('./durable-qa-failure');
 
 class DurableQATasks {
   constructor({ directory, conversations, queue, execute, storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
@@ -39,6 +40,14 @@ class DurableQATasks {
 
   get available() { return !this.closed && this.store.available; }
   ensure() { if (!this.available) throw fault('task_store_unavailable'); }
+
+  hasUnfinishedConversation(conversationId, ownerKey) {
+    this.ensure();
+    // Conversations are shared across API scopes, including queued recovery work.
+    return [...this.store.tasks.values()].some(task => task.ownerKey === ownerKey &&
+      task.input.conversationId === conversationId &&
+      (!TERMINAL.has(task.status) || task.completion || task.bindingPending));
+  }
 
   submit({ ownerKey, scope, key, input, validateNew = () => {} }) {
     this.ensure();
@@ -90,12 +99,21 @@ class DurableQATasks {
           check();
           this.publish(this.store.running(task.id));
         },
+        onUpstreamActivity: ({ bytes } = {}) => {
+          check();
+          if (!Number.isSafeInteger(bytes) || bytes <= 0) return;
+          this.store.update(task.id, current => {
+            current.trace.lastUpstreamActivityAt = this.store.now();
+            current.trace.rawUpstreamBytes = Math.min(Number.MAX_SAFE_INTEGER, (current.trace.rawUpstreamBytes || 0) + bytes);
+            current.trace.rawUpstreamChunks = Math.min(Number.MAX_SAFE_INTEGER, (current.trace.rawUpstreamChunks || 0) + 1);
+          }, true);
+        },
         onUpstreamEvent: event => {
           check();
           this.store.update(task.id, current => {
             if (current.trace.dispatchedAt === null) throw fault('task_dispatch_marker_missing');
             current.trace.firstUpstreamEventAt ??= this.store.now();
-            current.trace.lastUpstreamActivityAt = this.store.now();
+            current.trace.lastUpstreamEventAt = this.store.now();
             current.trace.upstreamBytes = (current.trace.upstreamBytes || 0) + Buffer.byteLength(JSON.stringify(event));
             current.trace.upstreamEvents = (current.trace.upstreamEvents || 0) + 1;
             if (current.trace.upstreamBytes > this.store.maxTaskBytes || current.trace.upstreamEvents > this.store.maxEvents) throw fault('task_capacity', 429);
@@ -107,7 +125,7 @@ class DurableQATasks {
       if (!this.available || TERMINAL.has(this.store.tasks.get(task.id)?.status)) return;
       // A persisted completion cannot be overwritten with failure after a history fault.
       if (this.store.tasks.get(task.id).completion) { this.store.unavailable(); return; }
-      try { this.terminal(task.id, 'failed', error?.code === 'task_capacity' ? 'task_capacity' : 'execution_failed'); }
+      try { this.terminal(task.id, 'failed', safeTaskFailureReason(error?.code, 'execution_failed')); }
       catch { this.store.unavailable(); }
     }).finally(() => {
       this.controllers.delete(task.id);
@@ -160,7 +178,7 @@ class DurableQATasks {
               manager.store.unavailable();
               throw fault('task_store_unavailable');
             }
-            manager.terminal(task.id, 'failed', 'upstream_failed');
+            manager.terminal(task.id, 'failed', safeTaskFailureReason(data.failureReason));
           } else if (['conversation', 'process', 'sources', 'delta'].includes(event)) {
             manager.publish(manager.store.append(task.id, event, data));
           }

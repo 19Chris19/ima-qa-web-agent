@@ -85,7 +85,7 @@ test('idempotent POST runs once, snapshots/SSE retain whitespace and cursor is s
   assert.equal(repeated.task.id, task.id);
   assert.equal(repeated.task.requestKey, crypto.createHash('sha256').update('synthetic-task').digest('hex'));
   assert.ok(repeated.task.trace.dispatchedAt >= repeated.task.trace.receivedAt);
-  assert.ok(repeated.task.trace.lastUpstreamActivityAt >= repeated.task.trace.firstUpstreamEventAt);
+  assert.ok(repeated.task.trace.lastUpstreamEventAt >= repeated.task.trace.firstUpstreamEventAt);
   assert.equal((await f.submit('synthetic-task', { question: 'different' })).status, 409);
   assert.equal(f.calls.length, 1);
   assert.equal(f.calls[0].question, '  Synthetic question\n');
@@ -421,6 +421,108 @@ test('resource exhaustion emits a durable failure without unbounded pending whit
   const { task } = await (await f.submit()).json();
   await until(async () => (await (await f.request(`/api/tasks/${task.id}`)).json()).task.status === 'failed');
   assert.equal(f.conversationStore.getHistory(f.conversationId, owner).length, 0);
+});
+
+test('conversation deletion protects queued tasks across scopes without exposing another owner', async t => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { async *stream() {
+    await gate;
+    yield { type: 'delta', text: 'synthetic answer' };
+    yield { type: 'done' };
+  } });
+  t.after(() => release());
+  await f.submit('running');
+  const queuedConversation = f.conversationStore.create(owner, { mode: 'knowledge_agent' }).conversationId;
+  const queued = await (await f.submit('queued', { conversationId: queuedConversation },
+    '/internal/provider-a/tasks', 'synthetic-service')).json();
+  assert.equal(queued.task.status, 'queued');
+  assert.equal(f.conversationStore.require(queuedConversation, owner).activeRequest, false);
+  assert.equal((await f.request(`/api/conversations/${queuedConversation}`, { method: 'DELETE' }, 'other')).status, 404);
+  assert.equal((await f.request(`/api/conversations/${f.conversationId}`, { method: 'DELETE' })).status, 409);
+  const blocked = await f.request(`/api/conversations/${queuedConversation}`, { method: 'DELETE' });
+  assert.equal(blocked.status, 409);
+  assert.equal((await blocked.json()).error, 'conversation_busy');
+  assert.equal((await f.request(`/internal/provider-a/tasks/${queued.task.id}`, { method: 'DELETE' }, owner, 'synthetic-service')).status, 200);
+  assert.equal((await f.request(`/api/conversations/${queuedConversation}`, { method: 'DELETE' })).status, 200);
+  release();
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal(f.calls.length, 1);
+  assert.equal((await f.request(`/api/conversations/${f.conversationId}`, { method: 'DELETE' })).status, 200);
+});
+
+test('conversation deletion fails closed on unavailable durable storage after owner lookup', async t => {
+  const f = await fixture(t);
+  f.app.locals.durableQATasks.store.unavailable();
+  assert.equal((await f.request(`/api/conversations/${f.conversationId}`, { method: 'DELETE' }, 'other')).status, 404);
+  const blocked = await f.request(`/api/conversations/${f.conversationId}`, { method: 'DELETE' });
+  assert.equal(blocked.status, 503);
+  assert.equal((await blocked.json()).error, 'task_store_unavailable');
+  assert.ok(f.conversationStore.require(f.conversationId, owner));
+});
+
+test('explicit empty upstream success fails without fabricated answer or history', async t => {
+  const f = await fixture(t, { async *stream() { yield { type: 'done' }; } });
+  const { task } = await (await f.submit()).json();
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  const result = await (await f.request(`/api/tasks/${task.id}`)).json();
+  assert.equal(result.task.status, 'failed');
+  assert.equal(result.task.trace.terminalReason, 'upstream_empty_answer');
+  assert.equal(result.snapshot.events.find(e => e.event === 'error').data.failureReason, 'upstream_empty_answer');
+  assert.equal(result.snapshot.events.some(e => ['delta', 'done'].includes(e.event)), false);
+  assert.deepEqual(f.conversationStore.getHistory(f.conversationId, owner), []);
+});
+
+test('durable failures retain safe transport/protocol reasons but never arbitrary error text', async t => {
+  for (const code of ['upstream_headers_timeout', 'upstream_idle_timeout', 'upstream_terminal_missing', 'synthetic-private-secret']) {
+    await t.test(code, async t => {
+      const f = await fixture(t, { async *stream() {
+        if (code === 'upstream_terminal_missing') return;
+        throw Object.assign(new Error('synthetic-private-error-text'), { name: 'TimeoutError', code });
+      } });
+      const { task } = await (await f.submit()).json();
+      await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+      const result = await (await f.request(`/api/tasks/${task.id}`)).json();
+      const expected = code === 'synthetic-private-secret' ? 'timeout' : code;
+      assert.equal(result.task.status, 'failed');
+      assert.equal(result.task.trace.terminalReason, expected);
+      assert.equal(result.snapshot.events.find(e => e.event === 'error').data.failureReason, expected);
+      assert.equal(JSON.stringify(result).includes('synthetic-private'), false);
+      assert.deepEqual(f.conversationStore.getHistory(f.conversationId, owner), []);
+    });
+  }
+});
+
+test('raw activity advances trace without normalized events or subscriber influence', async t => {
+  let sendActivity;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, { async *stream(args) {
+    sendActivity = args.onActivity;
+    await gate;
+    yield { type: 'delta', text: 'synthetic answer' };
+    yield { type: 'done' };
+  } });
+  t.after(() => release());
+  const { task } = await (await f.submit()).json();
+  const manager = f.app.locals.durableQATasks;
+  assert.equal(typeof sendActivity, 'function');
+  manager.store.now = () => 123456789;
+  sendActivity({ bytes: 17 });
+  let current = manager.store.publicTask(manager.store.tasks.get(task.id));
+  assert.equal(current.trace.lastUpstreamActivityAt, 123456789);
+  assert.equal(current.trace.firstUpstreamEventAt, null);
+  assert.equal(current.trace.rawUpstreamBytes, 17);
+  assert.equal(current.trace.rawUpstreamChunks, 1);
+  manager.store.now = () => 123456790;
+  sendActivity({ bytes: 8 });
+  current = (await (await f.request(`/api/tasks/${task.id}`)).json()).task;
+  assert.equal(current.trace.lastUpstreamActivityAt, 123456790);
+  assert.equal(current.trace.rawUpstreamBytes, 25);
+  release();
+  await until(() => manager.store.tasks.get(task.id).status === 'succeeded');
+  const persisted = JSON.parse(fs.readFileSync(path.join(manager.store.directory, `${task.id}.json`), 'utf8'));
+  assert.equal(persisted.trace.lastUpstreamActivityAt, 123456790);
 });
 
 test('archive export redacts task receipts and IDs without changing native answer whitespace', t => {

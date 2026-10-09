@@ -127,6 +127,7 @@ class DurableQATaskStore {
       requestKey: /^[a-f0-9]{64}$/u.test(key) ? key : hash(key),
       fingerprint: hash(JSON.stringify(input)), input, status: 'queued', createdAt: this.now(), updatedAt: this.now(),
       trace: { receivedAt: this.now(), dispatchedAt: null, firstUpstreamEventAt: null, lastUpstreamActivityAt: null,
+        lastUpstreamEventAt: null, rawUpstreamBytes: 0, rawUpstreamChunks: 0,
         terminalAt: null, terminalReason: null, subscriptions: 0, disconnects: 0, rotations: 0 }, events: [] };
     this.addEvent(task, 'task.status', { status: 'queued' });
     this.save(task);

@@ -55,6 +55,11 @@ for succeeded tasks. Times are Unix milliseconds. Status is one of `queued`,
   and `task.status`. Every persisted event has `id: N` in the SSE frame.
 - `DELETE /tasks/:id`: `{task}`. Persists cancellation before aborting queued or
   running work. Terminal cancellation is idempotent. Disconnect never cancels QA.
+- `DELETE /api/conversations/:id`: returns 409 `conversation_busy` while any
+  owned durable task in either API scope is unfinished, including queued recovery
+  work and pending completion/binding journals. Cancel tasks explicitly first.
+  After owner lookup, unavailable configured task storage returns 503
+  `task_store_unavailable`; foreign or missing conversations still return 404.
 - SSE heartbeat comments occur every 15 seconds; subscriptions rotate after 240
   seconds. Reconnect using the last received ID. Slow subscribers are disconnected
   at 256 KiB buffered output; at most 8 per task / 256 globally.
@@ -134,6 +139,13 @@ Task execution has no total 180-second deadline. Explicit transport options use
 `transportTimeouts.headersMs` / `idleMs`. The scheduler/transport companion change
 implements native HTTP transport and per-byte idle accounting. The task core
 requires exactly one successful upstream `done` marker before history completion.
+An explicit success with zero answer characters fails with `upstream_empty_answer`
+and no history turn; no fallback answer is fabricated. Whitespace-only answers
+remain exact upstream output. Legacy ask fallback behavior is unchanged.
+Failure events and `trace.terminalReason` retain a fixed allowlist of protocol and
+transport codes, including `upstream_headers_timeout`, `upstream_idle_timeout`
+and `upstream_terminal_missing`. Unknown codes/messages become a generic reason;
+raw upstream error text never enters durable events or trace.
 
 ## Slot Capacity
 
@@ -153,17 +165,25 @@ candidate. A task waiting for its pinned account remains queued; currently that
 wait still occupies a global scheduler slot, and it never migrates to another
 account merely because its own account is busy.
 
-`task.trace` includes received/execution/dispatched/first-event/last-activity/
-terminal timestamps, terminal reason, upstream byte/event counts and subscription,
-disconnect and rotation counters. It contains no question, answer, credentials,
-upstream URL or raw error text. No task question/answer logging is added.
+`task.trace` includes received/execution/dispatched/first-event/terminal timestamps,
+terminal reason and subscription/disconnect/rotation counters.
+`lastUpstreamActivityAt`, `rawUpstreamBytes` and `rawUpstreamChunks` come only from
+the transport's metadata-only raw-byte callback, including SSE comments/heartbeats.
+`lastUpstreamEventAt` and existing `upstreamBytes`/`upstreamEvents` describe normalized
+events (the byte count is their serialized JSON size, not network bytes). Subscriber
+heartbeats never update upstream activity. A client without raw activity support
+leaves the raw timestamp null; it is not inferred from normalized events. These
+fields contain no question, answer, credentials, upstream URL or raw error text.
+No task question/answer logging is added.
 
 ## Synthetic Integration
 
 `createApp({config, conversationStore, imaWebAgentClient})` accepts a synthetic
-client exposing `async *streamAsk({question,signal,onDispatch,transportTimeouts,...})`.
+client exposing `async *streamAsk({question,signal,onDispatch,onActivity,transportTimeouts,...})`.
 Call `onDispatch()` once immediately before the synthetic ask; yield normal
-`process`/`sources`/`delta` events and exactly one `{type:"done"}`. Set persistent
+`process`/`sources`/`delta` events and exactly one `{type:"done"}`. Record synthetic
+raw-activity evidence with `onActivity({bytes: positiveInteger})` only when upstream
+response bytes arrive, never from subscriber events. Set persistent
 stores in an `os.tmpdir()` directory, not real runtime. `app.locals.durableQATasks`
 exposes `close()` for teardown. The lower-level `DurableQATasks` constructor accepts
 an injected queue, execution callback, store clock/limits, heartbeat and rotation
