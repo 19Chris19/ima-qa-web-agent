@@ -75,6 +75,18 @@ test('preparation rejects incompatible followups before consume and preserves co
   assert.match(request.question, /verifiable web evidence/);
 });
 
+test('legacy unknown profile preserves account and session and still consumes context once', async () => {
+  const contract = parse({ retrieval_policy: 'group_knowledge', recent_context_ref: ref, recent_context_binding: binding });
+  let consumed = 0;
+  const prepared = await prepareBotAsk({ contract, question: 'Synthetic question',
+    upstream: { accountId: 'synthetic-account', sessionId: 'synthetic-session' },
+    recentContextConsumer: { async consume() { consumed++; return { messages: [] }; } } });
+  assert.equal(prepared.accountId, 'synthetic-account');
+  assert.equal(prepared.sessionId, 'synthetic-session');
+  assert.equal(prepared.sessionAnswerProfile, undefined);
+  assert.equal(consumed, 1);
+});
+
 test('source evidence distinguishes actual knowledge/web/L0 from general text and rejects unsatisfied policy', () => {
   assert.equal(buildBotAnswerEvidence({ retrievalPolicy: 'knowledge_agent', answer: 'Synthetic' }).answer_basis, 'agent_general');
   const contextPlan = { sourceMessageCount: 5, selectedMessageCount: 3, injectedMessageCount: 2, truncationReason: 'prompt_budget' };

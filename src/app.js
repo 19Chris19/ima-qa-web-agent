@@ -418,11 +418,14 @@ async function dispatchAsk(context) {
       if (upstream.sessionId && upstream.sessionAnswerProfile && upstream.sessionAnswerProfile !== profile) {
         throw taskFault('session_profile_conflict', 409);
       }
-      let prepared;
-      try {
-        prepared = await prepareBotAsk({ contract: context.botContract, question: context.question,
-          upstream, recentContextConsumer: context.recentContextConsumer, signal: context.signal });
-      } catch { throw taskFault('recent_context_unavailable', 503); }
+      const consumer = context.recentContextConsumer;
+      const prepared = await prepareBotAsk({ contract: context.botContract, question: context.question,
+        upstream, recentContextConsumer: typeof consumer?.consume === 'function' ? {
+          async consume(...args) {
+            try { return await consumer.consume(...args); }
+            catch { throw taskFault('recent_context_unavailable', 503); }
+          },
+        } : consumer, signal: context.signal });
       const plan = botQuestionPlan(context.question, prepared, context.botContract.retrievalPolicy);
       context = { ...context, upstreamQuestion: plan.question,
         botContextPlan: plan, botProfile: state.profile.answer_profile };

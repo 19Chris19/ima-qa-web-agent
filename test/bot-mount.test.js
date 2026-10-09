@@ -144,6 +144,7 @@ for (const mode of ['classic_knowledge', 'knowledge_agent']) for (const format o
     assert.equal(args.mode, mode);
     assert.equal(args.accountId, 'synthetic-account');
     assert.equal(args.sessionId, 'synthetic-session');
+    assert.equal(args.sessionAnswerProfile, undefined, 'unknown legacy profile is not guessed');
     assert.equal(f.routing.every(item => item.mode === mode && item.retrievalPolicy === policy), true);
     assert.equal(result.answer_basis, 'knowledge');
     assert.equal(result.source_count, 1);

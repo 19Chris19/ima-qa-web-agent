@@ -84,7 +84,7 @@ async function prepareBotAsk({ contract, question, upstream = {}, recentContextC
   if (signal?.aborted) throw fault('request_aborted', 499);
   const requiredProfile = ['knowledge_agent', 'group_knowledge'].includes(contract.retrievalPolicy)
     ? 'classic_knowledge' : 'ima_agent_auto';
-  if (contract.retrievalPolicy && upstream.sessionId && upstream.sessionAnswerProfile !== requiredProfile) {
+  if (contract.retrievalPolicy && upstream.sessionId && upstream.sessionAnswerProfile && upstream.sessionAnswerProfile !== requiredProfile) {
     throw fault('session_profile_conflict', 409);
   }
   let recentContext = null;
