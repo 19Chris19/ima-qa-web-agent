@@ -1,5 +1,8 @@
 # Durable paired release preparation
 
+Final evidence and remaining gates: docs/RELEASE_ACCEPTANCE_20261010.md. Draft
+PR #14 has green Test and pack. It is not a published or deployed RC.
+
 User goal: update the public Provider repository together with the private
 website and authorized Air/public preview, without changing account ownership
 or restarting the bot. This branch prepares reviewed artifacts; no Release or

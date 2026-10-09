@@ -1,5 +1,9 @@
 # Durable QA candidate handoff
 
+Current release preparation: docs/RELEASE_ACCEPTANCE_20261010.md. Draft PR #14
+is not merged/published/deployed. Following runtime references are dated evidence,
+not a claim that the new RC runs on Air.
+
 As of 2026-10-10, branch codex/OPS-20261010-PROVIDER-DURABLE-PREVIEW records an
 authorized Air preview rollout, not a published release. Earlier verified runtime: 866b731.
 That earlier acceptance is historical evidence, not the latest code.
