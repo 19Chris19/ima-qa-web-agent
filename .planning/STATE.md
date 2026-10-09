@@ -56,3 +56,30 @@ Remaining before full plan acceptance:
 
 Keep branches, task ledgers and new histories. Never roll back by restoring an
 old data snapshot or automatically resubmitting dispatched uncertain work.
+
+## Source-only Air compatibility follow-up
+
+Change-ID: FIX-20261010-PROVIDER-AIR-ADMISSION
+Branch-At-Audit: codex/FIX-20261010-PROVIDER-AIR-ADMISSION
+Audit-HEAD: 71a2ed7
+Audited-At: 2026-10-10
+
+This follow-up starts at a1e6d59 and does not update the historical preview above.
+Commit 46d70b1 rejects all ordinary/internal legacy and durable QA POSTs during
+Air qualification run/preflight, using existing maintenance responses before
+dispatch and receipt admission. Reads/events/cancellation, pool concurrency,
+authentication, consent and account qualification writes remain unchanged.
+Focused admission/task/ownership/finalizer regressions: 129 pass, 1 optional skip.
+
+The source packaging fix copies only the reviewed public 50-question JSONL,
+without versions, image-publication workflows or private data. Serial real
+entrypoint/COPY-layout/image tests: 8 pass; both children exit via SIGTERM;
+Provider/upstream listeners close and queue/leases return to zero. Native Docker
+artifact acceptance is NOT RUN here. Four-worker and single-worker full runs
+each report 820 pass, 1 fail, 6 skip. The serial failure is the existing exercise
+response-copy assertion, corrected in separate commit 71a2ed7; original exercise
+and qualification regressions now pass 19/19. Final concurrency-2 affected-module
+check: 191 pass, 1 optional skip, 0 fail (24.22 seconds), including app, admission,
+task ownership/recovery/cancellation, startup/image, consent and slot finalizers.
+Parent owns merged full tests, image builds, release and rollout. Details and
+disclosed limits are in the change record; no deadlines were extended.

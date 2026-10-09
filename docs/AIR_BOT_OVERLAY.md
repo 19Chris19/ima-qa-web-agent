@@ -39,6 +39,15 @@ factory in the **second** pool constructor argument and selects
 generation and durable transport safety instead of copying the old client.
 No model or profile is elected by startup and no qualification runs automatically.
 
+The standard Dockerfile also copies only `eval/questions.jsonl`, which the Air
+qualification manager loads during mount. Its 50 questions are generic public
+3DGS scenarios, not private questions or conversation exports; every source-hint,
+answer-point and must-not-invent array is empty. No eval runners, outputs or other
+eval files are copied. Reviewed SHA-256:
+`e9353b32e5caf4845673d88e26b5fb2343bc67909d9563323b5d86382717c56b`.
+The packaging regression pins this content; changes require a fresh disclosure
+review rather than blindly updating the hash. Air remains explicitly opt-in.
+
 The Air directory preserves legacy lane/profile fields in runtime metadata and
 retains qualification evidence verbatim; it does not manufacture web probe
 receipts. Valid single-request basic native proofs count, with the live deferred
@@ -157,6 +166,18 @@ Run identifiers use `runId`; cancellation is mapped to the exact pending account
 run and post-commit receipts/warnings survive downstream sync failure.
 
 ## Verification and rollout boundary
+
+The admission/image compatibility follow-up is recorded in
+`.planning/changes/FIX-20261010-PROVIDER-AIR-ADMISSION.md`. Its startup acceptance
+materializes only tracked, explicitly allowed Docker COPY inputs and reuses
+installed dependencies. Both the source entrypoint and the COPY-layout entrypoint
+mount Air with synthetic empty account stores, absent environment files and an
+outbound-network guard. This is not a native container/image build or rollout.
+Serial Air startup/image tests pass 8/8: both children exit with SIGTERM, not
+SIGKILL. The five-proof synthetic test closes Provider and local upstream HTTP
+listeners, leaves zero active queue requests/account leases and attempts no
+non-fixture connection. Existing startup/request/shutdown deadlines are unchanged.
+The full-suite follow-up and concurrency caveat are in the change record.
 
 Isolated full suite before the final readiness-state adjustment:
 `node --test --test-concurrency=4`, 692 passed, 5 skipped, 0 failed out of 697
