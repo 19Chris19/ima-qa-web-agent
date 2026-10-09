@@ -77,6 +77,12 @@ Use the full namespace prefix above for each `/tasks` path. Cross-owner/scope ID
 return 404. A full scheduler returns 429 with `failureReason: "queue_full"` before
 persisting a new task. Storage unavailability returns 503, with no private error
 text. Changed input under an existing key returns 409 `idempotency_conflict`.
+A new task also returns 409 `conversation_busy`, before creating a receipt, if
+the same owned conversation has unfinished work in the other task API scope or
+an active request held by a legacy ask. Same-scope durable tasks still queue FIFO.
+Exact idempotent replay remains available during conflicts. Once conflicting work
+finishes or is cancelled and releases its conversation lock, the refused key may
+be submitted again; a refusal never reserves that key.
 
 ## Ambiguous POST Recovery and Retention
 
