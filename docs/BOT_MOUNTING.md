@@ -101,6 +101,9 @@ contract support, not readiness. Website consumers must read `capacity.website`
 when present (falling back to the legacy top-level shape), so bot qualifications
 cannot become website capacity. The BFF's contract and account-capacity checks are
 separate; a native empty pool is compatible with zero capacity, not incompatible.
+Both nested and legacy website shapes include `mode`, resolved from snapshot mode
+first and `config.webAgent.mode` second. The native capability uses that same
+effective mode even when the snapshot omits it or the pool has zero accounts.
 
 `healthCapabilities` is also an app option for sanitized existing capability
 declarations. Recent-context v1/v2 is advertised only with the bot adapter and
