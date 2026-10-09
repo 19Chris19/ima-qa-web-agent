@@ -13,6 +13,7 @@ const { DurableQATasks } = require('./durable-qa-tasks');
 const { registerDurableQARoutes } = require('./durable-qa-routes');
 const { fault: taskFault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
+const { createApplicationIdentity, applicationOwnerKey } = require('./application-identity');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -41,6 +42,9 @@ function createApp({
   webReadiness,
 }) {
   const app = express();
+  const applicationIdentity = createApplicationIdentity(config.security);
+  const ordinaryAuth = applicationIdentity.middleware('ordinary');
+  const internalAuth = applicationIdentity.middleware('internal');
   const conversations = conversationStore || new ConversationStore({ persist: false });
   const askQueue = createAskQueue({
     maxConcurrent: config.concurrency?.maxConcurrentAsk,
@@ -90,14 +94,14 @@ function createApp({
     }
   }
   app.locals.durableQATasks = durableTasks;
-  app.get('/api/capabilities', requireApiToken(config.security?.apiToken), (_req, res) => {
+  app.get('/api/capabilities', ordinaryAuth, (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ schemaVersion: 1, features: {
       durable_qa_tasks_v1: Boolean(durableTasks?.available),
     } });
   });
   registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
-    requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest,
+    ordinaryAuth, internalAuth, getConversationOwnerKey, validateAskRequest,
     admit(req, res, scope) {
       if (scope === 'ordinary' && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) throw taskFault('maintenance_exercise', 503);
       const limit = rateLimiter.consume(getClientIp(req));
@@ -134,7 +138,7 @@ function createApp({
     res.json(health);
   });
 
-  app.get('/internal/provider-a/capacity', requireInternalServiceToken(config.security?.internalServiceToken), (_req, res) => {
+  app.get('/internal/provider-a/capacity', internalAuth, (_req, res) => {
     const state = webReadiness?.snapshot();
     const queue = askQueue.stats();
     const nativeCapacity = config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent'
@@ -154,12 +158,12 @@ function createApp({
     });
   });
 
-  app.post('/api/conversations', requireApiToken(config.security?.apiToken), (_req, res) => {
+  app.post('/api/conversations', ordinaryAuth, (_req, res) => {
     const ownerKey = getConversationOwnerKey(_req, res);
     res.status(201).json({ success: true, conversation: conversations.create(ownerKey, { mode: webReadiness?.mode }) });
   });
 
-  app.get('/api/conversations', requireApiToken(config.security?.apiToken), (req, res) => {
+  app.get('/api/conversations', ordinaryAuth, (req, res) => {
     const ownerKey = getConversationOwnerKey(req, res);
     res.json({
       success: true,
@@ -167,7 +171,7 @@ function createApp({
     });
   });
 
-  app.get('/api/conversations/:conversationId', requireApiToken(config.security?.apiToken), (req, res) => {
+  app.get('/api/conversations/:conversationId', ordinaryAuth, (req, res) => {
     try {
       const ownerKey = getConversationOwnerKey(req, res);
       res.json({ success: true, ...conversations.getDetail(req.params.conversationId, ownerKey) });
@@ -179,7 +183,7 @@ function createApp({
     }
   });
 
-  app.delete('/api/conversations/:conversationId', requireApiToken(config.security?.apiToken), (req, res) => {
+  app.delete('/api/conversations/:conversationId', ordinaryAuth, (req, res) => {
     const ownerKey = getConversationOwnerKey(req, res);
     let conversation;
     try {
@@ -290,7 +294,7 @@ function createApp({
             conversationStore: conversations,
             ownerKey,
           }),
-        { signal },
+        { signal, applicationKey: req.applicationKey, visitorKey: ownerKey, laneKey: conversationId },
       );
     } catch (error) {
       if (error instanceof QueueFullError) {
@@ -330,10 +334,10 @@ function createApp({
     }
   };
 
-  app.post('/api/ask', requireApiToken(config.security?.apiToken), askHandler);
+  app.post('/api/ask', ordinaryAuth, askHandler);
   app.post(
     '/internal/provider-a/deep-ask',
-    requireInternalServiceToken(config.security?.internalServiceToken),
+    internalAuth,
     markInternalProviderADeepAsk,
     createInternalIdempotencyMiddleware({ ledger: internalIdempotency, conversations, config, webReadiness }),
     askHandler,
@@ -1187,7 +1191,7 @@ function getConversationOwnerKey(req, res) {
       `ima_qa_client_id=${ownerKey}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax`,
     );
   }
-  return ownerKey;
+  return applicationOwnerKey(req, ownerKey);
 }
 
 function writeSse(res, event, data) {

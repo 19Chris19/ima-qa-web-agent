@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const lockfile = require('proper-lockfile');
+const { validApplicationKey } = require('./application-identity');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'indeterminate']);
 const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -63,6 +64,7 @@ class DurableQATaskStore {
             !['queued', 'running', ...TERMINAL].includes(task.status) ||
             task.events.some((e, i) => e.id !== i + 1) || !task.input || typeof task.ownerKey !== 'string' ||
             !['ordinary', 'internal'].includes(task.scope) || !task.trace ||
+            (task.applicationKey !== undefined && !validApplicationKey(task.applicationKey)) ||
             ![task.keyHash, task.requestKey, task.fingerprint].every(value => /^[a-f0-9]{64}$/u.test(value)) ||
             typeof task.input.conversationId !== 'string' || (!task.eventsExpired && typeof task.input.question !== 'string')) {
           throw fault('task_store_unavailable');
@@ -72,6 +74,12 @@ class DurableQATaskStore {
         if (this.tasks.size > maxReceipts || this.totalBytes() > maxBytes + maxTasks * 16384) throw fault('task_store_unavailable');
       }
       this.available = true;
+      // Legacy receipts keep their original owner/key/status; migration cannot dispatch work.
+      for (const task of this.tasks.values()) {
+        if (task.applicationKey === undefined) {
+          this.update(task.id, current => { current.applicationKey = current.scope; }, true);
+        }
+      }
       this.prune();
     } catch {
       this.release?.();
@@ -94,36 +102,37 @@ class DurableQATaskStore {
       createdAt: task.createdAt, updatedAt: task.updatedAt, expiresAt: task.expiresAt || null };
   }
 
-  owned(id, ownerKey, scope) {
+  owned(id, ownerKey, scope, applicationKey = scope) {
     this.ensure();
     this.prune();
     const task = this.tasks.get(id);
-    if (!task || task.ownerKey !== ownerKey || task.scope !== scope) throw fault('task_not_found', 404);
+    if (!task || task.ownerKey !== ownerKey || task.scope !== scope || task.applicationKey !== applicationKey) throw fault('task_not_found', 404);
     return task;
   }
 
-  list(ownerKey, scope, requestKey, conversationId) {
+  list(ownerKey, scope, requestKey, conversationId, applicationKey = scope) {
     this.ensure();
     this.prune();
-    return [...this.tasks.values()].filter(task => task.ownerKey === ownerKey && task.scope === scope &&
+    return [...this.tasks.values()].filter(task => task.ownerKey === ownerKey && task.scope === scope && task.applicationKey === applicationKey &&
       (!requestKey || task.requestKey === requestKey) && (!conversationId || task.input.conversationId === conversationId))
       .sort((a, b) => b.createdAt - a.createdAt).map(task => this.publicTask(task));
   }
 
-  find(ownerKey, scope, key, input) {
+  find(ownerKey, scope, key, input, applicationKey = scope) {
     this.ensure();
     this.prune();
     const keyHash = hash(key);
-    const task = [...this.tasks.values()].find(t => t.ownerKey === ownerKey && t.scope === scope && t.keyHash === keyHash);
+    const task = [...this.tasks.values()].find(t => t.ownerKey === ownerKey && t.scope === scope && t.applicationKey === applicationKey && t.keyHash === keyHash);
     if (task && task.fingerprint !== hash(JSON.stringify(input))) throw fault('idempotency_conflict', 409);
     return task;
   }
 
-  create({ ownerKey, scope, key, input }) {
-    const existing = this.find(ownerKey, scope, key, input);
+  create({ ownerKey, scope, key, input, applicationKey = scope }) {
+    if (!validApplicationKey(applicationKey)) throw fault('invalid_application_identity', 400);
+    const existing = this.find(ownerKey, scope, key, input, applicationKey);
     if (existing) return { task: existing, isNew: false };
     if (this.tasks.size >= this.maxReceipts || [...this.tasks.values()].filter(task => !task.eventsExpired).length >= this.maxTasks) throw fault('task_capacity', 429);
-    const task = { version: 1, id: crypto.randomUUID(), ownerKey, scope, keyHash: hash(key),
+    const task = { version: 1, id: crypto.randomUUID(), ownerKey, scope, applicationKey, keyHash: hash(key),
       requestKey: /^[a-f0-9]{64}$/u.test(key) ? key : hash(key),
       fingerprint: hash(JSON.stringify(input)), input, status: 'queued', createdAt: this.now(), updatedAt: this.now(),
       trace: { receivedAt: this.now(), dispatchedAt: null, firstUpstreamEventAt: null, lastUpstreamActivityAt: null,

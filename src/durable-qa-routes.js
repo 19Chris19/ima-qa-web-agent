@@ -4,10 +4,10 @@ const express = require('express');
 const { fault } = require('./durable-qa-store');
 
 function registerDurableQARoutes(app, { tasks, config, conversations, webReadiness,
-  requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest, admit }) {
+  ordinaryAuth, internalAuth, requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest, admit }) {
   for (const [base, scope, auth] of [
-    ['/api/tasks', 'ordinary', requireApiToken(config.security?.apiToken)],
-    ['/internal/provider-a/tasks', 'internal', requireInternalServiceToken(config.security?.internalServiceToken)],
+    ['/api/tasks', 'ordinary', ordinaryAuth || requireApiToken(config.security?.apiToken)],
+    ['/internal/provider-a/tasks', 'internal', internalAuth || requireInternalServiceToken(config.security?.internalServiceToken)],
   ]) {
     const router = express.Router();
     router.use(auth, (req, res, next) => {
@@ -37,7 +37,7 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       if (validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') throw fault('knowledge_agent_unavailable', 409);
       const input = { question: req.body.question, conversationId: validation.conversationId,
         retrieval_policy: validation.retrievalPolicy, knowledge_scope_ref: validation.knowledgeScopeRef, source_intent: validation.sourceIntent };
-      const result = tasks.submit({ ownerKey: req.taskOwner, scope, key, input, validateNew() {
+      const result = tasks.submit({ ownerKey: req.taskOwner, scope, applicationKey: req.applicationKey || scope, key, input, validateNew() {
         admit(req, res, scope);
         const conversation = conversations.require(input.conversationId, req.taskOwner);
         if (input.retrieval_policy === 'knowledge_agent' && conversation.mode !== 'knowledge_agent') throw fault('conversation_mode_conflict', 409);
@@ -48,18 +48,18 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       const { requestKey, conversationId } = req.query;
       if (requestKey !== undefined && (typeof requestKey !== 'string' || !/^[a-f0-9]{64}$/u.test(requestKey))) throw fault('invalid_request_key', 400);
       if (conversationId !== undefined && (typeof conversationId !== 'string' || !/^[a-z0-9-]{1,100}$/iu.test(conversationId))) throw fault('invalid_conversation_id', 400);
-      res.json({ tasks: tasks.store.list(req.taskOwner, scope, requestKey, conversationId) });
+      res.json({ tasks: tasks.store.list(req.taskOwner, scope, requestKey, conversationId, req.applicationKey || scope) });
     }));
     router.get('/:id', route((req, res) => {
-      const task = tasks.store.owned(req.params.id, req.taskOwner, scope);
+      const task = tasks.store.owned(req.params.id, req.taskOwner, scope, req.applicationKey || scope);
       res.json({ task: tasks.store.publicTask(task), snapshot: { events: task.events,
         ...(task.eventsExpired ? { eventsExpired: true, history: { conversationId: task.input.conversationId, taskId: task.id } } : {}) } });
     }));
     router.delete('/:id', route((req, res) => {
-      res.json({ task: tasks.cancel(req.params.id, req.taskOwner, scope) });
+      res.json({ task: tasks.cancel(req.params.id, req.taskOwner, scope, req.applicationKey || scope) });
     }));
     router.get('/:id/events', route((req, res) => {
-      const task = tasks.store.owned(req.params.id, req.taskOwner, scope);
+      const task = tasks.store.owned(req.params.id, req.taskOwner, scope, req.applicationKey || scope);
       const cursor = req.query.after === undefined ? (req.get('Last-Event-ID') || '0') : req.query.after;
       if (typeof cursor !== 'string' || !/^(0|[1-9][0-9]*)$/u.test(cursor) || !Number.isSafeInteger(Number(cursor))) throw fault('invalid_cursor', 400);
       const after = Number(cursor);

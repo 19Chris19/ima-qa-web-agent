@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseShareUrl } = require('./shared-kb-target');
+const { normalizeApplicationMappings } = require('./application-identity');
 
 const DEFAULT_MIMO_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const DEFAULT_MIMO_MODEL = 'mimo-v2.5';
@@ -316,6 +317,15 @@ function getWebAgentSharedKnowledgeBaseId(env) {
 }
 
 function getConfig(env = process.env) {
+  const applicationSecurity = {
+    apiToken: readEnv(env, 'IMA_QA_API_TOKEN'),
+    internalServiceToken: readEnv(env, 'IMA_QA_INTERNAL_SERVICE_TOKEN'),
+  };
+  let applications;
+  try {
+    applications = normalizeApplicationMappings(
+      readEnv(env, 'IMA_QA_APPLICATIONS_JSON') ? JSON.parse(readEnv(env, 'IMA_QA_APPLICATIONS_JSON')) : [], applicationSecurity);
+  } catch { throw new ConfigError('IMA_QA_APPLICATIONS_JSON contains an invalid or duplicate application mapping'); }
   const qaProvider = parseProvider(readEnv(env, 'IMA_QA_PROVIDER'));
   const accountStorePath =
     readEnv(env, 'IMA_WEB_AGENT_ACCOUNT_STORE_PATH') || DEFAULT_WEB_AGENT_ACCOUNT_STORE_PATH;
@@ -366,8 +376,8 @@ function getConfig(env = process.env) {
       maxSourceContentLength: 1800,
     },
     security: {
-      apiToken: readEnv(env, 'IMA_QA_API_TOKEN'),
-      internalServiceToken: readEnv(env, 'IMA_QA_INTERNAL_SERVICE_TOKEN'),
+      ...applicationSecurity,
+      applications,
       adminToken: readEnv(env, 'IMA_QA_ADMIN_TOKEN'),
       allowedOrigins: parseAllowedOrigins(readEnv(env, 'ALLOWED_ORIGINS')),
       trustProxy: parseBoolean(readEnv(env, 'TRUST_PROXY')),
