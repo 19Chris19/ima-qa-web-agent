@@ -22,15 +22,18 @@
 
 这份发布包只包含 **Provider A: IMA Web Agent**。部署它不需要 IMA OpenAPI、MIMO Key、本地语料或本地索引；启动时若配置成其他 Provider，会明确拒绝运行，避免交付时误走另一条链路。
 
-> 当前特性分支另含**尚未发布的持久问答任务候选**，不属于已有 v0.4.2 tag。
+> 当前分支准备 **v0.5.0-rc.1 持久问答任务预发布候选**；已有稳定版为 v0.4.2。
 > 参见[任务接口与恢复边界](./docs/DURABLE_QA_TASKS.md)：断开观看不取消任务，
 > 内置问答页要求 `durable_qa_tasks_v1`，旧接口继续兼容。
-> 合成验收不代表真实 IMA、公网链路或现有 Air 服务已经升级。
+> 只有 GitHub 上对应的预发布 Release 与镜像清单通过后才可用于受邀测试；不自动替换稳定版。
+> 真实 IMA 与 Air 预览已有单独的有日期记录，不代表当前候选已经完成公网或手机验收。
 > 最终固定候选、镜像身份与尚未通过的上线门槛见[长回答验收记录](./docs/DURABLE_TASK_ACCEPTANCE_20261009.md)。
+
+灰度升级与回退见[预发布升级说明](./docs/PRERELEASE_UPGRADES.md)。
 
 ## 它看起来怎样
 
-> 本文描述 v0.4.2 源码能力，是否已发布请以 GitHub Releases 为准；不等同 v0.4.1。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
+> v0.4.2 已发布；本分支的持久任务升级属于 v0.5.0-rc.1 候选，不等同运行服务已经切换。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
 
 本版本还包含[通用问答交互](./docs/QA_EXPERIENCE.md)与[离线账号迁移工具](./docs/ACCOUNT_TRANSFER.md)。工具成功仅代表新增账号以停用状态导入，不代表来源调度已经退出或账号问答资格通过；发布和割接前必须逐项检查[候选验收记录](./docs/MANAGEMENT_CANDIDATE_ACCEPTANCE.md)。
 
@@ -84,7 +87,7 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 **新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
 
-若 GitHub Releases 尚无 v0.4.2，当前源码仅供显式指定已审查源码/镜像的隔离演练。部署 v0.4.1 时使用其 tag 内的说明，不混用不同版本命令。发布状态与已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
+新安装默认选择已发布稳定版 v0.4.2 的 tag 和镜像清单。受邀测试 v0.5.0-rc.1 时，必须先确认对应预发布 Release 与验收清单存在；未通过发布门槛的候选只能隔离演练，不混用不同版本命令。已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
 
 标准部署输入是固定 Git tag 的检出，或该 tag 的完整源码归档，必须包含 `package-lock.json`；候选演练同样固定到已审查提交。npm tarball 不推荐作为独立部署目录：它不包含该锁文件，不能直接用于引导脚本的 `npm ci` 或源码 Docker 构建。不要临时生成锁文件代替发布版本的依赖锁定。
 

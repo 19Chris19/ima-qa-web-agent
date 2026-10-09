@@ -1,6 +1,6 @@
 {
   "name": "ima-qa-web",
-  "version": "0.4.2",
+  "version": "0.5.0-rc.1",
   "description": "IMA shared knowledge base QA gateway with streaming Web Agent answers, isolated conversations, and encrypted account-pool enrollment.",
   "repository": {
     "type": "git",
@@ -47,7 +47,7 @@
     "dev": "node --watch provider-a-server.js",
     "build:web-vendor": "node scripts/build-web-renderer-vendor.mjs",
     "soak:synthetic": "node scripts/soak-provider-a.mjs",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=2"
   },
   "keywords": [
     "ima",
