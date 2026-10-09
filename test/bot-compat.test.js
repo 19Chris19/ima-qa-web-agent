@@ -51,13 +51,17 @@ test('idempotency fingerprint binds every group context field, independent of in
   assert.equal(parse({ ...body, recent_context_binding: Object.fromEntries(Object.entries(binding).reverse()) }).requestBinding, original);
 });
 
-test('preparation consumes once with exact binding and does not carry a session across profiles', async () => {
+test('preparation rejects incompatible followups before consume and preserves compatible affinity', async () => {
   const contract = parse({ retrieval_policy: 'group_knowledge', recent_context_ref: ref, recent_context_binding: binding });
   let calls = 0;
-  const prepared = await prepareBotAsk({ contract, question: 'Synthetic question', upstream: { sessionId: 'synthetic-session', sessionAnswerProfile: 'ima_agent_auto' },
+  await assert.rejects(prepareBotAsk({ contract, question: 'Synthetic question', upstream: { accountId: 'account', sessionId: 'synthetic-session', sessionAnswerProfile: 'ima_agent_auto' },
+    recentContextConsumer: { consume() { calls++; } } }), { code: 'session_profile_conflict', statusCode: 409 });
+  assert.equal(calls, 0);
+  const prepared = await prepareBotAsk({ contract, question: 'Synthetic question', upstream: { accountId: 'account', sessionId: 'synthetic-session', sessionAnswerProfile: 'classic_knowledge' },
     recentContextConsumer: { async consume(actual, opts) { calls++; assert.equal(actual, ref); assert.deepEqual(opts.binding, binding); return { messages: [] }; } } });
   assert.equal(calls, 1);
-  assert.equal(prepared.sessionId, undefined);
+  assert.equal(prepared.sessionId, 'synthetic-session');
+  assert.equal(prepared.accountId, 'account');
   assert.equal(prepared.question, 'Synthetic question');
   await assert.rejects(prepareBotAsk({ contract, question: 'Synthetic question' }), { code: 'recent_context_unavailable' });
   await assert.rejects(prepareBotAsk({ contract, question: 'Synthetic question', signal: AbortSignal.abort(),
@@ -105,5 +109,10 @@ test('dual capacity shape preserves website flags and never invents policies or 
   const blocked = buildBotCapacitySnapshot({ website, profile: { ...profile, ready: false }, policyCapacity: { web: 2 } });
   assert.equal(blocked.ready, false);
   assert.equal(blocked.profile_block_category, 'answer_profile_probe_failed');
+  const native = buildBotCapacitySnapshot({ website, profile: { ...profile, ready: false }, policyCapacity: { knowledge_agent: 3, web: 2 } });
+  assert.equal(native.answer_profile_ready, false);
+  assert.equal(native.policies.knowledge_agent.max_concurrent, 3);
+  assert.equal(native.policies.web.max_concurrent, 0);
+  assert.equal(native.ready, true);
   assert.throws(() => buildBotCapacitySnapshot({ website, profile: {} }), { code: 'bot_capacity_unavailable' });
 });

@@ -12,20 +12,28 @@ const { WebReadiness } = require('./src/web-readiness');
 const { acquireAccountStoreFence } = require('./src/account-store-fence');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createAirRuntime } = require('./src/air/startup');
+const { AirAccountDirectory } = require('./src/air/account-directory');
+const { createAirEnrollmentHooks } = require('./src/air/enrollment-hooks');
+const { AirWebReadiness } = require('./src/air/web-readiness');
 
-async function main() {
-  const envLoad = loadRuntimeEnv();
-  const config = getConfig(process.env);
+async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
+  const envLoad = suppliedEnvLoad || loadRuntimeEnv();
+  const config = suppliedConfig || getConfig(process.env);
   assertProviderA(config);
 
   fs.mkdirSync(path.dirname(config.webAgent.accountStorePath), { recursive: true, mode: 0o700 });
   // Held for the process lifetime; proper-lockfile releases on exit, not on listen.
   await acquireAccountStoreFence(config.webAgent.accountStorePath);
 
-  const accountDirectory = new WebAgentAccountDirectory({
+  const airRuntime = createAirRuntime({ config });
+  const directoryOptions = {
     storePath: config.webAgent.accountStorePath,
     keyPath: config.webAgent.accountStoreKeyPath,
-  });
+  };
+  const accountDirectory = airRuntime
+    ? new AirAccountDirectory(directoryOptions)
+    : new WebAgentAccountDirectory(directoryOptions);
   const conversationStore = new ConversationStore(config.conversations);
   seedAccountDirectory(accountDirectory, config.webAgent.accounts);
   validateDirectoryKnowledgeBase(accountDirectory, config.webAgent.sharedKnowledgeBaseId);
@@ -37,6 +45,7 @@ async function main() {
       accounts: accountDirectory.getPoolAccounts(),
     },
     {
+      ...airRuntime?.poolOptions,
       onAccountStateChange(snapshot) {
         accountDirectory.recordRuntimeState(snapshot);
         synchronizeQueueCapacity();
@@ -46,25 +55,29 @@ async function main() {
       },
     },
   );
-  try {
-    const refreshed = await imaWebAgentClient.ensureFreshAuth();
-    imaWebAgentClient.persistRuntimeEnv();
-    if (refreshed) {
-      console.log('IMA Web Agent auth refreshed on startup');
-    }
-  } catch (error) {
-    console.warn(`IMA Web Agent startup auth check failed: ${error.message}`);
-  }
-  imaWebAgentClient.startAutoRefresh();
-
-  const webReadiness = new WebReadiness({ directory: accountDirectory, pool: imaWebAgentClient, mode: config.webAgent.webMode });
+  const airPolicies = airRuntime?.attachPool(imaWebAgentClient, accountDirectory);
+  const Readiness = airRuntime ? AirWebReadiness : WebReadiness;
+  const webReadiness = new Readiness({ directory: accountDirectory, pool: imaWebAgentClient,
+    mode: config.webAgent.webMode, policies: airPolicies });
   const app = createApp({
+    ...airRuntime?.appOptions,
     config,
     imaWebAgentClient,
     accountDirectory,
     conversationStore,
     webReadiness,
   });
+  if (airRuntime && app.locals.airBotExtensionsMounted !== true) {
+    throw new Error('air_bot_app_glue_required');
+  }
+  try {
+    const refreshed = await imaWebAgentClient.ensureFreshAuth();
+    imaWebAgentClient.persistRuntimeEnv();
+    if (refreshed) console.log('IMA Web Agent auth refreshed on startup');
+  } catch (error) {
+    console.warn(`IMA Web Agent startup auth check failed: ${error.message}`);
+  }
+  imaWebAgentClient.startAutoRefresh();
   synchronizeQueueCapacity = () =>
     synchronizeProviderAQueueCapacity({
       askQueue: app.locals.imaQaAskQueue,
@@ -85,13 +98,17 @@ async function main() {
     }),
   });
   app.locals.accountPoolExerciseManager = accountPoolExerciseManager;
+  const airQualification = airRuntime?.attachApp({ app, accountDirectory, pool: imaWebAgentClient,
+    accountPoolExerciseManager, synchronizeQueueCapacity });
   const enrollmentManager = new WebAgentEnrollmentManager({
     config,
     accountDirectory,
     pool: imaWebAgentClient,
     onAccountsSynced: synchronizeQueueCapacity,
-    onEnrolled: (id, question) => webReadiness.verify(id, question),
-    onCancelVerification: id => webReadiness.cancel(id),
+    ...(airQualification ? createAirEnrollmentHooks(airQualification.adminOptions.knowledgeAgentQualificationManager) : {
+      onEnrolled: (id, question) => webReadiness.verify(id, question),
+      onCancelVerification: id => webReadiness.cancel(id),
+    }),
   });
   registerAdminRoutes(app, {
     config,
@@ -103,8 +120,9 @@ async function main() {
     accountPoolExerciseManager,
     webReadiness,
   });
+  airRuntime?.start();
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     console.log('IMA Provider A QA web app is running');
     console.log(`Main page: http://localhost:${config.port}`);
     console.log(`Embed page: http://localhost:${config.port}/embed.html`);
@@ -114,6 +132,7 @@ async function main() {
     }
     console.log(`Model: ${config.webAgent.modelId}`);
   });
+  server.on('close', () => { airRuntime?.close().catch(() => {}); });
 }
 
 function assertProviderA(config) {
@@ -170,6 +189,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  main,
   assertProviderA,
   seedAccountDirectory,
   validateDirectoryKnowledgeBase,
