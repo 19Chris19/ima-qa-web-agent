@@ -27,6 +27,28 @@ Optional boolean `features` are retained alongside authoritative website feature
 Startup and pool owners must mount policy-qualified account selection; merely
 injecting capacity is not permission to route through unqualified accounts.
 
+The mounted pool now records paired exclusions synchronously with slot reservation,
+including direct pool streaming and queued task leases. Two slots on one account
+never satisfy two pair legs. Each leg retains its selected account; a conflicting
+existing session cannot override the other leg's exclusion. Cancellation before
+lease consumption removes unused reservations; release is idempotent.
+
+Pair keys are hashes of trusted application identity, the full normalized context
+binding (account/group/route and both generations), and the pair ref. Exact binding
+permits distinct visitor IDs to join; absent a binding, the trusted owner is the
+fallback scope. Neither raw group identifiers nor the internal pair key reach the
+upstream client. The specified immutable release's bot caller has no parallel
+wire fields; historical `5a675cbe` supplies those client fields, while its runner's
+client identity is account/group/sender. Current paired caller parity requires
+its exact code revision, not an assumption that both visitors match.
+
+Active and incomplete pair records never expire. Only two consumed, released legs
+start the five-minute cleanup period. Records are capped at 4096; no protected
+record is evicted to admit a new pair, and mounted pair capacity is clamped to
+remaining record capacity. Durable restart reconstructs exclusions before queued
+work; unknown dispatched affinity blocks the pair. Legacy pair reservations remain
+process-local, matching the previous pool contract; no new legacy replay is added.
+
 Alternative explicit `botCompatibility` injection:
 
 ```js
@@ -44,6 +66,16 @@ from total slots. Without the optional scope resolver the existing server-side
 KB configuration supplies its SHA-256 digest. No request field selects a trusted
 scope or application identity. Absent/invalid readiness fails closed. Empty
 policies remain unavailable. Pair capacity is bounded separately from total slots.
+
+`app.locals.airBotExtensionsMounted` is true only with the Web Agent provider and
+a mounted bot snapshot adapter. Native/classic bot policies use their independent
+qualified capacities even when the elected auto profile is blocked. Auto/web/mixed
+remain gated on profile readiness. The v4 `policies` remain bot qualifications;
+the additive `website` object retains the website-native mode-specific snapshot.
+The bot execution ceiling uses the shared eligible-account union helper, not the
+website's current native-only capacity; busy eligible slots remain in that ceiling.
+The top-level website feature `knowledge_agent_keyed_sse_v1` is false in classic
+website mode so existing BFFs cannot confuse bot qualification with website readiness.
 
 `healthCapabilities` is also an app option for sanitized existing capability
 declarations. Recent-context v1/v2 is advertised only with the bot adapter and

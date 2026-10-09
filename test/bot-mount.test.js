@@ -12,6 +12,7 @@ const { ConversationStore } = require('../src/conversation-store');
 const { FIELDS } = require('../src/bot-compat');
 const { DurableQATasks } = require('../src/durable-qa-tasks');
 const { createAskQueue } = require('../src/ask-queue');
+const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
 
 const hash = text => crypto.createHash('sha256').update(text).digest('hex');
 const scope = hash('synthetic-kb');
@@ -49,6 +50,7 @@ async function fixture(t, options = {}) {
     concurrency: { maxConcurrentAsk: 1, queueLimit: options.queueLimit ?? 10, requestTimeoutMs: 10000 },
     rateLimit: { windowMs: 0, max: 0 } };
   const pool = {
+    now: Date.now,
     canAcquireSlot(args) { routing.push(args); return true; },
     tryAcquireSlot(args) { routing.push(args); const lease = { accountId: 'synthetic-account', released: false,
       release() { this.released = true; } }; leases.push(lease); return { value: lease, release: () => lease.release() }; },
@@ -62,13 +64,15 @@ async function fixture(t, options = {}) {
     },
   };
   const adapter = { snapshot: () => state, ...(options.adapter || {}) };
-  const app = createApp({ config, conversationStore: store, imaWebAgentClient: pool,
-    webReadiness: { mode: options.serverMode || mode, snapshot: () => ({ mode: options.serverMode || mode, generation: 4, capacity: 2, totalSlots: 2,
+  const app = createApp({ config, conversationStore: store, imaWebAgentClient: options.pool || pool,
+    webReadiness: { mode: options.serverMode || mode, snapshot: () => ({ mode: options.serverMode || mode, generation: 4, capacity: options.websiteCapacity ?? 2, totalSlots: 2, accounts: [],
       schedulable: 2, eligibleAccounts: 2, totalAccounts: 2, schedulableAccounts: 2, knowledgeAgentCapacity: 2 }) },
     ...(options.disabled ? {} : options.airPolicyCapacity ? { airPolicyCapacity: {
       profileSnapshot: () => state.profile, policyCapacitySnapshot: () => state.policyCapacity,
       laneCapacitySnapshot: () => state.laneCapacity,
       pairedCapacitySnapshot: () => ({ knowledge_web_parallel: state.pairedCapacity }), features: state.features,
+      accounts: () => [0, 1].map(index => ({ id: `synthetic-${index}`, maxConcurrent: 1, cooldownUntil: 0 })),
+      eligible: (account, policy) => Number(account.id.slice(-1)) < (state.policyCapacity[policy] || 0),
     } } : { botCompatibility: adapter }),
     recentContextConsumer: { async consume(ref, args) {
       consumed.push({ ref, ...args });
@@ -144,6 +148,7 @@ for (const mode of ['classic_knowledge', 'knowledge_agent']) for (const format o
     assert.equal(args.mode, mode);
     assert.equal(args.accountId, 'synthetic-account');
     assert.equal(args.sessionId, 'synthetic-session');
+    assert.equal(args.sessionAnswerProfile, undefined, 'unknown legacy profile is not guessed');
     assert.equal(f.routing.every(item => item.mode === mode && item.retrievalPolicy === policy), true);
     assert.equal(result.answer_basis, 'knowledge');
     assert.equal(result.source_count, 1);
@@ -422,6 +427,135 @@ test('Air startup policy adapter mounts v4 capacity with stable changing generat
   const after = await get();
   assert.equal(after.generation, before.generation + 1);
   assert.equal(after.policies.web.ready, false);
+});
+
+test('Air mount marker reflects installed bot route adapters, not merely app creation', async t => {
+  for (const options of [{}, { airPolicyCapacity: true }]) {
+    assert.equal((await fixture(t, options)).app.locals.airBotExtensionsMounted, true);
+  }
+  assert.equal((await fixture(t, { disabled: true })).app.locals.airBotExtensionsMounted, false);
+});
+
+test('bot capacity uses eligible union when website native capacity is zero', async t => {
+  const f = await fixture(t, { airPolicyCapacity: true, mode: 'knowledge_agent', websiteCapacity: 0 });
+  const capacity = await (await f.request('/internal/provider-a/capacity')).json();
+  assert.equal(capacity.website.maxConcurrent, 0);
+  assert.equal(capacity.website.policies.knowledge_agent.max_concurrent, 0);
+  assert.equal(capacity.features.knowledge_agent_keyed_sse_v1, false);
+  assert.equal(capacity.max_concurrent, 2);
+  assert.equal(capacity.policies.group_knowledge.max_concurrent, 2);
+});
+
+test('pair routing keys join exact context binding across visitors and isolate trusted applications', async t => {
+  const f = await fixture(t);
+  const send = async ({ format = 'json', visitor = 'synthetic-one', token = 'synthetic-bot-internal', changed = {} } = {}) => {
+    const conversationId = format === 'task' ? (await (await f.request('/api/conversations',
+      { method: 'POST' }, token.replace('-internal', '-api'), visitor)).json()).conversation.conversationId : '';
+    const response = await f.post(format === 'task' ? '/internal/provider-a/tasks' : undefined,
+      { conversationId, parallel_pair_ref: hash('synthetic-pair'), parallel_leg: 'knowledge',
+        recent_context_binding: { ...binding, ...changed }, parallelPairKey: hash('untrusted-injected-key') },
+      hash(`${format}-${visitor}-${token}-${JSON.stringify(changed)}`),
+      { headers: { 'x-ima-client-id': visitor, 'X-Application-ID': 'spoofed',
+        ...(format === 'sse' ? { Accept: 'text/event-stream' } : {}) } }, token);
+    assert.equal(response.status, format === 'task' ? 202 : 200);
+    if (format === 'task') {
+      const { task } = await response.json();
+      await until(async () => (await (await f.request(`/internal/provider-a/tasks/${task.id}`, {}, token, visitor)).json()).task.status === 'succeeded');
+    } else await response.text();
+    const key = f.calls.at(-1).parallelPairKey;
+    assert.match(key, /^[a-f0-9]{64}$/u);
+    assert.notEqual(key, hash('untrusted-injected-key'));
+    assert.equal(f.routing.at(-1).parallelPairKey, key);
+    return key;
+  };
+  const original = await send();
+  assert.equal(await send({ format: 'sse', visitor: 'synthetic-two' }), original);
+  assert.equal(await send({ format: 'task', visitor: 'synthetic-three' }), original);
+  assert.notEqual(await send({ token: 'synthetic-other-internal' }), original);
+  for (const [key, value] of Object.entries(binding)) {
+    assert.notEqual(await send({ changed: { [key]: typeof value === 'number' ? value + 1 : `${value}-other` } }), original);
+  }
+});
+
+for (const format of ['sse', 'task']) test(`${format}: mounted real pool keeps pair legs on distinct accounts across visitors`, async t => {
+  const calls = [];
+  const makePool = () => new IMAWebAgentPool({ accounts: [{ id: 'synthetic-a', maxConcurrent: 2 }, { id: 'synthetic-b', maxConcurrent: 2 }] }, {
+    clientFactory: account => ({ async *streamAsk(args) {
+      calls.push({ account: account.id, args });
+      args.onDispatch?.();
+      const answerProfile = args.retrievalPolicy === 'web' ? 'ima_agent_auto' : 'classic_knowledge';
+      args.onSession(`synthetic-session-${account.id}`, { answerProfile });
+      yield { type: 'sources', answerProfile, sourceKinds: [args.retrievalPolicy === 'web' ? 'web' : 'knowledge'],
+        sources: [{ title: 'Synthetic source', snippet: 'Synthetic evidence' }] };
+      yield { type: 'delta', text: 'Synthetic paired answer', answerProfile };
+      yield { type: 'done', answerProfile };
+    } }),
+  });
+  const pool = makePool();
+  const f = await fixture(t, { pool, context: { messages: [], sourceMessageCount: 0, selectedMessageCount: 0, truncationReason: 'none' } });
+  for (const leg of ['knowledge', 'web']) {
+    const visitor = `synthetic-${leg}-visitor`;
+    const conversationId = format === 'task' ? (await (await f.request('/api/conversations',
+      { method: 'POST' }, 'synthetic-api', visitor)).json()).conversation.conversationId : '';
+    const response = await f.post(format === 'task' ? '/internal/provider-a/tasks' : undefined, {
+      conversationId, retrieval_policy: leg === 'web' ? 'web' : 'group_knowledge',
+      parallel_pair_ref: hash('synthetic-pair'), parallel_leg: leg,
+      recent_context_ref: `ctx_${hash(leg)}`,
+    }, hash(leg), { headers: { Accept: 'text/event-stream', 'x-ima-client-id': visitor } });
+    assert.equal(response.status, format === 'task' ? 202 : 200);
+    if (format === 'task') {
+      const { task } = await response.json();
+      await until(async () => (await (await f.request(`/internal/provider-a/tasks/${task.id}`, {}, undefined, visitor)).json()).task.status === 'succeeded');
+    } else assert.match(await response.text(), /event: done/u);
+  }
+  assert.equal(new Set(calls.map(call => call.account)).size, 2);
+  assert.equal(pool.stats().activeRequests, 0);
+  if (format === 'task') {
+    const manager = f.app.locals.durableQATasks;
+    const directory = manager.store.directory;
+    const routingOptions = manager.routingOptions;
+    const task = [...manager.store.tasks.values()].find(item => item.input.botContract.parallelLeg === 'knowledge');
+    const key = routingOptions(task).parallelPairKey;
+    manager.close();
+    const restartedPool = makePool();
+    const recovered = new DurableQATasks({ directory, conversations: f.store, queue: createAskQueue({}),
+      accountPool: restartedPool, routingOptions, execute: () => assert.fail('completed pair must not redispatch') });
+    try {
+      assert.equal(restartedPool.parallelPairs.get(key).legs.knowledge.accountId, calls[0].account);
+      assert.equal(restartedPool.parallelPairs.get(key).legs.web.accountId, calls[1].account);
+    } finally { recovered.close(); }
+  }
+});
+
+test('independently qualified native/classic bot policies work while auto profile is blocked', async t => {
+  for (const policy of ['knowledge_agent', 'group_knowledge']) {
+    const f = await fixture(t, { mode: policy === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge' });
+    f.state.profile.ready = false;
+    const capacity = await (await f.request('/internal/provider-a/capacity')).json();
+    assert.equal(capacity.policies[policy].ready, true);
+    assert.equal((await f.post(undefined, { retrieval_policy: policy })).status, 200);
+    for (const blocked of ['auto', 'web', 'mixed']) {
+      assert.equal((await f.post(undefined, { conversationId: '', retrieval_policy: blocked }, hash(blocked))).status, 503);
+    }
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test('dual capacity separates bot native qualification from website native mode', async t => {
+  const f = await fixture(t, { serverMode: 'classic_knowledge' });
+  const capacity = await (await f.request('/internal/provider-a/capacity')).json();
+  assert.equal(capacity.policies.knowledge_agent.max_concurrent, 2, 'bot native qualification stays independent');
+  assert.equal(capacity.features.knowledge_agent_keyed_sse_v1, false, 'website contract cannot advertise a rejecting mode');
+  assert.equal(capacity.website.policies.knowledge_agent.max_concurrent, 0);
+  assert.equal(capacity.website.features.knowledge_agent_keyed_sse_v1, false);
+  const response = await f.request('/internal/provider-a/deep-ask', { method: 'POST',
+    headers: { 'Idempotency-Key': 'native-website-key' }, body: JSON.stringify({ question: 'Synthetic native question',
+      retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope }) });
+  assert.equal(response.status, 409);
+  const native = await fixture(t, { mode: 'knowledge_agent' });
+  const ready = await (await native.request('/internal/provider-a/capacity')).json();
+  assert.equal(ready.features.knowledge_agent_keyed_sse_v1, true);
+  assert.equal(ready.website.policies.knowledge_agent.max_concurrent, 2);
 });
 
 test('session profile conflict is explicit before consume and never resets upstream binding', async t => {

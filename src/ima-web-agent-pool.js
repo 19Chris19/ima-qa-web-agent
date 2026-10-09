@@ -32,6 +32,12 @@ class IMAWebAgentPool {
     this.availabilityListeners = new Set();
     this.availabilityObserverErrors = 0;
     this.taskLeases = new WeakMap();
+    this.parallelPairs = new Map();
+    this.maxParallelPairs = options.maxParallelPairs || 4096;
+    if (!Number.isSafeInteger(this.maxParallelPairs) || this.maxParallelPairs < 1 || this.maxParallelPairs > 4096) {
+      throw new TypeError('Invalid parallel pair capacity');
+    }
+    this.parallelPairRetentionMs = options.parallelPairRetentionMs || 5 * 60_000;
     this.cooldownMs = Number(config.accountCooldownMs || DEFAULT_ACCOUNT_COOLDOWN_MS);
     this.maxConsecutiveErrors = Number(
       config.accountMaxConsecutiveErrors || DEFAULT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
@@ -184,6 +190,20 @@ class IMAWebAgentPool {
 
   async *streamAsk(options = {}) {
     options.signal?.throwIfAborted();
+    const pair = this._parallelPair(options);
+    let ownPairLease;
+    if (pair && !options.accountLease) {
+      ownPairLease = await this._waitForPairSlot(options);
+      options = { ...options, accountLease: ownPairLease.value };
+    }
+    try {
+      yield* this._streamAsk(options);
+    } finally {
+      ownPairLease?.release();
+    }
+  }
+
+  async *_streamAsk(options = {}) {
     let preferredAccountId = String(options.accountId || '').trim();
     if ((options.mode === 'knowledge_agent' && this.webReadiness) || (options.retrievalPolicy && this.policyEligibility)) {
       const eligible = this.accounts.filter(account => this._requestEligible(account, options));
@@ -204,6 +224,7 @@ class IMAWebAgentPool {
       },
     };
     delete clientOptions.accountId;
+    delete clientOptions.parallelPairKey;
     try {
       options.signal?.throwIfAborted();
       yield { type: 'route', accountId: account.id };
@@ -248,8 +269,13 @@ class IMAWebAgentPool {
   }
 
   _runnableAccount(options = {}) {
+    const pair = this._parallelPair(options);
+    this._pruneParallelPairs();
+    if (pair && !this.parallelPairs.has(pair.key) && this.parallelPairs.size >= this.maxParallelPairs) {
+      throw new NoAvailableWebAgentAccountError('parallel_pair_capacity');
+    }
     const preferred = options.accountId || '';
-    const eligible = account => this._requestEligible(account, options);
+    const eligible = account => this._requestEligible(account, options) && this._pairEligible(account, pair, options);
     if (preferred) {
       const account = this.accounts.find(item => item.id === preferred || item.name === preferred);
       if (!account || account.disabled) {
@@ -269,11 +295,14 @@ class IMAWebAgentPool {
     options.signal?.throwIfAborted();
     const account = this._runnableAccount(options);
     if (!account) return null;
-    this._reserveAccount(account);
+    const pairLease = this._recordParallelPairLease(this._parallelPair(options), account.id);
+    try { this._reserveAccount(account); }
+    catch (error) { pairLease?.release(); throw error; }
     const value = {};
-    const record = { account, used: false, released: false, release: () => {
+    const record = { account, pairLease, used: false, released: false, release: () => {
       if (record.released) return;
       record.released = true;
+      pairLease?.release();
       this._releaseAccount(account);
     } };
     this.taskLeases.set(value, record);
@@ -283,14 +312,123 @@ class IMAWebAgentPool {
   _consumeTaskLease(lease, options) {
     const record = this.taskLeases.get(lease);
     const account = record?.account;
+    const pair = this._parallelPair(options);
     if (!record || record.used || record.released || !this.accounts.includes(account)
+        || record.pairLease?.key !== pair?.key || record.pairLease?.leg !== pair?.leg
         || account.disabled || account.maintenanceOperation || account.cooldownUntil > this.now()
         || (options.accountId && ![account.id, account.name].includes(options.accountId))
         || !this._requestEligible(account, options)) {
       throw new Error('Invalid account lease');
     }
     record.used = true;
+    record.pairLease?.markUsed();
     return account;
+  }
+
+  _parallelPair(options) {
+    if (!options.parallelPairRef && !options.parallelLeg && !options.parallelPairKey) return null;
+    if (!/^[a-f0-9]{64}$/u.test(options.parallelPairRef || '') ||
+        !/^[a-f0-9]{64}$/u.test(options.parallelPairKey || '') ||
+        !['knowledge', 'web'].includes(options.parallelLeg) ||
+        options.retrievalPolicy !== (options.parallelLeg === 'knowledge' ? 'group_knowledge' : 'web')) {
+      throw new NoAvailableWebAgentAccountError('parallel_contract_invalid');
+    }
+    return { key: options.parallelPairKey, leg: options.parallelLeg };
+  }
+
+  _pairEligible(account, pair, options) {
+    if (!pair) return true;
+    const entry = this.parallelPairs.get(pair.key);
+    if (entry?.blocked) return false;
+    const other = pair.leg === 'knowledge' ? 'web' : 'knowledge';
+    if (entry?.legs[other]?.accountId === account.id) return false;
+    if (entry?.legs[pair.leg] && entry.legs[pair.leg].accountId !== account.id) return false;
+    if (entry?.legs[other]) return true;
+    const counterpart = { ...options, accountId: undefined,
+      retrievalPolicy: other === 'web' ? 'web' : 'group_knowledge' };
+    return this.accounts.some(candidate => candidate.id !== account.id && !candidate.disabled &&
+      !candidate.maintenanceOperation && candidate.cooldownUntil <= this.now() && this._requestEligible(candidate, counterpart));
+  }
+
+  _recordParallelPairLease(pair, accountId) {
+    if (!pair) return null;
+    let entry = this.parallelPairs.get(pair.key);
+    if (!entry) {
+      if (this.parallelPairs.size >= this.maxParallelPairs) throw new NoAvailableWebAgentAccountError('parallel_pair_capacity');
+      entry = { legs: {}, expiresAt: Infinity };
+      this.parallelPairs.set(pair.key, entry);
+    }
+    const other = pair.leg === 'knowledge' ? 'web' : 'knowledge';
+    if (entry.legs[other]?.accountId === accountId ||
+        (entry.legs[pair.leg] && entry.legs[pair.leg].accountId !== accountId)) {
+      throw new NoAvailableWebAgentAccountError('parallel_pair_account_conflict');
+    }
+    const leg = entry.legs[pair.leg] ||= { accountId, active: 0, used: false };
+    leg.active++;
+    entry.expiresAt = Infinity;
+    let released = false;
+    return { ...pair, markUsed() { leg.used = true; }, release: () => {
+      if (released) return;
+      released = true;
+      leg.active--;
+      if (!leg.active && !leg.used) delete entry.legs[pair.leg];
+      const legs = Object.values(entry.legs);
+      if (!legs.length) this.parallelPairs.delete(pair.key);
+      else if (!entry.blocked && legs.length === 2 && legs.every(item => !item.active)) entry.expiresAt = this.now() + this.parallelPairRetentionMs;
+    } };
+  }
+
+  _pruneParallelPairs() {
+    for (const [key, entry] of this.parallelPairs) {
+      if (entry.expiresAt <= this.now()) this.parallelPairs.delete(key);
+    }
+  }
+
+  parallelPairCapacity() {
+    this._pruneParallelPairs();
+    return Math.max(0, this.maxParallelPairs - this.parallelPairs.size);
+  }
+
+  restoreParallelPairBinding(options) {
+    const pair = this._parallelPair(options);
+    if (!pair) return;
+    if (!options.accountId) {
+      if (!this.parallelPairs.has(pair.key) && this.parallelPairs.size >= this.maxParallelPairs) {
+        throw new NoAvailableWebAgentAccountError('parallel_pair_capacity');
+      }
+      const entry = this.parallelPairs.get(pair.key) || { legs: {}, expiresAt: Infinity };
+      entry.blocked = true;
+      entry.expiresAt = Infinity;
+      this.parallelPairs.set(pair.key, entry);
+      return;
+    }
+    const lease = this._recordParallelPairLease(pair, options.accountId);
+    lease.markUsed();
+    lease.release();
+  }
+
+  _waitForPairSlot(options) {
+    options.signal?.throwIfAborted();
+    const lease = this.tryAcquireSlot(options);
+    if (lease) return lease;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error, acquired) => {
+        if (settled) { acquired?.release(); return; }
+        settled = true;
+        unsubscribe();
+        options.signal?.removeEventListener('abort', abort);
+        if (error) reject(error); else resolve(acquired);
+      };
+      const abort = () => finish(new Error('request_aborted'));
+      const wake = () => {
+        try { const acquired = this.tryAcquireSlot(options); if (acquired) finish(null, acquired); }
+        catch (error) { finish(error); }
+      };
+      const unsubscribe = this.onAvailability(wake);
+      options.signal?.addEventListener('abort', abort, { once: true });
+      if (options.signal?.aborted) abort(); else wake();
+    });
   }
 
   _releaseAccount(account) {

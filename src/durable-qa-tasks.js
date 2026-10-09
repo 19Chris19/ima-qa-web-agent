@@ -24,6 +24,18 @@ class DurableQATasks {
       // Resolve the completion journal before admitting any new requests.
       for (const task of this.store.tasks.values()) {
         if (task.bindingPending) this.applyBinding(task.id);
+        if (this.accountPool?.restoreParallelPairBinding &&
+            (task.upstreamBinding || task.completion || task.trace?.dispatchedAt != null)) {
+          const routing = this.routingOptions(task);
+          if (routing.parallelPairKey) {
+            let accountId = task.upstreamBinding?.accountId || task.completion?.upstream?.accountId;
+            if (!accountId) {
+              try { accountId = this.conversations.getUpstream(task.input.conversationId, task.ownerKey).accountId; }
+              catch { /* Unknown dispatched affinity must block the pair, never guess. */ }
+            }
+            this.accountPool.restoreParallelPairBinding({ ...routing, accountId });
+          }
+        }
         if (task.completion) this.complete(task.id, task.completion);
         else if (task.status === 'running') this.terminal(task.id, 'indeterminate', 'execution_interrupted');
       }
