@@ -69,18 +69,20 @@ function createApp({
     try {
       durableTasks = new DurableQATasks({
         directory: config.durableTasks?.storePath || `${config.conversations.storePath}.tasks`,
-        conversations, queue: askQueue,
-        execute: ({ task, signal, res, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity }) => dispatchAsk({
+        conversations, queue: askQueue, accountPool: imaWebAgentClient,
+        mode: webReadiness?.mode || config.webAgent?.mode,
+        execute: ({ task, signal, res, accountLease, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity }) => dispatchAsk({
           config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
           history: conversations.getHistory(task.input.conversationId, task.ownerKey),
           question: task.input.question,
           upstreamQuestion: task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
           sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
+          mode: task.input.retrieval_policy || conversations.require(task.input.conversationId, task.ownerKey).mode || webReadiness?.mode,
           transportTimeouts: {
             headersMs: config.concurrency?.taskConnectTimeoutMs || 60000,
             idleMs: config.concurrency?.taskIdleTimeoutMs || 600000,
           },
-          onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity, durableTask: true,
+          onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity, accountLease, durableTask: true,
           isTimedOut: () => false, conversationId: task.input.conversationId,
           conversationStore: taskConversations, ownerKey: task.ownerKey,
         }),
@@ -269,7 +271,7 @@ function createApp({
 
     try {
       await askQueue.run(
-        () =>
+        accountLease =>
           dispatchAsk({
             config,
             history: conversations.getHistory(conversationId, ownerKey),
@@ -285,12 +287,17 @@ function createApp({
             req,
             res,
             signal,
+            mode: validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode,
             isTimedOut,
             conversationId,
             conversationStore: conversations,
             ownerKey,
+            accountLease,
           }),
-        { signal },
+        { signal, ...(config.qaProvider === 'ima-web-agent' && imaWebAgentClient?.tryAcquireSlot ? {
+          isRunnable: () => imaWebAgentClient.canAcquireSlot({ ...conversations.getUpstream(conversationId, ownerKey), mode: validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode }),
+          tryAcquire: () => imaWebAgentClient.tryAcquireSlot({ ...conversations.getUpstream(conversationId, ownerKey), mode: validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode, signal }),
+        } : {}) },
       );
     } catch (error) {
       if (error instanceof QueueFullError) {
@@ -607,6 +614,8 @@ async function handleJsonWebAgentAsk(context) {
       imaWebAgentClient,
       signal,
       upstream: conversationStore.getUpstream(conversationId, ownerKey),
+      accountLease: context.accountLease,
+      mode: context.mode,
     });
     const answer = sanitizeIMAAnswerText(result.answer) || noReliableContentAnswer();
     conversationStore.setUpstream(conversationId, result, ownerKey);
@@ -674,6 +683,8 @@ async function handleStreamingWebAgentAsk(context) {
     for await (const event of imaWebAgentClient.streamAsk({
       question: upstreamQuestion,
       signal,
+      ...(context.accountLease ? { accountLease: context.accountLease } : {}),
+      ...(context.mode ? { mode: context.mode } : {}),
       ...(context.transportTimeouts ? { transportTimeouts: context.transportTimeouts } : {}),
       ...(context.onDispatch ? { onDispatch: context.onDispatch } : {}),
       ...(context.onUpstreamActivity ? { onActivity: context.onUpstreamActivity } : {}),
@@ -755,7 +766,7 @@ async function handleStreamingWebAgentAsk(context) {
   }
 }
 
-async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upstream = {} }) {
+async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upstream = {}, accountLease, mode }) {
   let answer = '';
   let searchSummary = '';
   const sources = [];
@@ -767,6 +778,8 @@ async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upst
   for await (const event of imaWebAgentClient.streamAsk({
     question,
     signal,
+    ...(accountLease ? { accountLease } : {}),
+    ...(mode ? { mode } : {}),
     onSession(nextSessionId) {
       sessionId = nextSessionId;
     },

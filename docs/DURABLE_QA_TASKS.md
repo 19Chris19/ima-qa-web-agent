@@ -177,9 +177,13 @@ Per-account `maxConcurrent` defaults to one and survives encrypted directory
 reload, reauthentication replacement, pool sync and configured startup seeding.
 Existing directory accounts apply an explicitly configured value without replacing
 their credentials. No real deployment's slot configuration is changed by this
-candidate. A task waiting for its pinned account remains queued; currently that
-wait still occupies a global scheduler slot, and it never migrates to another
-account merely because its own account is busy.
+candidate. The fair scheduler reserves an account only for a runnable task.
+A task waiting for its pinned account stays queued without taking a global
+execution slot. Other account slots remain usable. The private reservation is
+released once on cancellation, pre-dispatch failure or completion; the pool's
+availability notifications wake queued selection. It never migrates a follow-up
+to another account merely because the original account is busy. The session's
+recorded question mode is passed explicitly into the upstream client.
 
 `task.trace` includes received/execution/dispatched/first-event/terminal timestamps,
 terminal reason and subscription/disconnect/rotation counters.
