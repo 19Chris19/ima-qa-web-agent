@@ -55,6 +55,8 @@ function createApp({
   const app = express();
   const observer = observationExporter || observation;
   botCompatibility ||= airPolicyCapacity ? createAirBotCompatibility(airPolicyCapacity) : null;
+  app.locals.airBotExtensionsMounted = Boolean(config.qaProvider === 'ima-web-agent' &&
+    typeof botCompatibility?.snapshot === 'function');
   const applicationIdentity = createApplicationIdentity(config.security);
   const ordinaryAuth = applicationIdentity.middleware('ordinary');
   const internalAuth = applicationIdentity.middleware('internal');
@@ -188,7 +190,7 @@ function createApp({
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
       features: {
-        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent',
+        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
       },
@@ -509,10 +511,11 @@ function botRoutingOptions(contract) {
 function assertBotPolicy(contract, adapter) {
   let state;
   try { state = adapter?.snapshot(); } catch { throw taskFault('bot_capacity_unavailable', 503); }
-  if (state?.profile?.ready !== true || !['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(state.profile.answer_profile) ||
+  const policy = contract.retrievalPolicy || 'auto';
+  const independentPolicy = ['knowledge_agent', 'group_knowledge'].includes(policy);
+  if ((!independentPolicy && state?.profile?.ready !== true) || !['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(state?.profile?.answer_profile) ||
       !Number.isSafeInteger(state.profile.profile_generation) || state.profile.profile_generation < 1 ||
       !/^[a-f0-9]{64}$/u.test(state.profile.capability_digest || '')) throw taskFault('bot_capacity_unavailable', 503);
-  const policy = contract.retrievalPolicy || 'auto';
   if (!Number.isSafeInteger(state.policyCapacity?.[policy]) || state.policyCapacity[policy] < 1) {
     throw taskFault('bot_policy_unavailable', 503);
   }
@@ -524,7 +527,7 @@ function botCapacitySnapshot(adapter, website) {
   const snapshot = buildBotCapacitySnapshot({ ...state,
     website: { ...website, generation: state.generation ?? website.generation } });
   const features = Object.fromEntries(Object.entries(state.features || {}).filter(([, value]) => typeof value === 'boolean'));
-  return { ...snapshot, features: { ...features, ...website.features } };
+  return { ...snapshot, website, features: { ...features, ...website.features } };
 }
 
 function requireProviderAIdempotencyKey(req, res, next) {

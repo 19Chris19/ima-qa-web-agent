@@ -20,6 +20,11 @@ six native/classic JSON/SSE/task cases cover bound legacy sessions without
 profile metadata; explicit helper test verifies one consume and no profile guess.
 Pair implementation follows only after those basic tests pass.
 
+The startup marker, independent native/classic policy admission and dual capacity
+declarations each had a failing regression (3/3 red) before the app fix. Bot v4
+policies and mode-specific website capabilities are intentionally separate.
+Focused post-fix helper/mount/app regressions passed 103/103.
+
 ## Rollout and Rollback
 
 Parent integrates each atomic commit then runs combined full/container acceptance.

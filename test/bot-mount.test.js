@@ -425,6 +425,44 @@ test('Air startup policy adapter mounts v4 capacity with stable changing generat
   assert.equal(after.policies.web.ready, false);
 });
 
+test('Air mount marker reflects installed bot route adapters, not merely app creation', async t => {
+  for (const options of [{}, { airPolicyCapacity: true }]) {
+    assert.equal((await fixture(t, options)).app.locals.airBotExtensionsMounted, true);
+  }
+  assert.equal((await fixture(t, { disabled: true })).app.locals.airBotExtensionsMounted, false);
+});
+
+test('independently qualified native/classic bot policies work while auto profile is blocked', async t => {
+  for (const policy of ['knowledge_agent', 'group_knowledge']) {
+    const f = await fixture(t, { mode: policy === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge' });
+    f.state.profile.ready = false;
+    const capacity = await (await f.request('/internal/provider-a/capacity')).json();
+    assert.equal(capacity.policies[policy].ready, true);
+    assert.equal((await f.post(undefined, { retrieval_policy: policy })).status, 200);
+    for (const blocked of ['auto', 'web', 'mixed']) {
+      assert.equal((await f.post(undefined, { conversationId: '', retrieval_policy: blocked }, hash(blocked))).status, 503);
+    }
+    assert.equal(f.calls.length, 1);
+  }
+});
+
+test('dual capacity separates bot native qualification from website native mode', async t => {
+  const f = await fixture(t, { serverMode: 'classic_knowledge' });
+  const capacity = await (await f.request('/internal/provider-a/capacity')).json();
+  assert.equal(capacity.policies.knowledge_agent.max_concurrent, 2, 'bot native qualification stays independent');
+  assert.equal(capacity.features.knowledge_agent_keyed_sse_v1, false, 'website contract cannot advertise a rejecting mode');
+  assert.equal(capacity.website.policies.knowledge_agent.max_concurrent, 0);
+  assert.equal(capacity.website.features.knowledge_agent_keyed_sse_v1, false);
+  const response = await f.request('/internal/provider-a/deep-ask', { method: 'POST',
+    headers: { 'Idempotency-Key': 'native-website-key' }, body: JSON.stringify({ question: 'Synthetic native question',
+      retrieval_policy: 'knowledge_agent', knowledge_scope_ref: scope }) });
+  assert.equal(response.status, 409);
+  const native = await fixture(t, { mode: 'knowledge_agent' });
+  const ready = await (await native.request('/internal/provider-a/capacity')).json();
+  assert.equal(ready.features.knowledge_agent_keyed_sse_v1, true);
+  assert.equal(ready.website.policies.knowledge_agent.max_concurrent, 2);
+});
+
 test('session profile conflict is explicit before consume and never resets upstream binding', async t => {
   const f = await fixture(t);
   f.store.setUpstream(f.cid, { accountId: 'synthetic-account', sessionId: 'synthetic-session',

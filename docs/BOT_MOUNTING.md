@@ -45,6 +45,14 @@ KB configuration supplies its SHA-256 digest. No request field selects a trusted
 scope or application identity. Absent/invalid readiness fails closed. Empty
 policies remain unavailable. Pair capacity is bounded separately from total slots.
 
+`app.locals.airBotExtensionsMounted` is true only with the Web Agent provider and
+a mounted bot snapshot adapter. Native/classic bot policies use their independent
+qualified capacities even when the elected auto profile is blocked. Auto/web/mixed
+remain gated on profile readiness. The v4 `policies` remain bot qualifications;
+the additive `website` object retains the website-native mode-specific snapshot.
+The top-level website feature `knowledge_agent_keyed_sse_v1` is false in classic
+website mode so existing BFFs cannot confuse bot qualification with website readiness.
+
 `healthCapabilities` is also an app option for sanitized existing capability
 declarations. Recent-context v1/v2 is advertised only with the bot adapter and
 consumer mounted. The qualification capability is added when startup registers
