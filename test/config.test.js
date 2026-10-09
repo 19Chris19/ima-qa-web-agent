@@ -56,6 +56,28 @@ function completeEnv(overrides = {}) {
   };
 }
 
+test('account slots default to one and accept only explicit positive integer limits', () => {
+  const account = { name: 'synthetic', knowledgeBaseId: 'synthetic-kb', headers: {} };
+  const parse = value => parseWebAgentAccounts({ IMA_WEB_AGENT_ACCOUNTS_JSON: JSON.stringify([value]) });
+  assert.equal(parse(account)[0].maxConcurrent, 1);
+  assert.equal(parse({ ...account, maxConcurrent: 3 })[0].maxConcurrent, 3);
+  for (const maxConcurrent of [0, -1, 1.5, 'invalid']) {
+    assert.throws(() => parse({ ...account, maxConcurrent }), /maxConcurrent must be a positive integer/);
+  }
+});
+
+test('task transport budgets are separate from the legacy total deadline', () => {
+  const defaults = getConfig(completeEnv()).concurrency;
+  assert.equal(defaults.taskConnectTimeoutMs, 60_000);
+  assert.equal(defaults.taskIdleTimeoutMs, 600_000);
+  assert.equal(defaults.requestTimeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
+  const changed = getConfig(completeEnv({ IMA_QA_TASK_CONNECT_TIMEOUT_MS: '1000', IMA_QA_TASK_IDLE_TIMEOUT_MS: '2000' })).concurrency;
+  assert.equal(changed.taskConnectTimeoutMs, 1000);
+  assert.equal(changed.taskIdleTimeoutMs, 2000);
+  assert.throws(() => getConfig(completeEnv({ IMA_QA_TASK_IDLE_TIMEOUT_MS: '0' })), /IMA_QA_TASK_IDLE_TIMEOUT_MS/);
+  assert.throws(() => getConfig(completeEnv({ IMA_QA_TASK_CONNECT_TIMEOUT_MS: '2147483648' })), /IMA_QA_TASK_CONNECT_TIMEOUT_MS/);
+});
+
 test('getConfig fails fast when required credentials are missing', () => {
   assert.throws(
     () => getConfig({ IMA_OPENAPI_CLIENTID: 'ima-client' }),

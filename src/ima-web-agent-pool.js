@@ -52,6 +52,7 @@ class IMAWebAgentPool {
       if (existing) {
         const wasDisabled = existing.disabled;
         existing.name = config.name || existing.name || id;
+        existing.maxConcurrent = normalizeAccountMaxConcurrent(config.maxConcurrent);
         existing.webQualification = config.webQualification || null;
         existing.principalFingerprint = config.principalFingerprint;
         existing.knowledgeBaseId = config.knowledgeBaseId;
@@ -73,6 +74,7 @@ class IMAWebAgentPool {
         name: config.name || id,
         client: this.clientFactory({ ...config, id, name: config.name || id }),
         activeRequests: Number(config.activeRequests || 0),
+        maxConcurrent: normalizeAccountMaxConcurrent(config.maxConcurrent),
         cooldownUntil: Number(config.cooldownUntil || 0),
         consecutiveErrors: Number(config.consecutiveErrors || 0),
         disabled: Boolean(config.disabled),
@@ -84,6 +86,10 @@ class IMAWebAgentPool {
         webQualification: config.webQualification || null,
         principalFingerprint: config.principalFingerprint,
         knowledgeBaseId: config.knowledgeBaseId,
+      };
+      account.client.runAutoMaintenance = fn => {
+        if (account.disabled || account.activeRequests || account.maintenanceOperation) return false;
+        return this._runMaintenanceOperation(account, 'auto_refresh', fn);
       };
       next.push(account);
       added.push(account);
@@ -132,16 +138,16 @@ class IMAWebAgentPool {
   async ensureFreshAuth() {
     const results = await Promise.allSettled(
       this.accounts.map(async (account) => {
-        if (account.disabled || typeof account.client.ensureFreshAuth !== 'function') {
+        if (account.disabled || account.activeRequests > 0 || account.maintenanceOperation
+            || typeof account.client.ensureFreshAuth !== 'function') {
           return false;
         }
-        const refreshed = await account.client.ensureFreshAuth();
-        if (typeof account.client.persistRuntimeEnv === 'function') {
-          account.client.persistRuntimeEnv();
-        }
-        if (refreshed) {
-          this._notifyCredentials(account);
-        }
+        let refreshed = false;
+        await this._runMaintenanceOperation(account, 'refresh', async () => {
+          refreshed = await account.client.ensureFreshAuth();
+          account.client.persistRuntimeEnv?.();
+          if (refreshed) this._notifyCredentials(account);
+        });
         return refreshed;
       }),
     );
@@ -173,18 +179,18 @@ class IMAWebAgentPool {
   }
 
   async *streamAsk(options = {}) {
+    options.signal?.throwIfAborted();
     let preferredAccountId = String(options.accountId || '').trim();
     if (options.mode === 'knowledge_agent' && this.webReadiness) {
       const eligible = this.accounts.filter(account => this.webReadiness(account));
       if (preferredAccountId && !eligible.some(account => account.id === preferredAccountId)) throw new NoAvailableWebAgentAccountError('会话账号需要重新验证');
-      preferredAccountId ||= eligible.find(account => !account.activeRequests)?.id || eligible[0]?.id;
-      if (!preferredAccountId) throw new NoAvailableWebAgentAccountError('暂无通过问答验证的账号');
+      if (!eligible.length) throw new NoAvailableWebAgentAccountError('暂无通过问答验证的账号');
     }
     const account = preferredAccountId
       ? await this._waitForPreferredAccount(preferredAccountId, options.signal)
-      : await this._waitForAnyAccount(options.signal);
+      : await this._waitForAnyAccount(options.signal, options.mode === 'knowledge_agent' && this.webReadiness
+        ? account => this.webReadiness(account) : undefined);
     let sessionId = '';
-    yield { type: 'route', accountId: account.id };
     const upstreamOnSession = options.onSession;
     const clientOptions = {
       ...options,
@@ -196,6 +202,9 @@ class IMAWebAgentPool {
     };
     delete clientOptions.accountId;
     try {
+      options.signal?.throwIfAborted();
+      yield { type: 'route', accountId: account.id };
+      options.signal?.throwIfAborted();
       if (options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account)) {
         throw new NoAvailableWebAgentAccountError('账号状态已变化，请稍后重试');
       }
@@ -302,7 +311,7 @@ class IMAWebAgentPool {
   }
 
   async _runMaintenanceOperation(account, operation, fn) {
-    if (account.maintenanceOperation) {
+    if (account.maintenanceOperation || account.activeRequests > 0) {
       throw createAccountHealthError('account_operation_in_progress');
     }
     account.maintenanceOperation = operation;
@@ -311,49 +320,53 @@ class IMAWebAgentPool {
     try {
       result = await fn();
     } finally {
-      account.maintenanceOperation = '';
+      // Credential replacement may install a quarantine while maintenance runs.
+      if (account.maintenanceOperation === operation) account.maintenanceOperation = '';
       this._notifyState(account);
+      this._notifyAvailability();
     }
     return { ...result, ...this._publicAccountState(account, { includeDetails: true }) };
   }
 
-  _leaseAccount() {
-    const account = this._findAvailableAccount();
+  _leaseAccount(eligible) {
+    const account = this._findAvailableAccount(eligible);
     return account ? this._reserveAccount(account) : null;
   }
 
-  _findAvailableAccount() {
+  _findAvailableAccount(eligible = () => true) {
     const now = this.now();
     return this.accounts
       .filter((account) => !account.disabled)
+      .filter(eligible)
       .filter((account) => !account.maintenanceOperation)
-      .filter((account) => account.activeRequests === 0)
+      .filter((account) => account.activeRequests < account.maxConcurrent)
       .filter((account) => account.cooldownUntil <= now)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0] || null;
   }
 
   _reserveAccount(account) {
     const now = this.now();
-    account.activeRequests = 1;
+    account.activeRequests += 1;
     account.lastUsedAt = now;
     account.totalRequests += 1;
     this._notifyState(account);
     return account;
   }
 
-  _hasPotentialAvailability() {
+  _hasPotentialAvailability(eligible = () => true) {
     const now = this.now();
     return this.accounts.some(
-      (account) => !account.disabled && (account.activeRequests > 0 || account.cooldownUntil <= now),
+      (account) => eligible(account) && !account.disabled && (account.activeRequests > 0 || account.cooldownUntil <= now),
     );
   }
 
-  _waitForAnyAccount(signal) {
-    const direct = this._leaseAccount();
+  _waitForAnyAccount(signal, eligible) {
+    signal?.throwIfAborted();
+    const direct = this._leaseAccount(eligible);
     if (direct) {
       return direct;
     }
-    if (!this._hasPotentialAvailability()) {
+    if (!this._hasPotentialAvailability(eligible)) {
       throw new NoAvailableWebAgentAccountError();
     }
 
@@ -362,6 +375,7 @@ class IMAWebAgentPool {
       const onAbort = () => waiter.reject(new Error('请求已取消'));
       waiter = {
         kind: 'any',
+        eligible,
         resolve: (account) => {
           this.waiters.delete(waiter);
           signal?.removeEventListener('abort', onAbort);
@@ -386,6 +400,7 @@ class IMAWebAgentPool {
   }
 
   _waitForPreferredAccount(accountId, signal) {
+    signal?.throwIfAborted();
     const account = this.accounts.find((candidate) => candidate.id === accountId || candidate.name === accountId);
     if (!account || account.disabled) {
       throw new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号已不可用，请新建会话后继续');
@@ -396,7 +411,7 @@ class IMAWebAgentPool {
 
     const available = () => {
       const candidateNow = this.now();
-      return !account.disabled && !account.maintenanceOperation && account.activeRequests === 0 && account.cooldownUntil <= candidateNow;
+      return !account.disabled && !account.maintenanceOperation && account.activeRequests < account.maxConcurrent && account.cooldownUntil <= candidateNow;
     };
     if (available()) {
       return this._reserveAccount(account);
@@ -434,10 +449,10 @@ class IMAWebAgentPool {
   _drainWaiters() {
     for (const waiter of [...this.waiters]) {
       if (waiter.kind === 'any') {
-        const account = this._leaseAccount();
+        const account = this._leaseAccount(waiter.eligible);
         if (account) {
           waiter.resolve(account);
-        } else if (!this._hasPotentialAvailability()) {
+        } else if (!this._hasPotentialAvailability(waiter.eligible)) {
           waiter.reject(new NoAvailableWebAgentAccountError());
         }
         continue;
@@ -450,7 +465,7 @@ class IMAWebAgentPool {
         waiter.reject(new NoAvailableWebAgentAccountError('会话绑定的 IMA 账号正在冷却，请稍后重试'));
         continue;
       }
-      if (!waiter.account.maintenanceOperation && waiter.account.activeRequests === 0 && waiter.account.cooldownUntil <= this.now()) {
+      if (!waiter.account.maintenanceOperation && waiter.account.activeRequests < waiter.account.maxConcurrent && waiter.account.cooldownUntil <= this.now()) {
         waiter.resolve(this._reserveAccount(waiter.account));
       }
     }
@@ -493,6 +508,13 @@ class IMAWebAgentPool {
 
     const summary = {
       totalAccounts: accounts.length,
+      totalSlots: accounts.reduce((sum, account) => sum + account.maxConcurrent, 0),
+      activeRequests: accounts.reduce((sum, account) => sum + account.activeRequests, 0),
+      waitingRequests: this.waiters.size,
+      waitingPreferredRequests: [...this.waiters].filter(waiter => waiter.kind === 'preferred').length,
+      availableSlots: accounts.reduce((sum, account) => sum + account.availableSlots, 0),
+      capacity: this.accounts.filter(account => !account.disabled && !account.maintenanceOperation
+        && account.cooldownUntil <= now).reduce((sum, account) => sum + account.maxConcurrent, 0),
       availableAccounts: accounts.filter((account) => account.status === 'available').length,
       busyAccounts: accounts.filter((account) => account.status === 'busy').length,
       coolingDownAccounts: accounts.filter((account) => account.status === 'cooling_down').length,
@@ -516,6 +538,7 @@ class IMAWebAgentPool {
       id: account.id,
       name: account.name,
       activeRequests: account.activeRequests,
+      maxConcurrent: account.maxConcurrent,
       cooldownUntil: account.cooldownUntil,
       consecutiveErrors: account.consecutiveErrors,
       disabled: account.disabled,
@@ -556,6 +579,9 @@ class IMAWebAgentPool {
       disabled: account.disabled,
       disabledReason: account.disabledReason || '',
       activeRequests: account.activeRequests,
+      maxConcurrent: account.maxConcurrent,
+      availableSlots: !account.disabled && !account.maintenanceOperation && !coolingDown
+        ? Math.max(0, account.maxConcurrent - account.activeRequests) : 0,
       cooldownSecondsRemaining: coolingDown
         ? Math.max(0, Math.ceil((account.cooldownUntil - now) / 1000))
         : 0,
@@ -600,6 +626,13 @@ class IMAWebAgentPool {
 
 function accountId(account, index = 0) {
   return String(account.id || account.accountId || account.name || `account-${index + 1}`);
+}
+
+function normalizeAccountMaxConcurrent(value) {
+  if (value === undefined) return 1;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 1) throw new TypeError('Account maxConcurrent must be a positive integer');
+  return number;
 }
 
 function isCooldownError(error) {
