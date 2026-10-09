@@ -14,6 +14,9 @@ const { registerDurableQARoutes } = require('./durable-qa-routes');
 const { fault: taskFault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
 const { createApplicationIdentity, applicationOwnerKey } = require('./application-identity');
+const { FIELDS: BOT_FIELDS, validateBotRetrievalContract, prepareBotAsk,
+  buildBotAnswerEvidence, buildBotCapacitySnapshot } = require('./bot-compat');
+const { buildRecentContextQuestionPlan } = require('./bot-recent-context');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -27,7 +30,8 @@ const FORBIDDEN_KB_FIELDS = [
   'kbId',
   'IMA_SHARED_KNOWLEDGE_BASE_ID',
 ];
-const INTERNAL_ASK_FIELDS = ['retrieval_policy', 'knowledge_scope_ref', 'source_intent'];
+const INTERNAL_ASK_FIELDS = BOT_FIELDS;
+const EXTENDED_BOT_FIELDS = BOT_FIELDS.filter(field => !['retrieval_policy', 'knowledge_scope_ref', 'source_intent'].includes(field));
 const WEB_REQUESTED_SUFFIX = '\n\n本轮请同时检索可验证的网页资料；若没有取得网页来源，请直接说明，不要把知识库资料称作网页来源。';
 
 function createApp({
@@ -40,8 +44,17 @@ function createApp({
   conversationStore,
   accountPoolExerciseManager,
   webReadiness,
+  recentContextConsumer = null,
+  botCompatibility = null,
+  observation = null,
+  observationExporter = null,
+  qualificationMonitor = null,
+  healthCapabilities = {},
+  airPolicyCapacity = null,
 }) {
   const app = express();
+  const observer = observationExporter || observation;
+  botCompatibility ||= airPolicyCapacity ? createAirBotCompatibility(airPolicyCapacity) : null;
   const applicationIdentity = createApplicationIdentity(config.security);
   const ordinaryAuth = applicationIdentity.middleware('ordinary');
   const internalAuth = applicationIdentity.middleware('internal');
@@ -75,13 +88,16 @@ function createApp({
         directory: config.durableTasks?.storePath || `${config.conversations.storePath}.tasks`,
         conversations, queue: askQueue, accountPool: imaWebAgentClient,
         mode: webReadiness?.mode || config.webAgent?.mode,
+        routingOptions: task => botRoutingOptions(task.input.botContract),
         execute: ({ task, signal, res, accountLease, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity }) => dispatchAsk({
           config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
           history: conversations.getHistory(task.input.conversationId, task.ownerKey),
           question: task.input.question,
           upstreamQuestion: task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
           sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
-          mode: task.input.retrieval_policy || conversations.require(task.input.conversationId, task.ownerKey).mode || webReadiness?.mode,
+          botContract: task.input.botContract, botCompatibility, recentContextConsumer, observation: observer,
+          mode: task.input.botContract ? conversations.require(task.input.conversationId, task.ownerKey).mode :
+            task.input.retrieval_policy || conversations.require(task.input.conversationId, task.ownerKey).mode || webReadiness?.mode,
           transportTimeouts: {
             headersMs: config.concurrency?.taskConnectTimeoutMs || 60000,
             idleMs: config.concurrency?.taskIdleTimeoutMs || 600000,
@@ -103,7 +119,7 @@ function createApp({
     } });
   });
   registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
-    ordinaryAuth, internalAuth, getConversationOwnerKey, validateAskRequest,
+    ordinaryAuth, internalAuth, getConversationOwnerKey, validateAskRequest, botCompatibility, assertBotPolicy, assertBotMode,
     admit(req, res, scope) {
       if (scope === 'ordinary' && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) throw taskFault('maintenance_exercise', 503);
       const limit = rateLimiter.consume(getClientIp(req));
@@ -131,6 +147,25 @@ function createApp({
       if (includeDetails) {
         health.auth = imaWebAgentClient?.getAuthStatus?.();
       }
+      if (botCompatibility || qualificationMonitor || app.locals.knowledgeAgentQualificationManager || Object.keys(healthCapabilities).length) {
+        health.capabilities = { ...healthCapabilities, ...(botCompatibility?.healthCapabilities || {}),
+          recent_context_contract_versions: botCompatibility && typeof recentContextConsumer?.consume === 'function' ? ['v1', 'v2'] : [] };
+        health.recentContext = { enabled: health.capabilities.recent_context_contract_versions.length > 0,
+          contracts: health.capabilities.recent_context_contract_versions };
+        if (app.locals.knowledgeAgentQualificationManager) {
+          health.capabilities.knowledge_agent_qualification = 'v1';
+          health.knowledge_agent_qualification = 'v1';
+        }
+        if (qualificationMonitor?.snapshot) health.qualificationMonitor = qualificationMonitor.snapshot();
+        if (botCompatibility) {
+          try { const policies = botCapacitySnapshot(botCompatibility, {
+            generation: webReadiness?.snapshot()?.generation || 0,
+            maxConcurrent: webReadiness?.snapshot()?.capacity ?? askQueue.stats().maxConcurrent,
+          }).policies;
+            health.policyCapacity = Object.fromEntries(Object.entries(policies).map(([key, value]) => [key, value.max_concurrent]));
+          } catch { health.policyCapacity = {}; }
+        }
+      }
     } else if (typeof imaClient?.getQuotaStatus === 'function') {
       health.openApiQuota = imaClient.getQuotaStatus();
     }
@@ -146,7 +181,7 @@ function createApp({
     const nativeCapacity = config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent'
       ? Math.max(0, Number(state.knowledgeAgentCapacity) || 0) : 0;
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ schemaVersion: 1, generation: state?.generation || 0,
+    const website = { schemaVersion: 1, generation: state?.generation || 0,
       maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
       totalSlots: state?.totalSlots ?? 0, eligibleAccounts: state?.eligibleAccounts ?? 0,
       totalAccounts: state?.totalAccounts ?? 0, schedulableAccounts: state?.schedulableAccounts ?? 0,
@@ -157,7 +192,10 @@ function createApp({
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
       },
-    });
+    };
+    if (!botCompatibility) return res.json(website);
+    try { return res.json(botCapacitySnapshot(botCompatibility, website)); }
+    catch { return res.status(503).json({ error: 'bot_capacity_unavailable' }); }
   });
 
   app.post('/api/conversations', ordinaryAuth, (_req, res) => {
@@ -229,30 +267,34 @@ function createApp({
     const validation = validateAskRequest(req.body, config.limits, {
       internal: req.isInternalProviderADeepAsk,
       config,
+      botCompatibility,
+      applicationKey: req.applicationKey,
     });
 
     if (!validation.ok) {
       return res.status(validation.statusCode || 400).json({ success: false, error: validation.error, requestId });
     }
-    if (validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') {
+    if (!validation.botContract && validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') {
       return res.status(409).json({ success: false, error: '当前部署尚未升级到原生知识库模式', requestId });
     }
 
     const ownerKey = getConversationOwnerKey(req, res);
     let conversationId = validation.conversationId;
     try {
+      if (validation.botContract) assertBotPolicy(validation.botContract, botCompatibility);
       if (!conversationId) {
-        conversationId = conversations.create(ownerKey, { mode: validation.retrievalPolicy || webReadiness?.mode }).conversationId;
+        conversationId = conversations.create(ownerKey, { mode: validation.botContract ? botMode(validation.botContract) : validation.retrievalPolicy || webReadiness?.mode }).conversationId;
       }
       try {
-        if (validation.retrievalPolicy === 'knowledge_agent' &&
+        if (validation.botContract) assertBotMode(validation.botContract, conversations.require(conversationId, ownerKey).mode);
+        if (!validation.botContract && validation.retrievalPolicy === 'knowledge_agent' &&
             conversations.require(conversationId, ownerKey).mode !== 'knowledge_agent') {
           throw Object.assign(new Error('原会话使用其他问答模式，请新建会话'), { statusCode: 409 });
         }
         conversations.beginRequest(conversationId, ownerKey);
       } catch (error) {
         if (req.isInternalProviderADeepAsk && error instanceof ConversationNotFoundError) {
-          conversations.create(ownerKey, { id: conversationId, mode: validation.retrievalPolicy || webReadiness?.mode });
+          conversations.create(ownerKey, { id: conversationId, mode: validation.botContract ? botMode(validation.botContract) : validation.retrievalPolicy || webReadiness?.mode });
           conversations.beginRequest(conversationId, ownerKey);
         } else {
           throw error;
@@ -265,6 +307,7 @@ function createApp({
         requestId,
         statusCode: error.statusCode || 400,
         message: error.message,
+        ...(validation.botContract ? { failureReason: classifyFailureReason(error) } : {}),
         conversationId,
       });
     }
@@ -287,11 +330,13 @@ function createApp({
             question: validation.question,
             upstreamQuestion: validation.sourceIntent === 'web_requested' ? `${validation.question}${WEB_REQUESTED_SUFFIX}` : validation.question,
             sourceIntent: validation.sourceIntent,
+            botContract: validation.botContract, botCompatibility, recentContextConsumer, observation: observer,
             requestId,
             req,
             res,
             signal,
-            mode: validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode,
+            mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode :
+              validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode,
             isTimedOut,
             conversationId,
             conversationStore: conversations,
@@ -300,8 +345,8 @@ function createApp({
           }),
         { signal, applicationKey: req.applicationKey, visitorKey: ownerKey, laneKey: conversationId,
           ...(config.qaProvider === 'ima-web-agent' && imaWebAgentClient?.tryAcquireSlot ? {
-          isRunnable: () => imaWebAgentClient.canAcquireSlot({ ...conversations.getUpstream(conversationId, ownerKey), mode: validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode }),
-          tryAcquire: () => imaWebAgentClient.tryAcquireSlot({ ...conversations.getUpstream(conversationId, ownerKey), mode: validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode, signal }),
+          isRunnable: () => imaWebAgentClient.canAcquireSlot({ ...botRoutingOptions(validation.botContract), ...conversations.getUpstream(conversationId, ownerKey), mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode : validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode }),
+          tryAcquire: () => imaWebAgentClient.tryAcquireSlot({ ...botRoutingOptions(validation.botContract), ...conversations.getUpstream(conversationId, ownerKey), mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode : validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode, signal }),
         } : {}) },
       );
     } catch (error) {
@@ -347,7 +392,8 @@ function createApp({
     '/internal/provider-a/deep-ask',
     internalAuth,
     markInternalProviderADeepAsk,
-    createInternalIdempotencyMiddleware({ ledger: internalIdempotency, conversations, config, webReadiness }),
+    ...(botCompatibility ? [(req, res, next) => isExtendedBotRequest(req.body) ? requireProviderAIdempotencyKey(req, res, next) : next()] : []),
+    createInternalIdempotencyMiddleware({ ledger: internalIdempotency, conversations, config, webReadiness, botCompatibility }),
     askHandler,
   );
 
@@ -360,7 +406,28 @@ function createApp({
   return app;
 }
 
-function dispatchAsk(context) {
+async function dispatchAsk(context) {
+  observeExecution(context, 'admitted', 'started');
+  if (context.botContract) {
+    try {
+      const state = assertBotPolicy(context.botContract, context.botCompatibility);
+      assertBotMode(context.botContract, context.mode);
+      const upstream = context.conversationStore.getUpstream(context.conversationId, context.ownerKey);
+      const profile = ['knowledge_agent', 'group_knowledge'].includes(context.botContract.retrievalPolicy)
+        ? 'classic_knowledge' : 'ima_agent_auto';
+      if (upstream.sessionId && upstream.sessionAnswerProfile && upstream.sessionAnswerProfile !== profile) {
+        throw taskFault('session_profile_conflict', 409);
+      }
+      let prepared;
+      try {
+        prepared = await prepareBotAsk({ contract: context.botContract, question: context.question,
+          upstream, recentContextConsumer: context.recentContextConsumer, signal: context.signal });
+      } catch { throw taskFault('recent_context_unavailable', 503); }
+      const plan = botQuestionPlan(context.question, prepared, context.botContract.retrievalPolicy);
+      context = { ...context, upstreamQuestion: plan.question,
+        botContextPlan: plan, botProfile: state.profile.answer_profile };
+    } catch (error) { observeExecution(context, 'prepare', 'failure', error); throw error; }
+  }
   const { config, isSse } = context;
   if (isSse) {
     if ((config.qaProvider || 'openapi-mimo') === 'ima-web-agent') {
@@ -373,6 +440,95 @@ function dispatchAsk(context) {
     return handleJsonWebAgentAsk(context);
   }
   return handleJsonAsk(context);
+}
+
+function botQuestionPlan(question, prepared, policy) {
+  const suffix = prepared.question.slice(question.length);
+  const original = prepared.recentContext;
+  let selected = original;
+  let plan = buildRecentContextQuestionPlan(question, selected, policy);
+  // Reserve room for the intent suffix without truncating any source message.
+  while (Array.from(plan.question + suffix).length > 18000 && plan.injectedMessageCount > 0) {
+    const keep = plan.injectedMessageCount - 1;
+    selected = { ...original, messages: keep ? selected.messages.slice(-keep) : [] };
+    plan = buildRecentContextQuestionPlan(question, selected, policy);
+  }
+  return { ...plan, question: plan.question + suffix, ...(selected !== original ? {
+    sourceMessageCount: original.sourceMessageCount, selectedMessageCount: original.messages.length,
+    omittedMessageCount: original.sourceMessageCount - plan.injectedMessageCount, truncationReason: 'prompt_budget',
+  } : {}) };
+}
+
+function observeExecution(context, stage, outcome, error) {
+  const protocol = error instanceof IMAUpstreamProtocolError;
+  try {
+    const pending = context.observation?.sample?.({ component: protocol ? 'provider_a_protocol' : 'provider_a_execution',
+      stage: protocol ? 'upstream_stream' : stage, category: error ? classifyFailureReason(error) : 'qa',
+      outcome, evidenceClass: 'observed' });
+    pending?.catch?.(() => {});
+  } catch { /* Telemetry cannot affect admission or completion. */ }
+}
+
+function isExtendedBotRequest(body) {
+  return Boolean(body && typeof body === 'object' && (EXTENDED_BOT_FIELDS.some(field => Object.hasOwn(body, field)) ||
+    ['auto', 'group_knowledge', 'web', 'mixed'].includes(body.retrieval_policy)));
+}
+
+function botMode(contract) {
+  return contract.retrievalPolicy === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge';
+}
+
+function assertBotMode(contract, mode) {
+  if (mode !== botMode(contract)) throw taskFault('conversation_mode_conflict', 409);
+}
+
+function createAirBotCompatibility(capacity) {
+  let generation = 0;
+  let signature;
+  return { snapshot() {
+    const state = { profile: capacity.profileSnapshot(), policyCapacity: capacity.policyCapacitySnapshot(),
+      laneCapacity: capacity.laneCapacitySnapshot(),
+      pairedCapacity: capacity.pairedCapacitySnapshot().knowledge_web_parallel,
+      features: capacity.features || {} };
+    const next = JSON.stringify(state);
+    if (signature !== next) { signature = next; generation++; }
+    return { ...state, generation };
+  } };
+}
+
+function botRoutingOptions(contract) {
+  if (!contract) return {};
+  return { retrievalPolicy: contract.retrievalPolicy, knowledgeScopeRef: contract.knowledgeScopeRef,
+    recentContextRef: contract.recentContextRef, parallelPairRef: contract.parallelPairRef,
+    parallelLeg: contract.parallelLeg };
+}
+
+function assertBotPolicy(contract, adapter) {
+  let state;
+  try { state = adapter?.snapshot(); } catch { throw taskFault('bot_capacity_unavailable', 503); }
+  if (state?.profile?.ready !== true || !['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(state.profile.answer_profile) ||
+      !Number.isSafeInteger(state.profile.profile_generation) || state.profile.profile_generation < 1 ||
+      !/^[a-f0-9]{64}$/u.test(state.profile.capability_digest || '')) throw taskFault('bot_capacity_unavailable', 503);
+  const policy = contract.retrievalPolicy || 'auto';
+  if (!Number.isSafeInteger(state.policyCapacity?.[policy]) || state.policyCapacity[policy] < 1) {
+    throw taskFault('bot_policy_unavailable', 503);
+  }
+  return state;
+}
+
+function botCapacitySnapshot(adapter, website) {
+  const state = adapter.snapshot();
+  const snapshot = buildBotCapacitySnapshot({ ...state,
+    website: { ...website, generation: state.generation ?? website.generation } });
+  const features = Object.fromEntries(Object.entries(state.features || {}).filter(([, value]) => typeof value === 'boolean'));
+  return { ...snapshot, features: { ...features, ...website.features } };
+}
+
+function requireProviderAIdempotencyKey(req, res, next) {
+  if (!/^[a-f0-9]{64}$/u.test(String(req.get('Idempotency-Key') || ''))) {
+    return res.status(400).json({ success: false, error: 'idempotency_key_required' });
+  }
+  next();
 }
 
 function createCorsMiddleware(allowedOrigins = []) {
@@ -471,15 +627,15 @@ function markInternalProviderADeepAsk(req, _res, next) {
   next();
 }
 
-function createInternalIdempotencyMiddleware({ ledger, conversations, config, webReadiness }) {
+function createInternalIdempotencyMiddleware({ ledger, conversations, config, webReadiness, botCompatibility }) {
   return (req, res, next) => {
     const suppliedKey = String(req.get('Idempotency-Key') || '').trim();
     if (!suppliedKey) return next();
     if (!ledger) return res.status(503).json({ success: false, error: '内部幂等存储未配置' });
     if (!/^[A-Za-z0-9._:-]{1,128}$/u.test(suppliedKey)) return res.status(400).json({ success: false, error: 'Idempotency-Key 格式无效' });
-    const validation = validateAskRequest(req.body, req.app.locals.askLimits, { internal: true, config });
+    const validation = validateAskRequest(req.body, req.app.locals.askLimits, { internal: true, config, botCompatibility, applicationKey: req.applicationKey });
     if (!validation.ok) return next();
-    if (validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') return next();
+    if (!validation.botContract && validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') return next();
     const ownerKey = getConversationOwnerKey(req, res);
     let clientDisconnected = false;
     const onClientClose = () => {
@@ -487,7 +643,12 @@ function createInternalIdempotencyMiddleware({ ledger, conversations, config, we
     };
     res.on('close', onClientClose);
     return (async () => {
-      const claim = await ledger.claim(ownerKey, suppliedKey, ledger.fingerprint(validation.question, validation.conversationId, validation));
+      const baseFingerprint = ledger.fingerprint(validation.question, validation.conversationId, validation);
+      const fingerprint = validation.botContract ? crypto.createHash('sha256').update(JSON.stringify({
+        baseFingerprint, applicationKey: req.applicationKey,
+        requestBinding: validation.botContract.requestBinding,
+      })).digest('hex') : baseFingerprint;
+      const claim = await ledger.claim(ownerKey, suppliedKey, fingerprint);
       if (clientDisconnected || req.aborted || res.destroyed) {
         if (claim.isNew) await ledger.markUnknown(claim.key, ownerKey);
         return;
@@ -594,7 +755,8 @@ function safeTokenEqual(left, right) {
 }
 
 function sourceEvidenceFromHistory(message) {
-  const keys = ['source_intent', 'answer_basis', 'source_count', 'knowledge_source_count', 'web_source_count'];
+  const keys = ['source_intent', 'answer_basis', 'source_count', 'knowledge_source_count', 'web_source_count',
+    'l0_context_count', 'l0_source_count', 'l0_snapshot_count', 'l0_injected_count', 'l0_omitted_count', 'l0_truncation_reason'];
   return Object.fromEntries(keys.filter(key => message[key] !== undefined).map(key => [key, message[key]]));
 }
 
@@ -621,8 +783,12 @@ async function handleJsonWebAgentAsk(context) {
       upstream: conversationStore.getUpstream(conversationId, ownerKey),
       accountLease: context.accountLease,
       mode: context.mode,
+      botContract: context.botContract,
+      originalQuestion: context.question,
     });
+    if (result.answerProfile) context.botProfile = result.answerProfile;
     const answer = sanitizeIMAAnswerText(result.answer) || noReliableContentAnswer();
+    const evidence = answerEvidence(context, result.sourceKinds, result.sources.length, result.answer);
     conversationStore.setUpstream(conversationId, result, ownerKey);
     appendConversationTurn(conversationStore, {
       conversationId,
@@ -630,19 +796,21 @@ async function handleJsonWebAgentAsk(context) {
       answer,
       sources: result.sources,
       searchSummary: result.searchSummary,
-      evidence: sourceEvidence(result.sourceKinds, result.sources.length, sourceIntent),
+      evidence,
       ownerKey,
     });
+    observeExecution(context, 'answer_generated', 'success');
     return res.json({
       success: true,
       answer,
       sources: result.sources,
       searchSummary: result.searchSummary,
-      ...sourceEvidence(result.sourceKinds, result.sources.length, sourceIntent),
+      ...evidence,
       conversationId,
       requestId,
     });
   } catch (error) {
+    observeExecution(context, 'upstream_stream', 'failure', error);
     const timedOut = isTimedOut?.();
     return res.status(timedOut ? 504 : getErrorStatusCode(error)).json({
       success: false,
@@ -677,15 +845,19 @@ async function handleStreamingWebAgentAsk(context) {
   writeSse(res, 'conversation', { conversationId, requestId });
 
   try {
+    const upstream = conversationStore.getUpstream(conversationId, ownerKey);
     const sources = [];
     let searchSummary = '';
     let answer = '';
-    let accountId = '';
-    let sessionId = '';
+    let accountId = upstream.accountId || '';
+    let sessionId = upstream.sessionId || '';
+    let sessionAnswerProfile = upstream.sessionAnswerProfile || '';
     const sourceKinds = [];
     let terminals = 0;
     const answerTextStream = createAnswerTextStream();
     for await (const event of imaWebAgentClient.streamAsk({
+      ...botRoutingOptions(context.botContract),
+      ...(context.botContract ? { originalQuestion: question } : {}),
       question: upstreamQuestion,
       signal,
       ...(context.accountLease ? { accountLease: context.accountLease } : {}),
@@ -693,13 +865,23 @@ async function handleStreamingWebAgentAsk(context) {
       ...(context.transportTimeouts ? { transportTimeouts: context.transportTimeouts } : {}),
       ...(context.onDispatch ? { onDispatch: context.onDispatch } : {}),
       ...(context.onUpstreamActivity ? { onActivity: context.onUpstreamActivity } : {}),
-      onSession(nextSessionId) {
+      onSession(nextSessionId, metadata = {}) {
         sessionId = nextSessionId;
-        context.onUpstreamBinding?.({ accountId, sessionId });
+        sessionAnswerProfile = metadata.answerProfile || sessionAnswerProfile;
+        context.onUpstreamBinding?.({ accountId, sessionId, sessionAnswerProfile });
       },
-      ...conversationStore.getUpstream(conversationId, ownerKey),
+      ...upstream,
     })) {
+      if (event.answerProfile) {
+        if (context.botContract) context.botProfile = event.answerProfile;
+        sessionAnswerProfile = event.answerProfile;
+        if (sessionId) context.onUpstreamBinding?.({ accountId, sessionId, sessionAnswerProfile });
+      }
       if (event.type !== 'route') context.onUpstreamEvent?.(event);
+      if (event.type === 'profile') {
+        if (context.botContract) context.botProfile = event.answerProfile;
+        continue;
+      }
       if (event.type === 'route') {
         accountId = event.accountId || accountId;
         context.onUpstreamBinding?.({ accountId });
@@ -708,7 +890,8 @@ async function handleStreamingWebAgentAsk(context) {
 
       if (event.type === 'session') {
         sessionId = event.sessionId || sessionId;
-        context.onUpstreamBinding?.({ accountId, sessionId });
+        sessionAnswerProfile = event.sessionAnswerProfile || event.answerProfile || sessionAnswerProfile;
+        context.onUpstreamBinding?.({ accountId, sessionId, sessionAnswerProfile });
         continue;
       }
 
@@ -745,8 +928,9 @@ async function handleStreamingWebAgentAsk(context) {
 
     if (context.durableTask && answer === '') throw new IMAUpstreamProtocolError('upstream_empty_answer');
     const answerForHistory = answer || noReliableContentAnswer();
-    const evidence = sourceEvidence(sourceKinds, sources.length, sourceIntent);
-    conversationStore.setUpstream(conversationId, { accountId, sessionId }, ownerKey);
+    const evidence = answerEvidence(context, sourceKinds, sources.length, answer);
+    conversationStore.setUpstream(conversationId, { accountId, sessionId,
+      ...(sessionAnswerProfile ? { sessionAnswerProfile } : {}) }, ownerKey);
     appendConversationTurn(conversationStore, {
       conversationId,
       question,
@@ -758,9 +942,11 @@ async function handleStreamingWebAgentAsk(context) {
     });
     await req.internalIdempotency?.complete(conversationId, answerForHistory);
     writeSse(res, 'done', { searchSummary, conversationId, requestId, ...evidence });
+    observeExecution(context, 'complete', 'success');
 
     return res.end();
   } catch (error) {
+    observeExecution(context, 'upstream_stream', 'failure', error);
     writeSse(res, 'error', {
       error: signal?.aborted ? '请求处理超时，请稍后再试' : toUserSafeError(error),
       failureReason: signal?.aborted ? 'timeout' : classifyFailureReason(error),
@@ -771,31 +957,39 @@ async function handleStreamingWebAgentAsk(context) {
   }
 }
 
-async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upstream = {}, accountLease, mode }) {
+async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upstream = {}, accountLease, mode, botContract, originalQuestion }) {
   let answer = '';
   let searchSummary = '';
   const sources = [];
   const sourceKinds = [];
-  let accountId = '';
-  let sessionId = '';
+  let accountId = upstream.accountId || '';
+  let sessionId = upstream.sessionId || '';
   let terminals = 0;
+  let answerProfile;
+  let sessionAnswerProfile = upstream.sessionAnswerProfile || '';
 
   for await (const event of imaWebAgentClient.streamAsk({
+    ...botRoutingOptions(botContract),
+    ...(botContract ? { originalQuestion } : {}),
     question,
     signal,
     ...(accountLease ? { accountLease } : {}),
     ...(mode ? { mode } : {}),
-    onSession(nextSessionId) {
+    onSession(nextSessionId, metadata = {}) {
       sessionId = nextSessionId;
+      sessionAnswerProfile = metadata.answerProfile || sessionAnswerProfile;
     },
     ...upstream,
   })) {
+    if (event.answerProfile) { answerProfile = event.answerProfile; sessionAnswerProfile = event.answerProfile; }
+    if (event.type === 'profile') { answerProfile = event.answerProfile; continue; }
     if (event.type === 'route') {
       accountId = event.accountId || accountId;
       continue;
     }
     if (event.type === 'session') {
       sessionId = event.sessionId || sessionId;
+      sessionAnswerProfile = event.sessionAnswerProfile || event.answerProfile || sessionAnswerProfile;
       continue;
     }
     if (event.type === 'sources') {
@@ -812,7 +1006,8 @@ async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upst
   if (terminals !== 1) throw new IMAUpstreamProtocolError('upstream_terminal_missing');
   if (signal?.aborted) throw new RequestAbortedError();
 
-  return { answer, sources, sourceKinds, searchSummary, accountId, sessionId };
+  return { answer, sources, sourceKinds, searchSummary, accountId, sessionId, answerProfile,
+    ...(sessionAnswerProfile ? { sessionAnswerProfile } : {}) };
 }
 
 function normalizedSourceKinds(event) {
@@ -836,8 +1031,15 @@ function sourceEvidence(kinds, sourceLength, sourceIntent) {
   };
 }
 
+function answerEvidence(context, sourceKinds, sourceLength, answer) {
+  if (!context.botContract) return sourceEvidence(sourceKinds, sourceLength, context.sourceIntent);
+  return buildBotAnswerEvidence({ retrievalPolicy: context.botContract.retrievalPolicy,
+    sourceIntent: context.botContract.sourceIntent, profile: context.botProfile,
+    answer, sourceKinds, contextPlan: context.botContextPlan });
+}
+
 function validateAskRequest(body, limits, options = {}) {
-  if (!body || typeof body !== 'object') {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return { ok: false, error: '请求体必须是 JSON 对象' };
   }
 
@@ -851,10 +1053,26 @@ function validateAskRequest(body, limits, options = {}) {
     return { ok: false, error: '此请求字段仅限受保护的内部接口' };
   }
 
-  const retrievalPolicy = options.internal ? String(body.retrieval_policy || '').trim() : '';
-  const knowledgeScopeRef = options.internal ? String(body.knowledge_scope_ref || '').trim() : '';
-  const sourceIntent = options.internal ? String(body.source_intent || '').trim() : '';
-  if (options.internal && (retrievalPolicy || knowledgeScopeRef || sourceIntent)) {
+  let botContract;
+  if (options.internal && options.botCompatibility && isExtendedBotRequest(body)) {
+    try {
+      if (typeof body.question !== 'string' || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(body.question)) {
+        throw taskFault('bot_contract_invalid', 400);
+      }
+      const configuredScope = String(options.config?.webAgent?.sharedKnowledgeBaseId || options.config?.webAgent?.knowledgeBaseId || '').trim();
+      const expectedKnowledgeScopeRef = typeof options.botCompatibility.resolveKnowledgeScopeRef === 'function'
+        ? options.botCompatibility.resolveKnowledgeScopeRef({ applicationKey: options.applicationKey })
+        : configuredScope ? crypto.createHash('sha256').update(configuredScope).digest('hex') : '';
+      botContract = validateBotRetrievalContract(body, { internal: true, expectedKnowledgeScopeRef });
+      if (options.config?.qaProvider !== 'ima-web-agent') throw taskFault('bot_policy_unavailable', 409);
+    } catch (error) { return { ok: false, error: error.code || 'bot_contract_invalid', statusCode: error.statusCode || 400 }; }
+  } else if (options.internal && EXTENDED_BOT_FIELDS.some(field => Object.hasOwn(body, field))) {
+    return { ok: false, error: 'bot_contract_unavailable' };
+  }
+  const retrievalPolicy = botContract?.retrievalPolicy ?? (options.internal ? String(body.retrieval_policy || '').trim() : '');
+  const knowledgeScopeRef = botContract?.knowledgeScopeRef ?? (options.internal ? String(body.knowledge_scope_ref || '').trim() : '');
+  const sourceIntent = botContract?.sourceIntent ?? (options.internal ? String(body.source_intent || '').trim() : '');
+  if (!botContract && options.internal && (retrievalPolicy || knowledgeScopeRef || sourceIntent)) {
     if (retrievalPolicy !== 'knowledge_agent' || !/^[a-f0-9]{64}$/u.test(knowledgeScopeRef) ||
         !['', 'web_requested'].includes(sourceIntent)) {
       return { ok: false, error: '原生问答合同字段无效' };
@@ -889,6 +1107,7 @@ function validateAskRequest(body, limits, options = {}) {
     retrievalPolicy,
     knowledgeScopeRef,
     sourceIntent,
+    ...(botContract ? { botContract } : {}),
     history: Array.isArray(body.history) ? body.history : [],
   };
 }
@@ -1384,6 +1603,7 @@ module.exports = {
   rejectAskRequest,
   requireApiToken,
   requireInternalServiceToken,
+  requireProviderAIdempotencyKey,
   retrieveProviderSources,
   sanitizeKnowledgeBoundAnswer,
   shouldUseLocalRagFallback,
