@@ -6,8 +6,7 @@ const { fault } = require('./durable-qa-store');
 function registerDurableQARoutes(app, { tasks, config, conversations, webReadiness,
   requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest, admit }) {
   for (const [base, scope, auth] of [
-    ['/api/tasks', 'ordinary', config.security?.apiToken ? requireApiToken(config.security.apiToken) :
-      (_req, res) => res.status(404).json({ error: 'task_api_not_configured' })],
+    ['/api/tasks', 'ordinary', requireApiToken(config.security?.apiToken)],
     ['/internal/provider-a/tasks', 'internal', requireInternalServiceToken(config.security?.internalServiceToken)],
   ]) {
     const router = express.Router();

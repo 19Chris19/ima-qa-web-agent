@@ -93,7 +93,7 @@ function createApp({
   app.get('/api/capabilities', requireApiToken(config.security?.apiToken), (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ schemaVersion: 1, features: {
-      durable_qa_tasks_v1: Boolean(durableTasks?.available && config.security?.apiToken),
+      durable_qa_tasks_v1: Boolean(durableTasks?.available),
     } });
   });
   registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
