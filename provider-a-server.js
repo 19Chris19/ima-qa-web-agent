@@ -84,6 +84,7 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
       config,
       pool: imaWebAgentClient,
       webReadiness,
+      airPolicyCapacity: airPolicies,
     });
   synchronizeQueueCapacity();
   const accountPoolExerciseManager = new AccountPoolExerciseManager({
