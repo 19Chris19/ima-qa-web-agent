@@ -23,6 +23,10 @@ function createAskQueue(options = {}) {
   const activeEntries = new Set();
   const applications = new Map();
   const applicationOrder = [];
+  let selecting = false;
+  let preparing = false;
+  let needsDrain = false;
+  let resourceReleaseErrors = 0;
 
   function stats() {
     return {
@@ -30,6 +34,7 @@ function createAskQueue(options = {}) {
       queuedRequests: queue.length,
       maxConcurrent,
       queueLimit,
+      ...(resourceReleaseErrors ? { resourceReleaseErrors } : {}),
     };
   }
 
@@ -46,6 +51,8 @@ function createAskQueue(options = {}) {
         signal,
         started: false,
         task,
+        tryAcquire: options.tryAcquire,
+        isRunnable: options.isRunnable,
         applicationKey: String(options.applicationKey || 'legacy'),
         visitorKey: String(options.visitorKey || 'legacy'),
         lane: laneFor(options),
@@ -71,15 +78,19 @@ function createAskQueue(options = {}) {
       }
 
       drain();
-      if (activeRequests < maxConcurrent && !activeLanes.has(entry.lane)) {
+      if (activeRequests < maxConcurrent && !activeLanes.has(entry.lane)
+          && !queue.some(item => entry.lane && item.lane === entry.lane) && prepare(entry)) {
         register(entry);
         start(entry);
+        drain();
         return;
       }
 
+      if (entry.rejected) { drain(); return; }
       if (queue.length >= queueLimit) {
         cleanupQueuedEntry(entry);
         reject(new QueueFullError());
+        drain();
         return;
       }
 
@@ -93,7 +104,31 @@ function createAskQueue(options = {}) {
     // Every mutation drains runnable work before returning, so free capacity
     // implies that any remaining entries are blocked on active lanes.
     return !options.signal?.aborted && ((activeRequests < maxConcurrent
-      && !activeLanes.has(laneFor(options))) || queue.length < queueLimit);
+      && !activeLanes.has(laneFor(options))
+      && !queue.some(item => laneFor(options) && item.lane === laneFor(options))
+      && runnable(options)) || queue.length < queueLimit);
+  }
+
+  function runnable(entry) {
+    try { return !entry.isRunnable || entry.isRunnable(); }
+    catch { return true; } // Invalid account state must fail the task, not wait forever.
+  }
+
+  function prepare(entry) {
+    if (!runnable(entry)) return false;
+    if (!entry.tryAcquire) return true;
+    preparing = true;
+    try {
+      entry.resource = entry.tryAcquire();
+      return Boolean(entry.resource);
+    } catch (error) {
+      const index = queue.indexOf(entry);
+      if (index >= 0) queue.splice(index, 1);
+      cleanupQueuedEntry(entry);
+      entry.rejected = true;
+      entry.reject(error);
+      return false;
+    } finally { preparing = false; }
   }
 
   function cleanupQueuedEntry(entry) {
@@ -103,11 +138,21 @@ function createAskQueue(options = {}) {
   }
 
   function drain() {
-    while (activeRequests < maxConcurrent && queue.length > 0) {
-      const entry = selectNext();
-      if (!entry) break;
-      queue.splice(queue.indexOf(entry), 1);
-      start(entry);
+    if (selecting || preparing) { needsDrain = true; return; }
+    selecting = true;
+    try {
+      do {
+        needsDrain = false;
+        while (activeRequests < maxConcurrent && queue.length > 0) {
+          const entry = selectNext();
+          if (!entry) break;
+          queue.splice(queue.indexOf(entry), 1);
+          start(entry);
+        }
+      } while (needsDrain && activeRequests < maxConcurrent && queue.length > 0);
+    } finally {
+      selecting = false;
+      pruneMetadata();
     }
   }
 
@@ -126,14 +171,21 @@ function createAskQueue(options = {}) {
   }
 
   function selectNext() {
-    for (const app of applicationOrder) {
-      for (const visitor of applications.get(app)) {
-        const entry = queue.find(item => item.applicationKey === app
-          && item.visitorKey === visitor && !activeLanes.has(item.lane));
-        if (entry) return entry;
+    rescan: while (true) {
+      const firstByLane = new Map();
+      for (const entry of queue) if (entry.lane && !firstByLane.has(entry.lane)) firstByLane.set(entry.lane, entry);
+      for (const app of [...applicationOrder]) {
+        for (const visitor of applications.get(app)) {
+          for (const entry of [...queue]) {
+            if (entry.applicationKey !== app || entry.visitorKey !== visitor || activeLanes.has(entry.lane)
+                || (entry.lane && firstByLane.get(entry.lane) !== entry)) continue;
+            if (prepare(entry)) return entry;
+            if (entry.rejected) continue rescan;
+          }
+        }
       }
+      return null;
     }
-    return null;
   }
 
   function pruneMetadata() {
@@ -171,15 +223,16 @@ function createAskQueue(options = {}) {
     Promise.resolve()
       .then(() => {
         if (entry.signal?.aborted) throw new RequestAbortedError();
-        return entry.task();
+        return entry.task(entry.resource?.value);
       })
       .then(entry.resolve, entry.reject)
       .finally(() => {
         activeRequests -= 1;
         activeEntries.delete(entry);
         if (entry.lane) activeLanes.delete(entry.lane);
-        drain();
-        pruneMetadata();
+        try { entry.resource?.release(); }
+        catch { resourceReleaseErrors += 1; }
+        finally { drain(); pruneMetadata(); }
       });
   }
 
@@ -189,6 +242,7 @@ function createAskQueue(options = {}) {
     setMaxConcurrent,
     updateLimits,
     stats,
+    wake: drain,
   };
 }
 

@@ -4,10 +4,13 @@ const { DurableQATaskStore, TERMINAL, fault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
 
 class DurableQATasks {
-  constructor({ directory, conversations, queue, execute, storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
+  constructor({ directory, conversations, queue, execute, accountPool = null, mode, storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
     this.conversations = conversations;
     this.queue = queue;
     this.execute = execute;
+    this.accountPool = accountPool;
+    this.mode = mode;
+    this.unsubscribeAvailability = accountPool?.onAvailability?.(() => this.queue.wake?.());
     this.controllers = new Map();
     this.activeConversations = new Map();
     this.pending = new Map();
@@ -50,9 +53,9 @@ class DurableQATasks {
       (!TERMINAL.has(task.status) || task.completion || task.bindingPending));
   }
 
-  submit({ ownerKey, scope, key, input, validateNew = () => {} }) {
+  submit({ ownerKey, scope, applicationKey = scope, key, input, validateNew = () => {} }) {
     this.ensure();
-    const existing = this.store.find(ownerKey, scope, key, input);
+    const existing = this.store.find(ownerKey, scope, key, input, applicationKey);
     if (existing) return { task: this.store.publicTask(existing), isNew: false };
     const conversation = this.conversations.require(input.conversationId, ownerKey);
     const activeTask = this.activeConversations.get(input.conversationId);
@@ -60,9 +63,9 @@ class DurableQATasks {
         (conversation.activeRequest && (activeTask?.ownerKey !== ownerKey || activeTask?.scope !== scope))) {
       throw fault('conversation_busy', 409);
     }
-    if (this.pending.size || !this.canSchedule({ scope, ownerKey, input })) throw fault('queue_full', 429);
+    if (this.pending.size || !this.canSchedule({ scope, applicationKey, ownerKey, input })) throw fault('queue_full', 429);
     validateNew();
-    const claim = this.store.create({ ownerKey, scope, key, input });
+    const claim = this.store.create({ ownerKey, scope, applicationKey, key, input });
     this.schedule(claim.task);
     return { task: this.store.publicTask(claim.task), isNew: true };
   }
@@ -74,7 +77,7 @@ class DurableQATasks {
     this.controllers.set(task.id, controller);
     let acquired = false;
     if (this.closed) return;
-    void this.queue.run(async () => {
+    void this.queue.run(async accountLease => {
       this.ensure();
       if (controller.signal.aborted) return;
       this.conversations.beginRequest(task.input.conversationId, task.ownerKey);
@@ -102,6 +105,7 @@ class DurableQATasks {
       };
       const response = this.response(task, () => turn);
       await this.execute({ task, signal: controller.signal, res: response, conversationStore,
+        accountLease,
         onUpstreamBinding: bindUpstream,
         onDispatch: () => {
           check();
@@ -129,7 +133,7 @@ class DurableQATasks {
         },
       });
       if (this.available && !TERMINAL.has(this.store.tasks.get(task.id).status)) this.terminal(task.id, 'failed', 'upstream_terminal_missing');
-    }, { signal: controller.signal, applicationKey: task.scope, visitorKey: task.ownerKey, laneKey: task.input.conversationId }).catch(error => {
+    }, this.queueOptions(task, controller.signal)).catch(error => {
       if (!this.available || TERMINAL.has(this.store.tasks.get(task.id)?.status)) return;
       // A persisted completion cannot be overwritten with failure after a history fault.
       if (this.store.tasks.get(task.id).completion) { this.store.unavailable(); return; }
@@ -145,10 +149,22 @@ class DurableQATasks {
   }
 
   canSchedule(task) {
-    const keys = { applicationKey: task.scope, visitorKey: task.ownerKey, laneKey: task.input.conversationId };
+    const keys = this.queueOptions(task);
     if (typeof this.queue.canAccept === 'function') return this.queue.canAccept(keys);
     const stats = this.queue.stats();
     return stats.activeRequests < stats.maxConcurrent || stats.queuedRequests < stats.queueLimit;
+  }
+
+  queueOptions(task, signal) {
+    const options = { signal, applicationKey: task.applicationKey || task.scope,
+      visitorKey: task.ownerKey, laneKey: task.input.conversationId };
+    if (this.accountPool?.tryAcquireSlot) {
+      const accountOptions = () => ({ ...this.conversations.getUpstream(task.input.conversationId, task.ownerKey),
+        mode: task.input.retrieval_policy || this.conversations.require(task.input.conversationId, task.ownerKey).mode || this.mode, signal });
+      options.isRunnable = () => this.accountPool.canAcquireSlot(accountOptions());
+      options.tryAcquire = () => this.accountPool.tryAcquireSlot(accountOptions());
+    }
+    return options;
   }
 
   pump() {
@@ -218,8 +234,8 @@ class DurableQATasks {
       conversationId: task.input.conversationId, requestId: id }));
   }
 
-  cancel(id, ownerKey, scope) {
-    const task = this.store.owned(id, ownerKey, scope);
+  cancel(id, ownerKey, scope, applicationKey) {
+    const task = this.store.owned(id, ownerKey, scope, applicationKey);
     if (!TERMINAL.has(task.status)) {
       if (task.completion) throw fault('task_completion_pending', 409);
       this.terminal(id, 'cancelled', 'task_cancelled');
@@ -294,6 +310,7 @@ class DurableQATasks {
 
   close() {
     this.closed = true;
+    this.unsubscribeAvailability?.();
     clearInterval(this.sweeper);
     clearInterval(this.pumpTimer);
     this.stopExecution();

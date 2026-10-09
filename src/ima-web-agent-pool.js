@@ -28,6 +28,8 @@ class IMAWebAgentPool {
     this.onAccountCredentialsChange = options.onAccountCredentialsChange || null;
     this.now = options.now || Date.now;
     this.waiters = new Set();
+    this.availabilityListeners = new Set();
+    this.taskLeases = new WeakMap();
     this.cooldownMs = Number(config.accountCooldownMs || DEFAULT_ACCOUNT_COOLDOWN_MS);
     this.maxConsecutiveErrors = Number(
       config.accountMaxConsecutiveErrors || DEFAULT_ACCOUNT_MAX_CONSECUTIVE_ERRORS,
@@ -186,7 +188,7 @@ class IMAWebAgentPool {
       if (preferredAccountId && !eligible.some(account => account.id === preferredAccountId)) throw new NoAvailableWebAgentAccountError('会话账号需要重新验证');
       if (!eligible.length) throw new NoAvailableWebAgentAccountError('暂无通过问答验证的账号');
     }
-    const account = preferredAccountId
+    const account = options.accountLease ? this._consumeTaskLease(options.accountLease, options) : preferredAccountId
       ? await this._waitForPreferredAccount(preferredAccountId, options.signal)
       : await this._waitForAnyAccount(options.signal, options.mode === 'knowledge_agent' && this.webReadiness
         ? account => this.webReadiness(account) : undefined);
@@ -229,10 +231,65 @@ class IMAWebAgentPool {
       }
       throw error;
     } finally {
-      account.activeRequests = Math.max(0, account.activeRequests - 1);
-      this._notifyState(account);
-      this._notifyAvailability();
+      if (options.accountLease) this.taskLeases.get(options.accountLease).release();
+      else this._releaseAccount(account);
     }
+  }
+
+  onAvailability(listener) {
+    this.availabilityListeners.add(listener);
+    return () => this.availabilityListeners.delete(listener);
+  }
+
+  _runnableAccount({ accountId: preferred = '', mode } = {}) {
+    const eligible = mode === 'knowledge_agent' && this.webReadiness ? this.webReadiness : () => true;
+    if (preferred) {
+      const account = this.accounts.find(item => item.id === preferred || item.name === preferred);
+      if (!account || account.disabled) {
+        throw new NoAvailableWebAgentAccountError('会话账号暂不可用');
+      }
+      if (account.maintenanceOperation) return null;
+      if (!eligible(account) || account.cooldownUntil > this.now()) throw new NoAvailableWebAgentAccountError('会话账号暂不可用');
+      return !account.maintenanceOperation && account.activeRequests < account.maxConcurrent ? account : null;
+    }
+    if (!this._hasPotentialAvailability(account => account.maintenanceOperation || eligible(account))) throw new NoAvailableWebAgentAccountError();
+    return this._findAvailableAccount(eligible);
+  }
+
+  canAcquireSlot(options) { return Boolean(this._runnableAccount(options)); }
+
+  tryAcquireSlot(options = {}) {
+    options.signal?.throwIfAborted();
+    const account = this._runnableAccount(options);
+    if (!account) return null;
+    this._reserveAccount(account);
+    const value = {};
+    const record = { account, used: false, released: false, release: () => {
+      if (record.released) return;
+      record.released = true;
+      this._releaseAccount(account);
+    } };
+    this.taskLeases.set(value, record);
+    return { value, release: record.release };
+  }
+
+  _consumeTaskLease(lease, options) {
+    const record = this.taskLeases.get(lease);
+    const account = record?.account;
+    if (!record || record.used || record.released || !this.accounts.includes(account)
+        || account.disabled || account.maintenanceOperation || account.cooldownUntil > this.now()
+        || (options.accountId && ![account.id, account.name].includes(options.accountId))
+        || (options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account))) {
+      throw new Error('Invalid account lease');
+    }
+    record.used = true;
+    return account;
+  }
+
+  _releaseAccount(account) {
+    account.activeRequests = Math.max(0, account.activeRequests - 1);
+    try { this._notifyState(account); }
+    finally { this._notifyAvailability(); }
   }
 
   async refreshAccount(accountIdOrName, options = {}) {
@@ -307,6 +364,7 @@ class IMAWebAgentPool {
       account.cooldownUntil = 0;
     }
     this._notifyState(account);
+    this._notifyAvailability();
     return this._publicAccountState(account, { includeDetails: true });
   }
 
@@ -315,15 +373,20 @@ class IMAWebAgentPool {
       throw createAccountHealthError('account_operation_in_progress');
     }
     account.maintenanceOperation = operation;
-    this._notifyState(account);
+    try { this._notifyState(account); }
+    catch (error) {
+      account.maintenanceOperation = '';
+      this._notifyAvailability();
+      throw error;
+    }
     let result;
     try {
       result = await fn();
     } finally {
       // Credential replacement may install a quarantine while maintenance runs.
       if (account.maintenanceOperation === operation) account.maintenanceOperation = '';
-      this._notifyState(account);
-      this._notifyAvailability();
+      try { this._notifyState(account); }
+      finally { this._notifyAvailability(); }
     }
     return { ...result, ...this._publicAccountState(account, { includeDetails: true }) };
   }
@@ -346,10 +409,18 @@ class IMAWebAgentPool {
 
   _reserveAccount(account) {
     const now = this.now();
+    const previousLastUsedAt = account.lastUsedAt;
+    const previousTotalRequests = account.totalRequests;
     account.activeRequests += 1;
     account.lastUsedAt = now;
     account.totalRequests += 1;
-    this._notifyState(account);
+    try { this._notifyState(account); }
+    catch (error) {
+      account.activeRequests -= 1;
+      account.lastUsedAt = previousLastUsedAt;
+      account.totalRequests = previousTotalRequests;
+      throw error;
+    }
     return account;
   }
 
@@ -473,6 +544,7 @@ class IMAWebAgentPool {
 
   _notifyAvailability() {
     this._drainWaiters();
+    for (const listener of this.availabilityListeners) listener();
   }
 
   _markSuccess(account) {

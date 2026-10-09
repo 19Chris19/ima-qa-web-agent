@@ -117,9 +117,13 @@ Trusted callers can dynamically pass limits to the queue. Maintenance refuses
 active accounts; automatic refresh is deferred while leased, and leasing waits
 until maintenance finishes. Preferred account affinity never silently migrates.
 Busy preferred accounts wait cancelably instead of failing or selecting a free
-different account. Such a wait currently occupies its global scheduler slot;
-core should keep pre-dispatch task presentation queued/waiting and may add
-account-aware runnable eligibility to avoid consuming a global slot while pinned.
+different account. Integrated task scheduling now uses `isRunnable` and
+`tryAcquire` to reserve a private account lease during selection, before counting
+a global execution slot. Resource-blocked lanes preserve FIFO while other lanes
+can run; availability notifications call `wake()`. Reservations are released
+once even when cancellation occurs before the execution microtask. The lease
+cannot be forged, reused or moved to another account. Standalone pool callers
+still have the original cancelable preferred-account waiting interface.
 
 ## Local verification
 
