@@ -156,6 +156,33 @@ responsibilities; this module does not start a background service.
 
 ## Verification Boundary
 
+Durable pair recovery uses a private minimal `pairReceipt`: scoped key, pair ref,
+leg, policy and observed account ID. It contains no question, context body or raw
+five-field context binding and is not included in task responses. The existing
+10,000-receipt store bound also bounds these records. Legacy unpruned tasks acquire
+this receipt before the 24-hour input/event prune; existing registered application
+identities are preserved. Account affinity is journaled even when it matches an
+already-bound conversation.
+
+Restart resolves binding/completion journals before grouping pair receipts. A
+group with both legs terminal expires at its original latest `terminalAt` plus
+the pool retention interval, not restart time. Expired complete groups never
+enter the 4096-entry pool map. Incomplete groups retain exclusion without a TTL;
+unknown dispatched account affinity blocks that pair. If unfinished groups alone
+exceed the map bound, startup fails closed rather than evicting exclusions.
+
+Independent review reproduced both the loss of exclusion after 24-hour pruning
+and completed-pair TTL renewal on restart. The former normal default store held
+at most 500 unpruned tasks, so a 10,000-receipt/4096-map overflow was a risk of an
+unfiltered retention fix, not a demonstrated production overflow. Regression
+coverage loads 8196 synthetic receipts (4097 expired complete pairs and one
+unfinished pair), retaining only the unfinished group in the map.
+
+Receipts already pruned by an older binary without pair metadata cannot be
+reconstructed from a hash or conversation ID. This migration does not claim to
+repair that lost information; upgrade before pruning incomplete pairs. Do not
+redispatch uncertain work or restore old ledgers to manufacture missing metadata.
+
 `test/bot-mount.test.js` uses temporary ledgers and synthetic loopback servers.
 It covers auth/ownership, replay/conflict, admission/cancel, native-vs-bot mode,
 JSON/SSE/task evidence, actual profile, capacity, observer safety and recovery.

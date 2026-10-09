@@ -18,6 +18,7 @@ const { FIELDS: BOT_FIELDS, validateBotRetrievalContract, prepareBotAsk,
   buildBotAnswerEvidence, buildBotCapacitySnapshot } = require('./bot-compat');
 const { buildRecentContextQuestionPlan } = require('./bot-recent-context');
 const { providerAExecutionCapacity } = require('./provider-a-capacity');
+const { botRoutingOptions } = require('./bot-pair-routing');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -504,18 +505,6 @@ function createAirBotCompatibility(capacity) {
     if (signature !== next) { signature = next; generation++; }
     return { ...state, generation };
   } };
-}
-
-function botRoutingOptions(contract, applicationKey, ownerKey) {
-  if (!contract) return {};
-  const binding = contract.recentContextBinding;
-  const pairScope = binding ? ['context', binding.account_id, binding.group_id, binding.route_ref,
-    binding.route_generation, binding.feature_generation] : ['owner', ownerKey];
-  return { retrievalPolicy: contract.retrievalPolicy, knowledgeScopeRef: contract.knowledgeScopeRef,
-    recentContextRef: contract.recentContextRef, parallelPairRef: contract.parallelPairRef,
-    parallelLeg: contract.parallelLeg,
-    ...(contract.parallelPairRef ? { parallelPairKey: crypto.createHash('sha256')
-      .update(JSON.stringify([applicationKey, pairScope, contract.parallelPairRef])).digest('hex') } : {}) };
 }
 
 function assertBotPolicy(contract, adapter) {
