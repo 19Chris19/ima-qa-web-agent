@@ -13,6 +13,7 @@ const { FIELDS } = require('../src/bot-compat');
 const { DurableQATasks } = require('../src/durable-qa-tasks');
 const { createAskQueue } = require('../src/ask-queue');
 const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
+const { KnowledgeAgentQualificationManager, KnowledgeAgentQualificationReportStore } = require('../src/air/knowledge-agent-qualification-job');
 
 const hash = text => crypto.createHash('sha256').update(text).digest('hex');
 const scope = hash('synthetic-kb');
@@ -98,6 +99,137 @@ async function fixture(t, options = {}) {
     await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); });
   return { dir, app, store, cid, owner, request, post, calls, consumed, routing, leases, state };
 }
+
+async function qualificationFixture(t) {
+  const f = await fixture(t);
+  const account = { id: 'synthetic-account', knowledgeBaseId: 'synthetic-kb',
+    principalFingerprint: hash('synthetic-principal'), events: [], runtime: { disabled: false } };
+  let release;
+  const paused = new Promise(resolve => { release = resolve; });
+  const applied = [];
+  const manager = new KnowledgeAgentQualificationManager({
+    accountDirectory: {
+      getAccount: () => account,
+      getPoolAccounts: () => [{ ...account, disabled: false }],
+      applyKnowledgeAgentQualification: (...args) => applied.push(args),
+    },
+    pool: { stats: () => ({}), syncAccounts() {} },
+    askQueue: f.app.locals.imaQaAskQueue,
+    questionBank: { knowledge: 'Synthetic qualification question' },
+    reportStore: new KnowledgeAgentQualificationReportStore({ persist: false }),
+    basicRunner: async ({ beforeRequest, onRequest }) => {
+      beforeRequest(); onRequest();
+      await paused;
+      return { passed: true, requests: 1, terminals: 1, knowledgeSources: 1,
+        webSources: 0, unknownSources: 0 };
+    },
+  });
+  f.app.locals.knowledgeAgentQualificationManager = manager;
+  const run = await manager.startForAccount(account.id, { mode: 'basic', confirm: true, authorizedRequestCount: 1 });
+  assert.equal(manager.isMaintenanceActive(), true);
+  t.after(async () => { release(); await manager.waitFor(run.runId); });
+  return { ...f, manager, release, run, applied };
+}
+
+const qualificationAdmissions = [
+  ['ordinary JSON', '/api/ask', 'synthetic-api'],
+  ['ordinary SSE', '/api/ask', 'synthetic-api', true],
+  ['internal JSON', '/internal/provider-a/deep-ask', 'synthetic-internal'],
+  ['internal SSE', '/internal/provider-a/deep-ask', 'synthetic-internal', true],
+  ['internal unkeyed JSON', '/internal/provider-a/deep-ask', 'synthetic-internal', false, false, false],
+  ['internal unkeyed SSE', '/internal/provider-a/deep-ask', 'synthetic-internal', true, false, false],
+  ['internal bot JSON', '/internal/provider-a/deep-ask', 'synthetic-internal', false, true],
+  ['internal bot SSE', '/internal/provider-a/deep-ask', 'synthetic-internal', true, true],
+  ['ordinary task', '/api/tasks', 'synthetic-api'],
+  ['internal task', '/internal/provider-a/tasks', 'synthetic-internal'],
+  ['internal bot task', '/internal/provider-a/tasks', 'synthetic-internal', false, true],
+  ['mapped ordinary JSON', '/api/ask', 'synthetic-bot-api'],
+  ['mapped internal bot JSON', '/internal/provider-a/deep-ask', 'synthetic-bot-internal', false, true],
+  ['mapped ordinary task', '/api/tasks', 'synthetic-bot-api'],
+  ['mapped internal bot task', '/internal/provider-a/tasks', 'synthetic-bot-internal', false, true],
+];
+
+for (const [name, route, token, sse = false, bot = false, keyed = true] of qualificationAdmissions) {
+  test(`qualification maintenance rejects ${name} before any QA admission`, async t => {
+    const f = await qualificationFixture(t);
+    let cid = f.cid;
+    if (token.startsWith('synthetic-bot-')) {
+      const created = await f.request('/api/conversations', { method: 'POST', body: '{}' }, 'synthetic-bot-api');
+      cid = (await created.json()).conversation.conversationId;
+    }
+    const response = await f.request(route, { method: 'POST',
+      headers: { ...(keyed ? { 'Idempotency-Key': hash(`synthetic-${name}`) } : {}), ...(sse ? { Accept: 'text/event-stream' } : {}) },
+      body: JSON.stringify({ question: 'Synthetic question', conversationId: cid, ...(bot ? contract : {}) }),
+    }, token);
+    const text = await response.text();
+    assert.equal(response.status, 503, text);
+    assert.match(text, /maintenance_exercise/u);
+    if (sse) assert.match(text, /event: error/u);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.consumed.length, 0);
+    assert.equal(f.leases.length, 0);
+    assert.equal(f.app.locals.durableQATasks.store.tasks.size, 0);
+    assert.equal(fs.existsSync(`${f.store.storePath}.internal-idempotency.json`), false,
+      'Refused requests must not reserve internal idempotency keys');
+    assert.deepEqual(f.app.locals.imaQaAskQueue.stats(),
+      { activeRequests: 0, queuedRequests: 0, maxConcurrent: 1, queueLimit: 10 });
+  });
+}
+
+test('qualification preflight blocks all QA posts; authentication stays first', async t => {
+  const f = await fixture(t);
+  const manager = { preflightAccountId: 'synthetic-account',
+    isMaintenanceActive() { return Boolean(this.preflightAccountId); } };
+  f.app.locals.knowledgeAgentQualificationManager = manager;
+  for (const route of ['/api/ask', '/internal/provider-a/deep-ask', '/api/tasks', '/internal/provider-a/tasks']) {
+    const init = { method: 'POST', headers: { 'Idempotency-Key': hash('synthetic-preflight') },
+      body: JSON.stringify({ question: 'Synthetic question', conversationId: f.cid }) };
+    assert.equal((await f.request(route, init, 'synthetic-wrong')).status, 401);
+    const response = await f.request(route, init, route.startsWith('/internal') ? 'synthetic-internal' : 'synthetic-api');
+    assert.equal(response.status, 503, await response.text());
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.leases.length, 0);
+});
+
+test('qualification gate preserves task observation/cancel and rejects POST replay without dispatch', async t => {
+  const f = await fixture(t);
+  const response = await f.post('/internal/provider-a/tasks');
+  const { task } = await response.json();
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal(f.calls.length, 1);
+  f.app.locals.knowledgeAgentQualificationManager = { isMaintenanceActive: () => true };
+  for (const route of ['/internal/provider-a/tasks', `/internal/provider-a/tasks/${task.id}`,
+    `/internal/provider-a/tasks/${task.id}/events`]) {
+    const observed = await f.request(route);
+    assert.equal(observed.status, 200);
+    await observed.text();
+  }
+  assert.equal((await f.request(`/internal/provider-a/tasks/${task.id}`, { method: 'DELETE' })).status, 200);
+  const replay = await f.post('/internal/provider-a/tasks');
+  assert.equal(replay.status, 503, await replay.text());
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.app.locals.durableQATasks.store.tasks.size, 1);
+});
+
+test('qualification clearing admits the same refused keys without poisoning idempotency', async t => {
+  const f = await qualificationFixture(t);
+  for (const route of ['/internal/provider-a/deep-ask', '/internal/provider-a/tasks']) {
+    const response = await f.post(route, {}, hash(`synthetic-refused-${route}`));
+    assert.equal(response.status, 503, await response.text());
+  }
+  f.release();
+  assert.equal((await f.manager.waitFor(f.run.runId)).status, 'succeeded');
+  assert.equal(f.manager.isMaintenanceActive(), false);
+  assert.equal(f.applied.length, 1, 'Only the authorized synthetic proof is applied');
+  const legacy = await f.post('/internal/provider-a/deep-ask', {}, hash('synthetic-refused-/internal/provider-a/deep-ask'));
+  assert.equal(legacy.status, 200, JSON.stringify(await legacy.json()));
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  const durable = await f.post('/internal/provider-a/tasks', {}, hash('synthetic-refused-/internal/provider-a/tasks'));
+  assert.equal(durable.status, 202, JSON.stringify(await durable.json()));
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal(f.calls.length, 2);
+});
 
 test('ordinary routes reject every bot field even when empty; internal validation is scoped and keyed', async t => {
   const f = await fixture(t);

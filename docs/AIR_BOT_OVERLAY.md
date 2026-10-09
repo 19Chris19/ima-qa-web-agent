@@ -100,6 +100,17 @@ qualification field to the existing admin bootstrap response. Parent admission
 must check `isMaintenanceActive()` for both legacy and durable requests.
 `runtime.start()` starts only opt-in observation; `runtime.close()` shuts it down.
 
+Qualification admission is enforced for every authenticated ordinary/internal
+QA POST, including legacy JSON/SSE, extended bot asks, both durable-task POST
+namespaces and POST replays. Active runs and credential preflight both return the
+existing 503 `maintenance_exercise` category. Internal legacy checks run before
+idempotency claims and again after asynchronous ledger I/O; refused requests do
+not consume context, reserve account slots or create new task/key receipts.
+Authentication remains first. Task GET/status/events and explicit DELETE
+cancellation remain available, and clients may deliberately retry refused keys
+after maintenance clears. The qualification runner, consent, account proof
+writes and ordinary exercise gate semantics are unchanged.
+
 ## Client and execution contract
 
 - Candidate `mode`, model, transport timeouts, activity and dispatch callbacks

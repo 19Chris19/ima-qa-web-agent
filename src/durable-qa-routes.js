@@ -5,7 +5,7 @@ const { fault } = require('./durable-qa-store');
 
 function registerDurableQARoutes(app, { tasks, config, conversations, webReadiness,
   ordinaryAuth, internalAuth, requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest, admit,
-  botCompatibility, assertBotPolicy, assertBotMode }) {
+  botCompatibility, assertBotPolicy, assertBotMode, checkMaintenance = () => {} }) {
   for (const [base, scope, auth] of [
     ['/api/tasks', 'ordinary', ordinaryAuth || requireApiToken(config.security?.apiToken)],
     ['/internal/provider-a/tasks', 'internal', internalAuth || requireInternalServiceToken(config.security?.internalServiceToken)],
@@ -27,6 +27,7 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       }
     };
     router.post('/', route((req, res) => {
+      checkMaintenance();
       const key = req.get('Idempotency-Key');
       if (typeof key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(key)) throw fault('idempotency_key_required', 400);
       if (!req.body || Array.isArray(req.body) || typeof req.body.question !== 'string' ||

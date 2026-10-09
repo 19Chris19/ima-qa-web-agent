@@ -165,6 +165,15 @@ transport codes, including `upstream_headers_timeout`, `upstream_idle_timeout`
 and `upstream_terminal_missing`. Unknown codes/messages become a generic reason;
 raw upstream error text never enters durable events or trace.
 
+With the optional Air extensions enabled, qualification maintenance (including
+credential preflight) rejects both ordinary and internal task POSTs with 503
+`maintenance_exercise`, even for an existing key. No new task is persisted or
+dispatched. Authenticated GET/status/event replay and explicit cancellation stay
+available. A refused new key can be deliberately retried after maintenance ends.
+Legacy ordinary/internal JSON/SSE asks use the same qualification gate, before
+internal idempotency claims. No account slot or qualification proof is changed
+by admission rejection.
+
 ## Slot Capacity
 
 The companion scheduler commit is required for fair queueing and per-conversation
