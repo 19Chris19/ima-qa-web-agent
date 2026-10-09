@@ -5,11 +5,20 @@ This API separates QA execution from HTTP subscribers. Legacy `/api/ask` and
 
 ## Authentication and Identity
 
-- `/api/tasks`: configured ordinary API Bearer token (404 when unconfigured).
+- `/api/tasks`: the same `requireApiToken` policy as `/api/conversations` and
+  legacy `/api/ask`. A configured ordinary token requires the matching Bearer
+  header (401 otherwise). An empty token preserves tokenless local-demo access.
 - `/internal/provider-a/tasks`: configured internal service Bearer token.
 - Every operation uses the existing `getConversationOwnerKey` identity (stable
   `x-ima-client-id` or owner cookie). Changing it does not expose another owner's tasks.
 - Ordinary and internal task namespaces are isolated, even for the same owner.
+- Tokenless mode is for local-only deployments. Owner cookies/client IDs keep
+  browser conversations separate but are not a substitute for authentication on
+  an exposed service. Do not expose a tokenless Provider to an untrusted network.
+  In configured-token mode, the bundled browser needs an authenticated proxy or
+  client that supplies the ordinary bearer, as with the legacy APIs. Cookies alone
+  never bypass the bearer check; no shared or internal token is embedded in JS.
+  An unconfigured internal service token still disables internal routes with 404.
 - Scheduler application identity is the trusted route scope, never an application
   identity header supplied by a browser. Visitor is owner; lane is conversation ID.
 - Exact scheduler groups are `ordinary` and `internal` for durable routes, plus
@@ -97,8 +106,9 @@ stores with the IMA Web Agent provider enable the capability. Inspect
 `GET /internal/provider-a/capacity` -> `features.durable_qa_tasks_v1`; a failed
 startup/recovery/writer lease or later storage fault makes it false.
 The ordinary-auth browser endpoint is `GET /api/capabilities` returning
-`{schemaVersion:1,features:{durable_qa_tasks_v1:true}}` when ordinary task access is
-configured and healthy (false otherwise). It exposes no service capacity or
+`{schemaVersion:1,features:{durable_qa_tasks_v1:true}}` when durable storage is healthy
+(false otherwise), after the same ordinary authentication policy above. Tokenless
+local-demo mode is not independently disabled. It exposes no service capacity or
 internal token. Frontends must use this endpoint, not the internal capacity route.
 
 The store uses a process-lifetime exclusive local-filesystem writer lease, 0700

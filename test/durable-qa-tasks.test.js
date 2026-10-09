@@ -56,7 +56,7 @@ async function fixture(t, options = {}) {
     await new Promise(resolve => server.close(resolve));
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  return { dir, app, config, calls, request, submit, conversationId, conversationStore };
+  return { dir, base, app, config, calls, request, submit, conversationId, conversationStore };
 }
 
 test('durable API authenticates, isolates owners and validates internal-only fields', async t => {
@@ -73,6 +73,55 @@ test('durable API authenticates, isolates owners and validates internal-only fie
   assert.deepEqual(await (await f.request('/api/tasks', {}, 'other')).json(), { tasks: [] });
   assert.equal((await f.request(`/api/tasks/${posted.task.id}`, { method: 'DELETE' }, 'other')).status, 404);
   assert.equal((await f.request(`/api/tasks/${posted.task.id}/events`, {}, 'other')).status, 404);
+});
+
+test('tokenless ordinary tasks preserve local browser cookie ownership and disabled internal routes', async t => {
+  const f = await fixture(t, { config: { security: { apiToken: '', internalServiceToken: '' } } });
+  const browser = (url, cookie = '', init = {}) => fetch(f.base + url, {
+    ...init, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}), ...init.headers },
+  });
+  const first = await browser('/api/conversations', '', { method: 'POST' });
+  assert.equal(first.status, 201);
+  const cookie = first.headers.get('set-cookie').split(';')[0];
+  const { conversation: { conversationId } } = await first.json();
+  const other = await browser('/api/conversations', '', { method: 'POST' });
+  const otherCookie = other.headers.get('set-cookie').split(';')[0];
+  assert.notEqual(cookie, otherCookie);
+  assert.deepEqual(await (await browser('/api/capabilities', cookie)).json(),
+    { schemaVersion: 1, features: { durable_qa_tasks_v1: true } });
+  const post = { method: 'POST', headers: { 'Idempotency-Key': 'cookie-task' },
+    body: JSON.stringify({ conversationId, question: 'synthetic cookie question' }) };
+  const response = await browser('/api/tasks', cookie, post);
+  assert.equal(response.status, 202);
+  const { task } = await response.json();
+  await until(() => f.app.locals.imaQaAskQueue.stats().activeRequests === 0);
+  assert.equal((await browser(`/api/tasks/${task.id}`, cookie)).status, 200);
+  assert.equal((await (await browser('/api/tasks', cookie)).json()).tasks.length, 1);
+  assert.match(await (await browser(`/api/tasks/${task.id}/events`, cookie)).text(), /event: done/);
+  assert.deepEqual(await (await browser('/api/tasks', otherCookie)).json(), { tasks: [] });
+  assert.equal((await browser('/api/tasks', otherCookie, post)).status, 404);
+  for (const [url, method] of [[`/api/tasks/${task.id}`, 'GET'], [`/api/tasks/${task.id}`, 'DELETE'],
+    [`/api/tasks/${task.id}/events`, 'GET'], [`/api/conversations/${conversationId}`, 'GET']]) {
+    assert.equal((await browser(url, otherCookie, { method })).status, 404);
+  }
+  assert.equal((await browser('/internal/provider-a/tasks', cookie)).status, 404);
+  assert.equal((await browser('/internal/provider-a/tasks', cookie, post)).status, 404);
+  assert.equal(f.calls.length, 1);
+});
+
+test('configured ordinary task token requires bearer even for same-origin browser cookies', async t => {
+  const f = await fixture(t, { config: { security: { apiToken: 'synthetic-api', internalServiceToken: '' } } });
+  for (const route of ['/api/capabilities', '/api/tasks']) {
+    assert.equal((await fetch(f.base + route, { headers: { cookie: `ima_qa_client_id=${owner}` } })).status, 401);
+    assert.equal((await f.request(route, {}, owner, 'wrong')).status, 401);
+    assert.equal((await f.request(route)).status, 200);
+  }
+  assert.equal((await fetch(f.base + '/api/tasks', { method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: `ima_qa_client_id=${owner}`, 'Idempotency-Key': 'cookie-only' },
+    body: JSON.stringify({ conversationId: f.conversationId, question: 'synthetic question' }) })).status, 401);
+  assert.equal((await f.submit()).status, 202);
+  assert.equal((await f.request('/internal/provider-a/tasks')).status, 404);
+  assert.equal((await f.request('/internal/provider-a/tasks', {}, owner, 'synthetic-service')).status, 404);
 });
 
 test('idempotent POST runs once, snapshots/SSE retain whitespace and cursor is strict', async t => {
