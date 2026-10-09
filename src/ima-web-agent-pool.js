@@ -26,6 +26,7 @@ class IMAWebAgentPool {
     this.clientFactory = clientFactory;
     this.onAccountStateChange = options.onAccountStateChange || null;
     this.onAccountCredentialsChange = options.onAccountCredentialsChange || null;
+    this.policyEligibility = options.policyEligibility || null;
     this.now = options.now || Date.now;
     this.waiters = new Set();
     this.availabilityListeners = new Set();
@@ -183,15 +184,14 @@ class IMAWebAgentPool {
   async *streamAsk(options = {}) {
     options.signal?.throwIfAborted();
     let preferredAccountId = String(options.accountId || '').trim();
-    if (options.mode === 'knowledge_agent' && this.webReadiness) {
-      const eligible = this.accounts.filter(account => this.webReadiness(account));
-      if (preferredAccountId && !eligible.some(account => account.id === preferredAccountId)) throw new NoAvailableWebAgentAccountError('会话账号需要重新验证');
+    if ((options.mode === 'knowledge_agent' && this.webReadiness) || (options.retrievalPolicy && this.policyEligibility)) {
+      const eligible = this.accounts.filter(account => this._requestEligible(account, options));
+      if (preferredAccountId && !eligible.some(account => [account.id, account.name].includes(preferredAccountId))) throw new NoAvailableWebAgentAccountError('会话账号需要重新验证');
       if (!eligible.length) throw new NoAvailableWebAgentAccountError('暂无通过问答验证的账号');
     }
     const account = options.accountLease ? this._consumeTaskLease(options.accountLease, options) : preferredAccountId
       ? await this._waitForPreferredAccount(preferredAccountId, options.signal)
-      : await this._waitForAnyAccount(options.signal, options.mode === 'knowledge_agent' && this.webReadiness
-        ? account => this.webReadiness(account) : undefined);
+      : await this._waitForAnyAccount(options.signal, account => this._requestEligible(account, options));
     let sessionId = '';
     const upstreamOnSession = options.onSession;
     const clientOptions = {
@@ -207,7 +207,7 @@ class IMAWebAgentPool {
       options.signal?.throwIfAborted();
       yield { type: 'route', accountId: account.id };
       options.signal?.throwIfAborted();
-      if (options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account)) {
+      if (!this._requestEligible(account, options)) {
         throw new NoAvailableWebAgentAccountError('账号状态已变化，请稍后重试');
       }
       const stream = account.client.streamAsk(clientOptions);
@@ -241,8 +241,14 @@ class IMAWebAgentPool {
     return () => this.availabilityListeners.delete(listener);
   }
 
-  _runnableAccount({ accountId: preferred = '', mode } = {}) {
-    const eligible = mode === 'knowledge_agent' && this.webReadiness ? this.webReadiness : () => true;
+  _requestEligible(account, options) {
+    return !(options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account))
+      && !(options.retrievalPolicy && this.policyEligibility && !this.policyEligibility(account, options));
+  }
+
+  _runnableAccount(options = {}) {
+    const preferred = options.accountId || '';
+    const eligible = account => this._requestEligible(account, options);
     if (preferred) {
       const account = this.accounts.find(item => item.id === preferred || item.name === preferred);
       if (!account || account.disabled) {
@@ -279,7 +285,7 @@ class IMAWebAgentPool {
     if (!record || record.used || record.released || !this.accounts.includes(account)
         || account.disabled || account.maintenanceOperation || account.cooldownUntil > this.now()
         || (options.accountId && ![account.id, account.name].includes(options.accountId))
-        || (options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account))) {
+        || !this._requestEligible(account, options)) {
       throw new Error('Invalid account lease');
     }
     record.used = true;
