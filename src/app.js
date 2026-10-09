@@ -17,6 +17,7 @@ const { createApplicationIdentity, applicationOwnerKey } = require('./applicatio
 const { FIELDS: BOT_FIELDS, validateBotRetrievalContract, prepareBotAsk,
   buildBotAnswerEvidence, buildBotCapacitySnapshot } = require('./bot-compat');
 const { buildRecentContextQuestionPlan } = require('./bot-recent-context');
+const { providerAExecutionCapacity } = require('./provider-a-capacity');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -55,6 +56,7 @@ function createApp({
   const app = express();
   const observer = observationExporter || observation;
   botCompatibility ||= airPolicyCapacity ? createAirBotCompatibility(airPolicyCapacity) : null;
+  const botExecutionCapacity = () => providerAExecutionCapacity({ pool: imaWebAgentClient, webReadiness, airPolicyCapacity });
   app.locals.airBotExtensionsMounted = Boolean(config.qaProvider === 'ima-web-agent' &&
     typeof botCompatibility?.snapshot === 'function');
   const applicationIdentity = createApplicationIdentity(config.security);
@@ -90,7 +92,7 @@ function createApp({
         directory: config.durableTasks?.storePath || `${config.conversations.storePath}.tasks`,
         conversations, queue: askQueue, accountPool: imaWebAgentClient,
         mode: webReadiness?.mode || config.webAgent?.mode,
-        routingOptions: task => botRoutingOptions(task.input.botContract),
+        routingOptions: task => botRoutingOptions(task.input.botContract, task.applicationKey || task.scope, task.ownerKey),
         execute: ({ task, signal, res, accountLease, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity }) => dispatchAsk({
           config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
           history: conversations.getHistory(task.input.conversationId, task.ownerKey),
@@ -98,6 +100,7 @@ function createApp({
           upstreamQuestion: task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
           sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
           botContract: task.input.botContract, botCompatibility, recentContextConsumer, observation: observer,
+          applicationKey: task.applicationKey || task.scope,
           mode: task.input.botContract ? conversations.require(task.input.conversationId, task.ownerKey).mode :
             task.input.retrieval_policy || conversations.require(task.input.conversationId, task.ownerKey).mode || webReadiness?.mode,
           transportTimeouts: {
@@ -163,7 +166,7 @@ function createApp({
           try { const policies = botCapacitySnapshot(botCompatibility, {
             generation: webReadiness?.snapshot()?.generation || 0,
             maxConcurrent: webReadiness?.snapshot()?.capacity ?? askQueue.stats().maxConcurrent,
-          }).policies;
+          }, botExecutionCapacity(), imaWebAgentClient?.parallelPairCapacity?.()).policies;
             health.policyCapacity = Object.fromEntries(Object.entries(policies).map(([key, value]) => [key, value.max_concurrent]));
           } catch { health.policyCapacity = {}; }
         }
@@ -181,7 +184,7 @@ function createApp({
     const state = webReadiness?.snapshot();
     const queue = askQueue.stats();
     const nativeCapacity = config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent'
-      ? Math.max(0, Number(state.knowledgeAgentCapacity) || 0) : 0;
+      ? Math.max(0, Math.min(Number(state.knowledgeAgentCapacity) || 0, Number(state.capacity) || 0)) : 0;
     res.setHeader('Cache-Control', 'no-store');
     const website = { schemaVersion: 1, generation: state?.generation || 0,
       maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
@@ -190,13 +193,13 @@ function createApp({
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
       features: {
-        knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && state?.mode === 'knowledge_agent',
+        knowledge_agent_keyed_sse_v1: nativeCapacity > 0,
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
       },
     };
     if (!botCompatibility) return res.json(website);
-    try { return res.json(botCapacitySnapshot(botCompatibility, website)); }
+    try { return res.json(botCapacitySnapshot(botCompatibility, website, botExecutionCapacity(), imaWebAgentClient?.parallelPairCapacity?.())); }
     catch { return res.status(503).json({ error: 'bot_capacity_unavailable' }); }
   });
 
@@ -333,6 +336,7 @@ function createApp({
             upstreamQuestion: validation.sourceIntent === 'web_requested' ? `${validation.question}${WEB_REQUESTED_SUFFIX}` : validation.question,
             sourceIntent: validation.sourceIntent,
             botContract: validation.botContract, botCompatibility, recentContextConsumer, observation: observer,
+            applicationKey: req.applicationKey,
             requestId,
             req,
             res,
@@ -347,8 +351,8 @@ function createApp({
           }),
         { signal, applicationKey: req.applicationKey, visitorKey: ownerKey, laneKey: conversationId,
           ...(config.qaProvider === 'ima-web-agent' && imaWebAgentClient?.tryAcquireSlot ? {
-          isRunnable: () => imaWebAgentClient.canAcquireSlot({ ...botRoutingOptions(validation.botContract), ...conversations.getUpstream(conversationId, ownerKey), mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode : validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode }),
-          tryAcquire: () => imaWebAgentClient.tryAcquireSlot({ ...botRoutingOptions(validation.botContract), ...conversations.getUpstream(conversationId, ownerKey), mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode : validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode, signal }),
+          isRunnable: () => imaWebAgentClient.canAcquireSlot({ ...botRoutingOptions(validation.botContract, req.applicationKey, ownerKey), ...conversations.getUpstream(conversationId, ownerKey), mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode : validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode }),
+          tryAcquire: () => imaWebAgentClient.tryAcquireSlot({ ...botRoutingOptions(validation.botContract, req.applicationKey, ownerKey), ...conversations.getUpstream(conversationId, ownerKey), mode: validation.botContract ? conversations.require(conversationId, ownerKey).mode : validation.retrievalPolicy || conversations.require(conversationId, ownerKey).mode || webReadiness?.mode || config.webAgent?.mode, signal }),
         } : {}) },
       );
     } catch (error) {
@@ -501,11 +505,16 @@ function createAirBotCompatibility(capacity) {
   } };
 }
 
-function botRoutingOptions(contract) {
+function botRoutingOptions(contract, applicationKey, ownerKey) {
   if (!contract) return {};
+  const binding = contract.recentContextBinding;
+  const pairScope = binding ? ['context', binding.account_id, binding.group_id, binding.route_ref,
+    binding.route_generation, binding.feature_generation] : ['owner', ownerKey];
   return { retrievalPolicy: contract.retrievalPolicy, knowledgeScopeRef: contract.knowledgeScopeRef,
     recentContextRef: contract.recentContextRef, parallelPairRef: contract.parallelPairRef,
-    parallelLeg: contract.parallelLeg };
+    parallelLeg: contract.parallelLeg,
+    ...(contract.parallelPairRef ? { parallelPairKey: crypto.createHash('sha256')
+      .update(JSON.stringify([applicationKey, pairScope, contract.parallelPairRef])).digest('hex') } : {}) };
 }
 
 function assertBotPolicy(contract, adapter) {
@@ -522,10 +531,10 @@ function assertBotPolicy(contract, adapter) {
   return state;
 }
 
-function botCapacitySnapshot(adapter, website) {
+function botCapacitySnapshot(adapter, website, executionCapacity = website.maxConcurrent, pairCapacity = Infinity) {
   const state = adapter.snapshot();
-  const snapshot = buildBotCapacitySnapshot({ ...state,
-    website: { ...website, generation: state.generation ?? website.generation } });
+  const snapshot = buildBotCapacitySnapshot({ ...state, pairedCapacity: Math.min(state.pairedCapacity || 0, pairCapacity),
+    website: { ...website, maxConcurrent: executionCapacity, generation: state.generation ?? website.generation } });
   const features = Object.fromEntries(Object.entries(state.features || {}).filter(([, value]) => typeof value === 'boolean'));
   return { ...snapshot, website, features: { ...features, ...website.features } };
 }
@@ -791,6 +800,7 @@ async function handleJsonWebAgentAsk(context) {
       mode: context.mode,
       botContract: context.botContract,
       originalQuestion: context.question,
+      applicationKey: context.applicationKey, ownerKey,
     });
     if (result.answerProfile) context.botProfile = result.answerProfile;
     const answer = sanitizeIMAAnswerText(result.answer) || noReliableContentAnswer();
@@ -862,7 +872,7 @@ async function handleStreamingWebAgentAsk(context) {
     let terminals = 0;
     const answerTextStream = createAnswerTextStream();
     for await (const event of imaWebAgentClient.streamAsk({
-      ...botRoutingOptions(context.botContract),
+      ...botRoutingOptions(context.botContract, context.applicationKey, context.ownerKey),
       ...(context.botContract ? { originalQuestion: question } : {}),
       question: upstreamQuestion,
       signal,
@@ -963,7 +973,7 @@ async function handleStreamingWebAgentAsk(context) {
   }
 }
 
-async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upstream = {}, accountLease, mode, botContract, originalQuestion }) {
+async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upstream = {}, accountLease, mode, botContract, originalQuestion, applicationKey, ownerKey }) {
   let answer = '';
   let searchSummary = '';
   const sources = [];
@@ -975,7 +985,7 @@ async function collectWebAgentAnswer({ question, imaWebAgentClient, signal, upst
   let sessionAnswerProfile = upstream.sessionAnswerProfile || '';
 
   for await (const event of imaWebAgentClient.streamAsk({
-    ...botRoutingOptions(botContract),
+    ...botRoutingOptions(botContract, applicationKey, ownerKey),
     ...(botContract ? { originalQuestion } : {}),
     question,
     signal,
