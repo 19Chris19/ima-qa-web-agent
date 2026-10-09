@@ -39,8 +39,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version || github.ref_name }}
         run: |
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          test "$VERSION" = "v$(node -p 'require("./package.json").version')"
+          node scripts/release-version.cjs "$VERSION"
           git merge-base --is-ancestor HEAD origin/main
           test "$(git rev-parse HEAD)" = "$(git rev-parse "$VERSION^{commit}")"
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
