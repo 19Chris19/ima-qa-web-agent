@@ -198,9 +198,9 @@ class IMAWebAgentPool {
     const clientOptions = {
       ...options,
       sessionId: options.sessionId || '',
-      onSession(nextSessionId) {
+      onSession(nextSessionId, metadata) {
         sessionId = nextSessionId;
-        upstreamOnSession?.(nextSessionId);
+        upstreamOnSession?.(nextSessionId, metadata);
       },
     };
     delete clientOptions.accountId;
@@ -227,7 +227,7 @@ class IMAWebAgentPool {
       }
       this._markSuccess(account);
     } catch (error) {
-      if (!options.signal?.aborted) {
+      if (!options.signal?.aborted && !(error instanceof NoAvailableWebAgentAccountError)) {
         this._markFailure(account, error);
       }
       throw error;
