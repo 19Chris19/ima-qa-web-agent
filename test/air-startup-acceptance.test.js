@@ -176,6 +176,8 @@ test('real Air entrypoint mounts health, capacity and admin with no outbound tra
     assert.equal(bootstrap.qualification.totalAccounts, 0);
     assert.equal(bootstrap.qualification.authorizedRequestCount, 0);
     assert.ok(bootstrap.enrollment);
+    assert.deepEqual(bootstrap.enrollment.qualification,
+      { required: true, automatic: true, requestsPerTarget: 1 });
     const eligibility = await json(base, '/api/admin/v2/accounts/eligibility', { token: 'your-synthetic-admin' });
     assert.equal(eligibility.schema_version, 'provider.a.admin.account-eligibility.v2');
     assert.deepEqual(eligibility.accounts, []);

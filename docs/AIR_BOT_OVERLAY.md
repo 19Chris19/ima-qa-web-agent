@@ -135,6 +135,13 @@ bound proof commits and sanitized report persistence. Basic requires one request
 advanced is one smoke plus six scenarios and is never required for an existing
 valid basic account. Existing enrollment's declared one-request consent drives
 basic qualification; advanced qualification remains an explicit admin action.
+Air admin bootstrap exposes `enrollment.qualification` with `required: true`,
+`automatic: true` and `requestsPerTarget: 1` for the preserved admin UI. On the
+Air single-account qualification route, omitted `mode` means `basic` and still
+requires `confirm: true` and exactly one authorized request. Explicit `advanced`
+requires exactly seven; unknown modes are rejected before dispatch. The separate
+batch bootstrap/batch route and generic admin defaults are unchanged. A stale UI
+sending seven requests without a mode is rejected, never silently upgraded.
 Run identifiers use `runId`; cancellation is mapped to the exact pending account
 run and post-commit receipts/warnings survive downstream sync failure.
 
