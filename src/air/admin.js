@@ -7,7 +7,9 @@ function registerAirAdminRoutes(app, { config, accountDirectory, manager, polici
   const auth = createAdminAuthMiddleware(config.security?.adminToken);
   app.use('/api/admin/bootstrap', auth, (_req, res, next) => {
     const json = res.json.bind(res);
-    res.json = body => json({ ...body, qualification: manager.getBootstrap() });
+    res.json = body => json({ ...body, qualification: manager.getBootstrap(),
+      enrollment: { ...body.enrollment,
+        qualification: { required: true, automatic: true, requestsPerTarget: 1 } } });
     next();
   });
   const route = (method, path, fn) => app[method](path, auth, async (req, res) => {
@@ -30,7 +32,10 @@ function registerAirAdminRoutes(app, { config, accountDirectory, manager, polici
   route('post', '/api/admin/accounts/:accountId/qualification', async (req, res) => {
     const account = accountDirectory.getAccount(req.params.accountId);
     if (!account || account.id !== req.params.accountId) return res.status(404).json({ success: false, code: 'qualification_account_invalid' });
-    const mode = req.body?.mode === 'basic' ? 'basic' : 'advanced';
+    const mode = req.body?.mode === undefined ? 'basic' : req.body.mode;
+    if (!['basic', 'advanced'].includes(mode)) {
+      return res.status(400).json({ success: false, code: 'qualification_mode_invalid', error: 'qualification_mode_invalid' });
+    }
     const activateEnrollment = account.runtime?.disabled === true &&
       (account.runtime.disabledReason === 'pending_enrollment_qualification' ||
         (mode === 'basic' && account.runtime.disabledReason === 'migration_verification_required'));
