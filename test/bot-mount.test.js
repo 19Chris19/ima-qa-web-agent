@@ -441,9 +441,24 @@ test('bot capacity uses eligible union when website native capacity is zero', as
   const capacity = await (await f.request('/internal/provider-a/capacity')).json();
   assert.equal(capacity.website.maxConcurrent, 0);
   assert.equal(capacity.website.policies.knowledge_agent.max_concurrent, 0);
-  assert.equal(capacity.features.knowledge_agent_keyed_sse_v1, false);
+  assert.equal(capacity.features.knowledge_agent_keyed_sse_v1, true);
   assert.equal(capacity.max_concurrent, 2);
   assert.equal(capacity.policies.group_knowledge.max_concurrent, 2);
+});
+
+test('native empty pool keeps contract support separate from zero account capacity', async t => {
+  for (const options of [{ disabled: true }, { airPolicyCapacity: true }]) {
+    const f = await fixture(t, { ...options, mode: 'knowledge_agent', websiteCapacity: 0 });
+    f.state.policyCapacity = Object.fromEntries(Object.keys(f.state.policyCapacity).map(policy => [policy, 0]));
+    const response = await f.request('/internal/provider-a/capacity');
+    assert.equal(response.status, 200);
+    const capacity = await response.json();
+    assert.equal(capacity.features.knowledge_agent_keyed_sse_v1, true);
+    assert.equal(capacity.features.durable_qa_tasks_v1, true);
+    const website = capacity.website || capacity;
+    assert.equal(website.features.knowledge_agent_keyed_sse_v1, true);
+    assert.equal(website.policies.knowledge_agent.max_concurrent, 0);
+  }
 });
 
 test('pair routing keys join exact context binding across visitors and isolate trusted applications', async t => {
@@ -477,7 +492,7 @@ test('pair routing keys join exact context binding across visitors and isolate t
   }
 });
 
-for (const format of ['sse', 'task']) test(`${format}: mounted real pool keeps pair legs on distinct accounts across visitors`, async t => {
+for (const wire of ['context', 'historical']) for (const format of ['sse', 'task']) test(`${wire}/${format}: mounted real pool keeps pair legs on distinct accounts`, async t => {
   const calls = [];
   const makePool = () => new IMAWebAgentPool({ accounts: [{ id: 'synthetic-a', maxConcurrent: 2 }, { id: 'synthetic-b', maxConcurrent: 2 }] }, {
     clientFactory: account => ({ async *streamAsk(args) {
@@ -494,13 +509,15 @@ for (const format of ['sse', 'task']) test(`${format}: mounted real pool keeps p
   const pool = makePool();
   const f = await fixture(t, { pool, context: { messages: [], sourceMessageCount: 0, selectedMessageCount: 0, truncationReason: 'none' } });
   for (const leg of ['knowledge', 'web']) {
-    const visitor = `synthetic-${leg}-visitor`;
+    const visitor = wire === 'historical' ? `wechat-qa-${hash(['synthetic-account', 'synthetic-group', 'synthetic-sender'].join('\u0000'))}` : `synthetic-${leg}-visitor`;
     const conversationId = format === 'task' ? (await (await f.request('/api/conversations',
       { method: 'POST' }, 'synthetic-api', visitor)).json()).conversation.conversationId : '';
     const response = await f.post(format === 'task' ? '/internal/provider-a/tasks' : undefined, {
       conversationId, retrieval_policy: leg === 'web' ? 'web' : 'group_knowledge',
       parallel_pair_ref: hash('synthetic-pair'), parallel_leg: leg,
-      recent_context_ref: `ctx_${hash(leg)}`,
+      recent_context_ref: wire === 'historical' ? null : `ctx_${hash(leg)}`,
+      recent_context_binding: wire === 'historical' ? null : binding,
+      knowledge_scope_ref: leg === 'knowledge' ? scope : undefined,
     }, hash(leg), { headers: { Accept: 'text/event-stream', 'x-ima-client-id': visitor } });
     assert.equal(response.status, format === 'task' ? 202 : 200);
     if (format === 'task') {
@@ -509,6 +526,8 @@ for (const format of ['sse', 'task']) test(`${format}: mounted real pool keeps p
     } else assert.match(await response.text(), /event: done/u);
   }
   assert.equal(new Set(calls.map(call => call.account)).size, 2);
+  assert.equal(pool.parallelPairs.size, 1, 'both legs must join the same exclusion record');
+  assert.equal(f.consumed.length, wire === 'historical' ? 0 : 2);
   assert.equal(pool.stats().activeRequests, 0);
   if (format === 'task') {
     const manager = f.app.locals.durableQATasks;
