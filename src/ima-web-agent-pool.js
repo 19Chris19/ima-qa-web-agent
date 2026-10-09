@@ -392,19 +392,25 @@ class IMAWebAgentPool {
   restoreParallelPairBinding(options) {
     const pair = this._parallelPair(options);
     if (!pair) return;
+    const expiresAt = options.expiresAt ?? Infinity;
+    if (expiresAt !== Infinity && (!Number.isFinite(expiresAt) || expiresAt < 0)) {
+      throw new NoAvailableWebAgentAccountError('parallel_contract_invalid');
+    }
+    if (expiresAt <= this.now()) return;
     if (!options.accountId) {
       if (!this.parallelPairs.has(pair.key) && this.parallelPairs.size >= this.maxParallelPairs) {
         throw new NoAvailableWebAgentAccountError('parallel_pair_capacity');
       }
       const entry = this.parallelPairs.get(pair.key) || { legs: {}, expiresAt: Infinity };
       entry.blocked = true;
-      entry.expiresAt = Infinity;
+      entry.expiresAt = expiresAt;
       this.parallelPairs.set(pair.key, entry);
       return;
     }
     const lease = this._recordParallelPairLease(pair, options.accountId);
     lease.markUsed();
     lease.release();
+    if (options.expiresAt !== undefined) this.parallelPairs.get(pair.key).expiresAt = expiresAt;
   }
 
   _waitForPairSlot(options) {

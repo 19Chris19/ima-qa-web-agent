@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const lockfile = require('proper-lockfile');
 const { validApplicationKey } = require('./application-identity');
+const { pairReceipt, validPairReceipt } = require('./bot-pair-routing');
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'indeterminate']);
 const RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -65,6 +66,7 @@ class DurableQATaskStore {
             task.events.some((e, i) => e.id !== i + 1) || !task.input || typeof task.ownerKey !== 'string' ||
             !['ordinary', 'internal'].includes(task.scope) || !task.trace ||
             (task.applicationKey !== undefined && !validApplicationKey(task.applicationKey)) ||
+            (task.pairReceipt !== undefined && !validPairReceipt(task.pairReceipt)) ||
             ![task.keyHash, task.requestKey, task.fingerprint].every(value => /^[a-f0-9]{64}$/u.test(value)) ||
             typeof task.input.conversationId !== 'string' || (!task.eventsExpired && typeof task.input.question !== 'string')) {
           throw fault('task_store_unavailable');
@@ -76,8 +78,8 @@ class DurableQATaskStore {
       this.available = true;
       // Legacy receipts keep their original owner/key/status; migration cannot dispatch work.
       for (const task of this.tasks.values()) {
-        if (task.applicationKey === undefined) {
-          this.update(task.id, current => { current.applicationKey = current.scope; }, true);
+        if (task.applicationKey === undefined || (!task.pairReceipt && task.input.botContract?.parallelPairRef)) {
+          this.update(task.id, current => { current.applicationKey ??= current.scope; }, true);
         }
       }
       this.prune();
@@ -187,6 +189,12 @@ class DurableQATaskStore {
 
   save(task, reserve = false) {
     this.ensure();
+    const pair = pairReceipt(task);
+    if (pair) {
+      const accountId = task.upstreamBinding?.accountId || task.completion?.upstream?.accountId || pair.accountId;
+      task.pairReceipt = { ...pair, ...(accountId ? { accountId } : {}) };
+      if (!validPairReceipt(task.pairReceipt)) throw fault('task_store_unavailable');
+    }
     const size = Buffer.byteLength(JSON.stringify(task));
     if (size > this.maxTaskBytes + (reserve ? 16384 : 0) || task.events.length > this.maxEvents + (reserve ? 2 : 0) ||
         this.totalBytes() - (this.bytes.get(task.id) || 0) + size > this.maxBytes + (reserve ? this.maxTasks * 16384 : 0)) {

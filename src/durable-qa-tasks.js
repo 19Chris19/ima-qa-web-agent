@@ -24,21 +24,10 @@ class DurableQATasks {
       // Resolve the completion journal before admitting any new requests.
       for (const task of this.store.tasks.values()) {
         if (task.bindingPending) this.applyBinding(task.id);
-        if (this.accountPool?.restoreParallelPairBinding &&
-            (task.upstreamBinding || task.completion || task.trace?.dispatchedAt != null)) {
-          const routing = this.routingOptions(task);
-          if (routing.parallelPairKey) {
-            let accountId = task.upstreamBinding?.accountId || task.completion?.upstream?.accountId;
-            if (!accountId) {
-              try { accountId = this.conversations.getUpstream(task.input.conversationId, task.ownerKey).accountId; }
-              catch { /* Unknown dispatched affinity must block the pair, never guess. */ }
-            }
-            this.accountPool.restoreParallelPairBinding({ ...routing, accountId });
-          }
-        }
         if (task.completion) this.complete(task.id, task.completion);
         else if (task.status === 'running') this.terminal(task.id, 'indeterminate', 'execution_interrupted');
       }
+      this.restorePairs();
       for (const task of [...this.store.tasks.values()].sort((a, b) => a.createdAt - b.createdAt)) {
         if (task.status !== 'queued') continue;
         this.schedule(task);
@@ -57,6 +46,38 @@ class DurableQATasks {
 
   get available() { return !this.closed && this.store.available; }
   ensure() { if (!this.available) throw fault('task_store_unavailable'); }
+
+  restorePairs() {
+    if (!this.accountPool?.restoreParallelPairBinding) return;
+    const groups = new Map();
+    for (const task of this.store.tasks.values()) {
+      const routing = task.pairReceipt || this.routingOptions(task);
+      if (!routing.parallelPairKey) continue;
+      const group = groups.get(routing.parallelPairKey) || [];
+      group.push({ task, routing });
+      groups.set(routing.parallelPairKey, group);
+    }
+    // Decide expiry for whole groups before inserting anything into the bounded pool.
+    for (const group of groups.values()) {
+      const complete = new Set(group.map(({ routing }) => routing.parallelLeg)).size === 2 &&
+        group.every(({ task }) => TERMINAL.has(task.status) && Number.isFinite(task.trace.terminalAt));
+      const expiresAt = complete ? Math.max(...group.map(({ task }) => task.trace.terminalAt)) +
+        this.accountPool.parallelPairRetentionMs : Infinity;
+      if (expiresAt <= this.store.now()) continue;
+      for (const { task, routing } of group) {
+        if (!task.upstreamBinding && !routing.accountId && task.trace?.dispatchedAt == null) continue;
+        let accountId = routing.accountId || task.upstreamBinding?.accountId;
+        if (!accountId) {
+          try { accountId = this.conversations.getUpstream(task.input.conversationId, task.ownerKey).accountId; }
+          catch { /* Unknown dispatched affinity blocks the pair, never guess. */ }
+        }
+        if (accountId && task.pairReceipt && task.pairReceipt.accountId !== accountId) {
+          this.store.update(task.id, current => { current.pairReceipt.accountId = accountId; }, true);
+        }
+        this.accountPool.restoreParallelPairBinding({ ...routing, accountId, expiresAt });
+      }
+    }
+  }
 
   hasUnfinishedConversation(conversationId, ownerKey, excludedScope) {
     this.ensure();
@@ -111,7 +132,8 @@ class DurableQATasks {
         if (upstream.sessionAnswerProfile && next.sessionAnswerProfile !== upstream.sessionAnswerProfile) {
           throw fault('session_profile_conflict', 409);
         }
-        if (next.accountId === upstream.accountId && next.sessionId === upstream.sessionId && next.sessionAnswerProfile === upstream.sessionAnswerProfile) return;
+        if (next.accountId === upstream.accountId && next.sessionId === upstream.sessionId && next.sessionAnswerProfile === upstream.sessionAnswerProfile &&
+            (!task.pairReceipt || this.store.tasks.get(task.id).pairReceipt?.accountId === next.accountId)) return;
         this.store.update(task.id, current => { current.upstreamBinding = next; current.bindingPending = true; }, true);
         try { this.applyBinding(task.id); } catch { this.store.unavailable(); throw fault('task_store_unavailable'); }
         upstream = next;
