@@ -253,14 +253,15 @@ function createApp({
   const askHandler = async (req, res) => {
     const requestId = crypto.randomUUID();
     const isSse = wantsSse(req);
-    if (qualificationMaintenanceActive() ||
+    const qualificationMaintenance = qualificationMaintenanceActive();
+    if (qualificationMaintenance ||
         (!req.isInternalProviderADeepAsk && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.())) {
       return rejectAskRequest({
         req,
         res,
         requestId,
         statusCode: 503,
-        message: '管理员正在进行账号池维护，请稍后重试',
+        message: qualificationMaintenance ? '管理员正在进行账号池维护，请稍后重试' : '管理员正在进行账号池容量演练，请稍后重试',
         failureReason: 'maintenance_exercise',
       });
     }
