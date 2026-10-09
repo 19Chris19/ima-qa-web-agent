@@ -4,12 +4,12 @@ function synchronizeProviderAQueueCapacity({ askQueue, config, pool, webReadines
   }
 
   const poolStats = pool?.stats?.() || {};
-  const eligibleAccounts = webReadiness ? webReadiness.snapshot().capacity : Math.max(
+  const eligibleSlots = webReadiness ? webReadiness.snapshot().capacity : Number.isFinite(poolStats.capacity) ? poolStats.capacity : Math.max(
     0,
     Number(poolStats.totalAccounts || 0) - Number(poolStats.unavailableAccounts || 0)
       - Number(poolStats.coolingDownAccounts || 0),
   );
-  return askQueue.setMaxConcurrent(Math.max(1, eligibleAccounts));
+  return askQueue.setMaxConcurrent(Math.max(0, eligibleSlots));
 }
 
 module.exports = {

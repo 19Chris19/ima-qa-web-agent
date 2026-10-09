@@ -59,11 +59,13 @@ class WebReadiness {
       const job = this.jobs.get(row.id);
       const qualified = account && validProof(account);
       const needsLogin = ['auth_expired', 'auth_rejected'].includes(row.health?.last_check_code);
+      const maxConcurrent = account?.maxConcurrent || 1;
       const schedulable = Boolean(account && !account.disabled && !account.maintenanceOperation &&
         !needsLogin &&
-        account.activeRequests === 0 && account.cooldownUntil <= this.pool.now() &&
+        account.activeRequests < maxConcurrent && account.cooldownUntil <= this.pool.now() &&
         (this.mode === 'classic_knowledge' || qualified));
-      return { id: row.id, qualified: Boolean(qualified), schedulable,
+      return { id: row.id, qualified: Boolean(qualified), schedulable, maxConcurrent,
+        availableSlots: schedulable ? Math.max(0, maxConcurrent - account.activeRequests) : 0,
         commitApplied: job?.commitApplied === true,
         warning: warningFor(job),
         verifiedAt: account?.webQualification?.verifiedAt || null,
@@ -72,15 +74,19 @@ class WebReadiness {
           account?.cooldownUntil > this.pool.now() ? 'cooling' : schedulable ? 'ready' : 'pending',
         reason: needsLogin ? row.health.last_check_code : job?.code || (qualified ? 'ok' : 'qualification_required') };
     });
-    const capacity = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
+    const eligible = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
       states.find(state => state.id === account.id)?.state !== 'needs_login' &&
-      account.cooldownUntil <= this.pool.now() && (this.mode === 'classic_knowledge' || validProof(account))).length;
+      account.cooldownUntil <= this.pool.now() && (this.mode === 'classic_knowledge' || validProof(account)));
+    const capacity = eligible.reduce((sum, account) => sum + (account.maxConcurrent || 1), 0);
     const knowledgeAgentCapacity = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
       states.find(state => state.id === account.id)?.state !== 'needs_login' &&
-      account.cooldownUntil <= this.pool.now() && validProof(account)).length;
+      account.cooldownUntil <= this.pool.now() && validProof(account)).reduce((sum, account) => sum + (account.maxConcurrent || 1), 0);
     return { mode: this.mode, generation: this.appliedGeneration, capacity, knowledgeAgentCapacity,
       basicHealthy: rows.filter(a => a.health?.session_valid && a.health?.knowledge_ready && a.health?.web_ready).length,
-      schedulable: states.filter(a => a.schedulable).length,
+      schedulable: states.reduce((sum, state) => sum + state.availableSlots, 0),
+      eligibleAccounts: eligible.length, schedulableAccounts: states.filter(a => a.schedulable).length,
+      totalAccounts: this.pool.accounts.length,
+      totalSlots: this.pool.accounts.reduce((sum, account) => sum + (account.maxConcurrent || 1), 0),
       pending: states.filter(a => !a.qualified).length, accounts: states };
   }
 

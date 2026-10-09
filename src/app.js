@@ -9,6 +9,9 @@ const { createRateLimiter } = require('./rate-limit');
 const { InternalAskIdempotency } = require('./internal-ask-idempotency');
 const { createAnswerTextStream, sanitizeIMAAnswerText } = require('./answer-text-stream');
 const { IMAUpstreamProtocolError } = require('./ima-upstream-protocol');
+const { DurableQATasks } = require('./durable-qa-tasks');
+const { registerDurableQARoutes } = require('./durable-qa-routes');
+const { fault: taskFault } = require('./durable-qa-store');
 const {
   ConversationBusyError,
   ConversationNotFoundError,
@@ -58,6 +61,48 @@ function createApp({
   app.use(express.json({ limit: '32kb' }));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
+  let durableTasks = null;
+  if (config.qaProvider === 'ima-web-agent' && imaWebAgentClient && conversations.persist &&
+      config.conversations?.storePath && config.durableTasks?.enabled !== false) {
+    try {
+      durableTasks = new DurableQATasks({
+        directory: config.durableTasks?.storePath || `${config.conversations.storePath}.tasks`,
+        conversations, queue: askQueue,
+        execute: ({ task, signal, res, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding }) => dispatchAsk({
+          config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
+          history: conversations.getHistory(task.input.conversationId, task.ownerKey),
+          question: task.input.question,
+          upstreamQuestion: task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
+          sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
+          transportTimeouts: {
+            headersMs: config.concurrency?.taskConnectTimeoutMs || 60000,
+            idleMs: config.concurrency?.taskIdleTimeoutMs || 600000,
+          },
+          onDispatch, onUpstreamEvent, onUpstreamBinding,
+          isTimedOut: () => false, conversationId: task.input.conversationId,
+          conversationStore: taskConversations, ownerKey: task.ownerKey,
+        }),
+      });
+    } catch {
+      // Durable support fails closed; legacy routes remain available. No private diagnostics.
+    }
+  }
+  app.locals.durableQATasks = durableTasks;
+  app.get('/api/capabilities', requireApiToken(config.security?.apiToken), (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ schemaVersion: 1, features: {
+      durable_qa_tasks_v1: Boolean(durableTasks?.available && config.security?.apiToken),
+    } });
+  });
+  registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
+    requireApiToken, requireInternalServiceToken, getConversationOwnerKey, validateAskRequest,
+    admit(req, res, scope) {
+      if (scope === 'ordinary' && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) throw taskFault('maintenance_exercise', 503);
+      const limit = rateLimiter.consume(getClientIp(req));
+      if (!limit.ok) { res.setHeader('Retry-After', String(limit.retryAfterSeconds)); throw taskFault('rate_limited', 429); }
+    },
+  });
+
   app.get('/healthz', (_req, res) => {
     const provider = config.qaProvider || 'openapi-mimo';
     const health = {
@@ -95,11 +140,14 @@ function createApp({
     res.setHeader('Cache-Control', 'no-store');
     res.json({ schemaVersion: 1, generation: state?.generation || 0,
       maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
+      totalSlots: state?.totalSlots ?? 0, eligibleAccounts: state?.eligibleAccounts ?? 0,
+      totalAccounts: state?.totalAccounts ?? 0, schedulableAccounts: state?.schedulableAccounts ?? 0,
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
       features: {
         knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
+        durable_qa_tasks_v1: Boolean(durableTasks?.available),
       },
     });
   });
@@ -130,7 +178,13 @@ function createApp({
   });
 
   app.delete('/api/conversations/:conversationId', requireApiToken(config.security?.apiToken), (req, res) => {
-    const deleted = conversations.delete(req.params.conversationId, getConversationOwnerKey(req, res));
+    const ownerKey = getConversationOwnerKey(req, res);
+    try {
+      if (conversations.require(req.params.conversationId, ownerKey).activeRequest) {
+        return res.status(409).json({ success: false, error: 'conversation_busy' });
+      }
+    } catch { /* Preserve the legacy not-found response below. */ }
+    const deleted = conversations.delete(req.params.conversationId, ownerKey);
     res.status(deleted ? 200 : 404).json({ success: deleted });
   });
 
@@ -277,6 +331,12 @@ function createApp({
     createInternalIdempotencyMiddleware({ ledger: internalIdempotency, conversations, config, webReadiness }),
     askHandler,
   );
+
+  app.use((error, req, res, next) => {
+    if (!/^\/(?:api|internal\/provider-a)\/tasks(?:\/|$)/u.test(req.path)) return next(error);
+    const status = error.type === 'entity.too.large' ? 413 : error.type === 'entity.parse.failed' ? 400 : 503;
+    res.status(status).json({ error: status === 503 ? 'task_request_failed' : 'invalid_task_request' });
+  });
 
   return app;
 }
@@ -607,18 +667,24 @@ async function handleStreamingWebAgentAsk(context) {
     for await (const event of imaWebAgentClient.streamAsk({
       question: upstreamQuestion,
       signal,
+      ...(context.transportTimeouts ? { transportTimeouts: context.transportTimeouts } : {}),
+      ...(context.onDispatch ? { onDispatch: context.onDispatch } : {}),
       onSession(nextSessionId) {
         sessionId = nextSessionId;
+        context.onUpstreamBinding?.({ accountId, sessionId });
       },
       ...conversationStore.getUpstream(conversationId, ownerKey),
     })) {
+      if (event.type !== 'route') context.onUpstreamEvent?.(event);
       if (event.type === 'route') {
         accountId = event.accountId || accountId;
+        context.onUpstreamBinding?.({ accountId });
         continue;
       }
 
       if (event.type === 'session') {
         sessionId = event.sessionId || sessionId;
+        context.onUpstreamBinding?.({ accountId, sessionId });
         continue;
       }
 
@@ -627,6 +693,10 @@ async function handleStreamingWebAgentAsk(context) {
         sourceKinds.push(...normalizedSourceKinds(event));
         searchSummary = event.searchSummary || searchSummary;
         writeSse(res, 'sources', { sources, searchSummary, requestId });
+      }
+
+      if (event.type === 'process') {
+        writeSse(res, 'process', { ...event, requestId });
       }
 
       if (event.type === 'delta') {

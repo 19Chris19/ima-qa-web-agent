@@ -123,7 +123,7 @@ function turnEvidence(turn, report) {
 }
 
 function conversation(row, report, options) {
-  fields(row, ['id', 'ownerKey', 'title', 'mode', 'createdAt', 'updatedAt', 'expiresAt', 'turns', 'activeRequest'], ['upstream'], report);
+  fields(row, ['id', 'ownerKey', 'title', 'mode', 'createdAt', 'updatedAt', 'expiresAt', 'turns', 'activeRequest'], ['upstream', 'completedTasks'], report);
   if (own(row, 'activeRequest')) {
     if (row.activeRequest !== false) fail('conversation_active');
     report.redactedFields++;
@@ -141,7 +141,7 @@ function conversation(row, report, options) {
   const turns = [];
   for (const turn of row.turns) {
     fields(turn, ['question', 'answer', 'createdAt', 'sources', 'searchSummary', 'evidence', ...Object.keys(nativeEvidence)],
-      ['turnRef', 'cookie', ...l0Fields], report);
+      ['turnRef', 'taskId', 'cookie', ...l0Fields], report);
     for (const key of l0Fields.filter(key => own(turn, key))) {
       const value = turn[key];
       if (key === 'l0TruncationReason') {
