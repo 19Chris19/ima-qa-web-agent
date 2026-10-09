@@ -82,17 +82,19 @@ function validateBotRetrievalContract(body, { internal = false, expectedKnowledg
 
 async function prepareBotAsk({ contract, question, upstream = {}, recentContextConsumer, signal }) {
   if (signal?.aborted) throw fault('request_aborted', 499);
+  const requiredProfile = ['knowledge_agent', 'group_knowledge'].includes(contract.retrievalPolicy)
+    ? 'classic_knowledge' : 'ima_agent_auto';
+  if (contract.retrievalPolicy && upstream.sessionId && upstream.sessionAnswerProfile !== requiredProfile) {
+    throw fault('session_profile_conflict', 409);
+  }
   let recentContext = null;
   if (contract.recentContextRef) {
     if (typeof recentContextConsumer?.consume !== 'function') throw fault('recent_context_unavailable', 503);
     recentContext = await recentContextConsumer.consume(contract.recentContextRef, { binding: contract.recentContextBinding, signal });
   }
   if (signal?.aborted) throw fault('request_aborted', 499);
-  const requiredProfile = ['knowledge_agent', 'group_knowledge'].includes(contract.retrievalPolicy)
-    ? 'classic_knowledge' : 'ima_agent_auto';
-  const compatible = !contract.retrievalPolicy || upstream.sessionAnswerProfile === requiredProfile;
-  const session = compatible ? Object.fromEntries(['accountId', 'sessionId', 'sessionAnswerProfile']
-    .filter(key => typeof upstream[key] === 'string').map(key => [key, upstream[key]])) : {};
+  const session = Object.fromEntries(['accountId', 'sessionId', 'sessionAnswerProfile']
+    .filter(key => typeof upstream[key] === 'string').map(key => [key, upstream[key]]));
   return {
     ...session,
     question: contract.sourceIntent === 'web_requested'
@@ -146,7 +148,10 @@ function buildBotCapacitySnapshot({ website, profile, policyCapacity = {}, laneC
   const ceiling = count(website.maxConcurrent);
   if (ceiling > 1024) throw fault('bot_capacity_unavailable', 503);
   const capacities = (names, source) => Object.fromEntries(names.map(name => {
-    const capacity = profile.ready === true ? Math.min(ceiling, count(source[name] ?? 0)) : 0;
+    // Native/classic policy proofs are independent of the elected auto profile.
+    const ready = profile.ready === true || ['knowledge_agent', 'group_knowledge'].includes(name)
+      || !POLICIES.includes(name);
+    const capacity = ready ? Math.min(ceiling, count(source[name] ?? 0)) : 0;
     return [name, { ready: capacity > 0, max_concurrent: capacity }];
   }));
   const policies = capacities(POLICIES, policyCapacity);

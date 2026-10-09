@@ -355,6 +355,7 @@ function getConfig(env = process.env) {
   }
 
   return {
+    airBot: require('./air/config').getAirConfig(env),
     qaProvider,
     port: parsePort(readEnv(env, 'PORT')),
     limits: {

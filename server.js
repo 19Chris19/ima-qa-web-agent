@@ -18,6 +18,9 @@ const path = require('node:path');
 async function main() {
   const envLoad = loadRuntimeEnv();
   const config = getConfig(process.env);
+  if (config.airBot?.enabled) {
+    return require('./provider-a-server').main({ config, envLoad });
+  }
   const qaProvider = config.qaProvider || 'openapi-mimo';
   if (qaProvider === 'ima-web-agent') {
     fs.mkdirSync(path.dirname(config.webAgent.accountStorePath), { recursive: true, mode: 0o700 });
