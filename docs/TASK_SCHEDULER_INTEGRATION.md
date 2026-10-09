@@ -43,7 +43,11 @@ await askQueue.run(async () => {
   pool nor client reads request headers for this option.
 - Do not use the legacy total request timer for task execution. Browser SSE
   disconnects/heartbeats must neither abort a persistent task nor reset upstream
-  idle time. The task cancellation endpoint aborts the task controller explicitly.
+idle time. The task cancellation endpoint aborts the task controller explicitly.
+- `onActivity({ bytes })` receives only the byte count of QA response data,
+  including comments and incomplete heartbeat frames. The integrated durable
+  ledger uses it for actual upstream activity timestamps, never downstream
+  heartbeat timestamps or response-body logging. A thrown callback fails closed.
 - `onDispatch` remains synchronous. Complete any asynchronous durable dispatch
   recording before entering `streamAsk`; throwing in `onDispatch` prevents POST.
 - The opt-in transport also applies to task-owned session initialization and auth
@@ -89,11 +93,10 @@ account JSON configuration or `pool.syncAccounts()`. No real configuration is
 changed. An account can serve independent sessions concurrently only when this
 limit is explicitly raised. Serial conversation lanes belong to the scheduler.
 
-The existing account directory enumerates fields in `getPoolAccounts()` and does
-not yet preserve `maxConcurrent`. Core must preserve/merge that field through its
-directory-backed initialization and sync before claiming persisted multi-slot
-configuration support. Direct pool rows are supported here; missing limits remain
-one, including after `syncAccounts()`.
+The integrated account directory preserves `maxConcurrent` through
+`getPoolAccounts()` and synchronization. Missing limits remain one, including
+after `syncAccounts()`. Multi-slot tests are synthetic, not evidence that IMA
+supports real parallel execution on one login.
 
 Pool summary fields:
 
@@ -108,8 +111,8 @@ Pool summary fields:
   exposed so core can distinguish waiting for affinity from actual upstream work.
 - Detailed accounts expose `maxConcurrent`, `activeRequests`, `availableSlots`.
 
-The existing `src/provider-a-capacity.js` scales by account count. Core must update
-that integration to use `capacity` (and an appropriate configured global cap).
+The integrated `src/provider-a-capacity.js` and readiness checks use execution
+slots rather than account count, with the configured global cap.
 Trusted callers can dynamically pass limits to the queue. Maintenance refuses
 active accounts; automatic refresh is deferred while leased, and leasing waits
 until maintenance finishes. Preferred account affinity never silently migrates.

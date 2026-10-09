@@ -310,7 +310,7 @@ class IMAWebAgentClient {
     return this.fetchImpl(url, legacyOptions);
   }
 
-  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession, mode = 'classic_knowledge', onDispatch, allowAuthRefresh = true, transportTimeouts = signal?.transportTimeouts } = {}) {
+  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession, mode = 'classic_knowledge', onDispatch, onActivity, allowAuthRefresh = true, transportTimeouts = signal?.transportTimeouts } = {}) {
     signal?.throwIfAborted();
     if (transportTimeouts) transportTimeouts = normalizeTransportTimeouts(transportTimeouts);
     if (allowAuthRefresh) await this.ensureFreshAuth({ signal, transportTimeouts });
@@ -318,10 +318,10 @@ class IMAWebAgentClient {
     onSession?.(activeSessionId);
 
     // Once dispatched, an interrupted question must not be asked again implicitly.
-    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId, mode, onDispatch, transportTimeouts });
+    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId, mode, onDispatch, onActivity, transportTimeouts });
   }
 
-  async *_streamAskOnce({ question, signal, sessionId, mode, onDispatch, transportTimeouts }) {
+  async *_streamAskOnce({ question, signal, sessionId, mode, onDispatch, onActivity, transportTimeouts }) {
     signal?.throwIfAborted();
     onDispatch?.();
     const response = await this._fetch(`${IMA_WEB_BASE_URL}${QA_PATH}`, {
@@ -351,6 +351,7 @@ class IMAWebAgentClient {
       }),
       signal,
       transportTimeouts,
+      onActivity,
     });
 
     try {

@@ -22,6 +22,11 @@
 
 这份发布包只包含 **Provider A: IMA Web Agent**。部署它不需要 IMA OpenAPI、MIMO Key、本地语料或本地索引；启动时若配置成其他 Provider，会明确拒绝运行，避免交付时误走另一条链路。
 
+> 当前特性分支另含**尚未发布的持久问答任务候选**，不属于已有 v0.4.2 tag。
+> 参见[任务接口与恢复边界](./docs/DURABLE_QA_TASKS.md)：断开观看不取消任务，
+> 内置问答页要求 `durable_qa_tasks_v1`，旧接口继续兼容。
+> 合成验收不代表真实 IMA、公网链路或现有 Air 服务已经升级。
+
 ## 它看起来怎样
 
 > 本文描述 v0.4.2 源码能力，是否已发布请以 GitHub Releases 为准；不等同 v0.4.1。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。

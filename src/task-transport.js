@@ -91,6 +91,8 @@ function taskTransportFetch(url, options = {}) {
         incoming.on('data', chunk => {
           if (finished || !chunk.length) return;
           arm('idle', timeouts.idleMs);
+          try { options.onActivity?.({ bytes: chunk.length }); }
+          catch (error) { fail(error); return; }
           chunks.push(chunk);
           bufferedBytes += chunk.length;
           if (bufferedBytes > MAX_BUFFERED_BYTES) {

@@ -28,6 +28,7 @@ test('headers timeout covers dispatch to response headers and never retries the 
 });
 
 test('upstream raw heartbeat bytes keep an otherwise silent response alive beyond header deadline', async t => {
+  const activity = [];
   const url = await localServer(t, (_req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.flushHeaders();
@@ -39,8 +40,10 @@ test('upstream raw heartbeat bytes keep an otherwise silent response alive beyon
     }, 100);
     res.on('close', () => clearInterval(timer));
   });
-  const response = await taskTransportFetch(url, { transportTimeouts: { headersMs: 1500, idleMs: 750 } });
+  const response = await taskTransportFetch(url, { transportTimeouts: { headersMs: 1500, idleMs: 750 }, onActivity: value => activity.push(value) });
   assert.equal(await response.text(), ':'.repeat(20) + '\n\n');
+  assert.equal(activity.reduce((sum, value) => sum + value.bytes, 0), 22);
+  assert.ok(activity.every(value => Object.keys(value).join(',') === 'bytes'));
 });
 
 test('byte monitoring continues while downstream consumption is paused', async t => {
@@ -117,10 +120,13 @@ test('client opt-in applies timeouts to session init and QA, while legacy uses i
   const controller = new AbortController();
   const transportTimeouts = { headersMs: 60_000, idleMs: 600_000 };
   let dispatched = 0;
+  const onActivity = () => {};
   await consume(client.streamAsk({ question: 'synthetic', signal: controller.signal,
-    transportTimeouts, onDispatch: () => dispatched++ }));
+    transportTimeouts, onActivity, onDispatch: () => dispatched++ }));
   assert.equal(dispatched, 1);
   assert.equal(taskCalls.length, 2);
+  assert.equal(taskCalls[1].options.onActivity, onActivity);
+  assert.equal(taskCalls[0].options.onActivity, undefined);
   for (const { options } of taskCalls) {
     assert.deepEqual(options.transportTimeouts, transportTimeouts);
     assert.equal(options.signal, controller.signal);
