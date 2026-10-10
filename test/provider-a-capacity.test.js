@@ -36,3 +36,31 @@ test('Provider A automatic capacity follows enabled pool accounts', () => {
   });
   assert.equal(askQueue.stats().maxConcurrent, 3);
 });
+
+test('slot capacity includes occupied eligible slots and zero pauses without inventing an account', () => {
+  let observed;
+  const askQueue = { setMaxConcurrent: n => { observed = n; return n; } };
+  const config = { concurrency: { autoScaleWithAccounts: true } };
+  synchronizeProviderAQueueCapacity({ askQueue, config, pool: { stats: () => ({ totalAccounts: 2, capacity: 7, availableSlots: 1 }) } });
+  assert.equal(observed, 7);
+  synchronizeProviderAQueueCapacity({ askQueue, config, pool: { stats: () => ({ totalAccounts: 2, capacity: 0, availableSlots: 0 }) } });
+  assert.equal(observed, 0);
+});
+
+test('readiness reports slot and account metrics independently for a partially busy account', () => {
+  const { WebReadiness } = require('../src/web-readiness');
+  const readiness = Object.create(WebReadiness.prototype);
+  readiness.directory = { load: () => ({ settings: { webMode: 'classic_knowledge' } }),
+    listAccounts: () => [{ id: 'synthetic-a', health: {} }, { id: 'synthetic-b', health: {} }] };
+  readiness.pool = { now: () => 1000, accounts: [
+    { id: 'synthetic-a', maxConcurrent: 3, activeRequests: 2, cooldownUntil: 0 },
+    { id: 'synthetic-b', maxConcurrent: 4, activeRequests: 0, cooldownUntil: 0 },
+  ] };
+  readiness.jobs = new Map();
+  const snapshot = readiness.snapshot();
+  assert.equal(snapshot.capacity, 7);
+  assert.equal(snapshot.totalSlots, 7);
+  assert.equal(snapshot.schedulable, 5);
+  assert.equal(snapshot.eligibleAccounts, 2);
+  assert.equal(snapshot.schedulableAccounts, 2);
+});

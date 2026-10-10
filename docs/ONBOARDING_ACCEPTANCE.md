@@ -1,6 +1,12 @@
-# v0.4.2 onboarding candidate acceptance
+# Dated onboarding acceptance records
 
-## Current aligned candidate (2026-10-07)
+This file retains evidence for the stated historical commits. Stable v0.4.2
+is now published; this branch prepares v0.5.0-rc.1, not a republished v0.4.2.
+Current durable-task checks and remaining gates are in
+[the durable acceptance record](DURABLE_TASK_ACCEPTANCE_20261009.md).
+Do not use historical candidate status or image defaults as current instructions.
+
+## Historical aligned candidate (2026-10-07)
 
 This is not a published release. The aligned release branch is
 `codex/REL-20261006-PROVIDER-V042-ALIGNED`. Implementation through `38cf9e1`

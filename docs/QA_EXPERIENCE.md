@@ -1,18 +1,19 @@
 # Generic QA Experience Candidate
 
-Change-ID: UI-20261006-PROVIDER-QA
+Change-ID: FEAT-20261009-PROVIDER-TASK-UI (extends UI-20261006-PROVIDER-QA)
 
-Status: local candidate based on 0db3fc2, awaiting parent review/integration.
+Status: durable-task frontend candidate based on dc96655, awaiting parent integration.
 No production service, credential, backend, admin, vendor or renderer-core changes.
 
 ## Behavior
 
-- Main and embed load the same `qa-experience.js` helper before `client.js`.
+- Main and embed load the same `qa-experience.js` and `qa-tasks.js` helpers before `client.js`.
 - Single-line composer: 56px capsule, 28px radius. A measurement-only hidden
   textarea detects wrapping; the interactive textarea is never replaced.
   Multiline text spans the full width above tools, with a 144px height ceiling.
 - While generating, the single primary send control remains stop, with or without
-  a draft, and calls the existing AbortController. There is no extra stop button.
+  a draft. IMA stop explicitly deletes the current task; non-IMA stop retains the
+  existing AbortController behavior. There is no extra stop button.
   A layout-neutral notice asks the user to stop or wait before sending a draft.
   On completion the primary control returns to send. Empty submissions do not
   dispatch a request; the current primary control remains enabled. Drafts are
@@ -22,8 +23,9 @@ No production service, credential, backend, admin, vendor or renderer-core chang
   streaming follow. The centered, named return-latest button explicitly resumes
   it. Starting/restoring a conversation also resets follow. Completion does not
   steal focus from the reader or the draft.
-- Terminal answers expose a light copy action. Aborted/error/EOF answers expose
-  only received partial text; empty failures expose none. History uses the same
+- Terminal answers expose a light copy action. Cancelled/failed/indeterminate
+  answers expose only received partial text; empty failures expose none. IMA
+  EOF reconnects to the task, not a terminal failure. History uses the same
   renderer and copy helper. Partial labels honor explicit `complete: false` or
   `interrupted: true` when supplied, without inventing missing history evidence.
 - Answer copy preserves **original Markdown**, including tables, code fences and
@@ -39,15 +41,67 @@ No production service, credential, backend, admin, vendor or renderer-core chang
   selection, supports Tab to focus and Escape to dismiss, and hides on scrolling,
   resizing, outside pointer-down or invalidating answer mutations. Clipboard
   failures expose a read-only selectable textarea, with a close control.
-- No external AI call or synthesized process content. The inspected public SSE
-  contract exposes conversation/sources/delta/done/error, not structured process
-  events. Existing source summaries remain; no inferred upstream process panel.
+- No external AI call or synthesized process content. Task SSE process text,
+  when supplied by the backend, appears as escaped text outside the answer and
+  copy content; it disappears on completion. Task status supplies queued/running
+  indicators. No inferred upstream process stages.
+
+## Durable Task Contract
+
+- Only explicitly declared `openapi-mimo` and `local-rag-mimo` providers retain
+  legacy `/api/ask`. Native IMA requires ordinary-auth `/api/capabilities` with
+  `features.durable_qa_tasks_v1: true`. Missing/failed capability means visibly
+  unavailable, never an implicit legacy fallback. No internal route or service
+  token is used. Existing browser owner cookies and embed `X-IMA-Client-Id`
+  headers are reused for every task request.
+- An explicit send creates an ordinary conversation first if needed, then makes
+  exactly one `POST /api/tasks` with `{question, conversationId}` and a
+  `crypto.randomUUID()` Idempotency-Key. Only task/conversation IDs and the
+  SHA-256 request correlation hash are saved locally, never answers or drafts.
+  Lost acknowledgements use owner-scoped GET list `requestKey` lookup. Unknown
+  submissions stay blocked for manual recovery; they are never automatically
+  posted again, with either the old or a new key.
+- `GET /api/tasks/:id` replays the snapshot and SSE `/:id/events?after=N` resumes
+  strictly after the last applied integer sequence. Repeated events are ignored;
+  a sequence gap triggers GET recovery before later text is accepted. Rotation,
+  network errors and EOF reconnect only to that same task. No-progress retries
+  wait 1/2/4/8/8 seconds, then expose a reconnect command. Progress resets the
+  retry budget; a healthy long-running task has no total UI deadline.
+- JSON requests, including POST acknowledgement/body reads, and SSE headers
+  have a 15-second observer deadline. SSE byte inactivity has a 45-second
+  deadline reset by any received bytes, including heartbeat comments and
+  partial frames. Timeouts abort only that HTTP observation; ambiguous submit
+  identity is retained and recovery uses GET, never POST replay or DELETE.
+- The single stop control calls DELETE only after an explicit click. Lost stop
+  acknowledgement is not reported as successful cancellation. GET confirms the
+  terminal outcome; cancelled/failed/indeterminate never cause another POST.
+- New conversation and history selection detach the old subscription without
+  cancelling its task. Navigation epochs fence late callbacks. Refresh reads
+  history and owner-scoped task list; active work restores its snapshot and
+  question (when provided), without resending. A saved completed task or an
+  `eventsExpired` terminal task reloads and replaces history, never appending a
+  second answer. Failed tasks retain replayable partial text rather than losing
+  it to success-only history. Missing history is an explicit recoverable error.
+- Capability/restore failures prevent accidental sends. Task errors and recovery
+  notices stay separate from raw Markdown; draft retention, source mapping,
+  selection copy and original table/code/whitespace rules remain unchanged.
+
+## Current Verification
+
+Synthetic jsdom regression suite covers task submit, owner headers, explicit
+cancel, ambiguous POST recovery, EOF/network retry bounds, cursor dedup/gaps,
+refresh with active/terminal/expired tasks, detached navigation, failure partial
+copy, process escaping, capability gating and non-IMA legacy routing.
+Final counts, browser evidence and governance outcome are recorded in
+`.planning/changes/FEAT-20261009-PROVIDER-TASK-UI.md`.
+No real IMA, service deployment, live credentials or internal token was used.
+Backend integration and Docker/release validation belong to the parent task.
 
 The website bundle was read only as a behavioral reference for composer sizing,
 reading, answer copy and selection copy. No branding, logo, navigation, prompt
 bank, queue behavior or animations were ported.
 
-## Verification
+## Earlier Renderer Verification
 
 - `npm ci --ignore-scripts`: completed; package manifests/lockfile unchanged.
 - `node --test test/qa-experience.test.js test/client-answer-flow.test.js test/answer-renderer.test.js`:

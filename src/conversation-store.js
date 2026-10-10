@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { writePrivateJson } = require('./durable-qa-store');
 
 const DEFAULT_CONVERSATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_CONVERSATION_MAX_TURNS = 12;
@@ -122,10 +123,7 @@ class ConversationStore {
 
   setUpstream(id, upstream = {}, ownerKey = '') {
     const conversation = this.require(id, ownerKey);
-    conversation.upstream = {
-      accountId: cleanText(upstream.accountId),
-      sessionId: cleanText(upstream.sessionId),
-    };
+    conversation.upstream = normalizeUpstream(upstream, conversation.upstream);
     this.touch(conversation);
     this._write();
     return this.publicState(conversation);
@@ -135,11 +133,37 @@ class ConversationStore {
     return this.setUpstream(id, {}, ownerKey);
   }
 
+  bindTaskUpstream(id, upstream, ownerKey = '') {
+    const conversation = this.require(id, ownerKey);
+    const previous = structuredClone(conversation);
+    try {
+      for (const key of ['accountId', 'sessionId']) {
+        const next = cleanText(upstream[key]);
+        if (!next) continue;
+        if (conversation.upstream[key] && conversation.upstream[key] !== next) throw new Error('task_affinity_conflict');
+        conversation.upstream[key] = next;
+      }
+      const profile = normalizeSessionProfile(upstream.sessionAnswerProfile);
+      if (profile) {
+        if (conversation.upstream.sessionAnswerProfile && conversation.upstream.sessionAnswerProfile !== profile) {
+          throw Object.assign(new Error('session_profile_conflict'), { code: 'session_profile_conflict', statusCode: 409 });
+        }
+        conversation.upstream.sessionAnswerProfile = profile;
+      }
+      this.touch(conversation);
+      this._write();
+    } catch (error) {
+      this.conversations.set(id, previous);
+      throw error;
+    }
+  }
+
   getUpstream(id, ownerKey = '') {
     const conversation = this.require(id, ownerKey);
     return {
       accountId: conversation.upstream.accountId,
       sessionId: conversation.upstream.sessionId,
+      ...(conversation.upstream.sessionAnswerProfile ? { sessionAnswerProfile: conversation.upstream.sessionAnswerProfile } : {}),
       ...(conversation.mode === 'knowledge_agent' ? { mode: 'knowledge_agent' } : {}),
     };
   }
@@ -164,6 +188,31 @@ class ConversationStore {
     this.touch(conversation, now);
     this._write();
     return this.publicState(conversation);
+  }
+
+  appendTaskTurn(id, taskId, question, answer, metadata = {}, ownerKey = '', upstream = {}) {
+    const conversation = this.require(id, ownerKey);
+    if (Object.hasOwn(conversation.completedTasks || {}, taskId)) return this.publicState(conversation);
+    const previous = structuredClone(conversation);
+    const now = this.now();
+    try {
+      conversation.completedTasks ||= {};
+      if (Object.keys(conversation.completedTasks).length >= 10000) throw new Error('task_history_capacity');
+      // Never age out receipts: old completion journals can recover after newer turns.
+      conversation.completedTasks[taskId] = now;
+      conversation.turns.push({ taskId, question, answer, createdAt: now,
+        sources: normalizePublicSources(metadata.sources, answer),
+        searchSummary: normalizeSearchSummary(metadata.searchSummary), evidence: normalizeEvidence(metadata) });
+      conversation.turns = conversation.turns.slice(-this.maxTurns);
+      conversation.upstream = normalizeUpstream(upstream, conversation.upstream);
+      if (!conversation.title) conversation.title = conversationTitle(question);
+      this.touch(conversation, now);
+      this._write();
+      return this.publicState(conversation);
+    } catch (error) {
+      this.conversations.set(conversation.id, previous);
+      throw error;
+    }
   }
 
   getHistory(id, ownerKey = '') {
@@ -192,11 +241,13 @@ class ConversationStore {
         {
           role: 'user',
           content: turn.question,
+          ...(turn.taskId ? { taskId: turn.taskId } : {}),
           createdAt: new Date(turn.createdAt).toISOString(),
         },
         {
           role: 'assistant',
           content: turn.answer,
+          ...(turn.taskId ? { taskId: turn.taskId } : {}),
           createdAt: new Date(turn.createdAt).toISOString(),
           ...(turn.sources?.length ? { sources: turn.sources } : {}),
           ...(turn.searchSummary ? { searchSummary: turn.searchSummary } : {}),
@@ -297,22 +348,13 @@ class ConversationStore {
         title: conversation.title,
         mode: conversation.mode,
         turns: conversation.turns,
+        completedTasks: conversation.completedTasks || {},
         upstream: conversation.upstream,
       })),
     };
     const directory = path.dirname(this.storePath);
-    const tempPath = path.join(
-      directory,
-      `.${path.basename(this.storePath)}.${process.pid}.${Date.now()}.tmp`,
-    );
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
-    fs.renameSync(tempPath, this.storePath);
-    try {
-      fs.chmodSync(this.storePath, 0o600);
-    } catch {
-      // Best effort only; write mode covers normal creation.
-    }
+    writePrivateJson(this.storePath, payload);
   }
 }
 
@@ -332,11 +374,13 @@ function normalizeConversation(value) {
     expiresAt,
     title: conversationTitle(value?.title),
     mode: value.mode === 'knowledge_agent' ? 'knowledge_agent' : 'classic_knowledge',
+    completedTasks: value.completedTasks && typeof value.completedTasks === 'object' ? value.completedTasks : {},
     turns: Array.isArray(value.turns)
       ? value.turns
           .map((turn) => ({
-            question: truncate(turn?.question, 2000),
-            answer: truncate(turn?.answer, 8000),
+            ...(turn?.taskId ? { taskId: turn.taskId } : {}),
+            question: turn?.taskId ? String(turn.question || '') : truncate(turn?.question, 2000),
+            answer: turn?.taskId ? String(turn.answer || '') : truncate(turn?.answer, 8000),
             createdAt: Number(turn?.createdAt) || updatedAt,
             sources: normalizePublicSources(turn?.sources),
             searchSummary: normalizeSearchSummary(turn?.searchSummary),
@@ -344,10 +388,7 @@ function normalizeConversation(value) {
           }))
           .filter((turn) => turn.question && turn.answer)
       : [],
-    upstream: {
-      accountId: cleanText(value.upstream?.accountId),
-      sessionId: cleanText(value.upstream?.sessionId),
-    },
+    upstream: normalizeUpstream(value.upstream),
     activeRequest: false,
   };
 }
@@ -414,7 +455,7 @@ function normalizeSearchSummary(value) {
 
 function normalizeEvidence(value) {
   const raw = value && typeof value === 'object' ? value : {};
-  const basis = ['knowledge', 'web', 'mixed', 'agent_general'].includes(raw.answer_basis) ? raw.answer_basis : '';
+  const basis = ['knowledge', 'web', 'mixed', 'agent_general', 'provider_fallback'].includes(raw.answer_basis) ? raw.answer_basis : '';
   const intent = raw.source_intent === 'web_requested' ? 'web_requested' : '';
   if (!basis && !intent && raw.source_count === undefined) return {};
   const count = key => Number.isInteger(raw[key]) && raw[key] >= 0 && raw[key] <= 100 ? raw[key] : 0;
@@ -424,7 +465,35 @@ function normalizeEvidence(value) {
     source_count: count('source_count'),
     knowledge_source_count: count('knowledge_source_count'),
     web_source_count: count('web_source_count'),
+    ...normalizeContextEvidence(raw),
   };
+}
+
+function normalizeContextEvidence(raw) {
+  const fields = ['l0_context_count', 'l0_source_count', 'l0_snapshot_count', 'l0_injected_count', 'l0_omitted_count'];
+  if (!fields.every(key => Number.isSafeInteger(raw[key]) && raw[key] >= 0) ||
+      raw.l0_context_count !== raw.l0_injected_count || raw.l0_injected_count > raw.l0_snapshot_count ||
+      raw.l0_snapshot_count > raw.l0_source_count || raw.l0_snapshot_count > 256 ||
+      raw.l0_omitted_count !== raw.l0_source_count - raw.l0_injected_count ||
+      !['none', 'payload_bytes', 'safety_count', 'prompt_budget'].includes(raw.l0_truncation_reason)) return {};
+  return Object.fromEntries([...fields, 'l0_truncation_reason'].map(key => [key, raw[key]]));
+}
+
+function normalizeSessionProfile(value) {
+  return ['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(value) ? value : '';
+}
+
+function normalizeUpstream(value = {}, previous = {}) {
+  const accountId = cleanText(value?.accountId);
+  const sessionId = cleanText(value?.sessionId);
+  const profile = normalizeSessionProfile(value?.sessionAnswerProfile) ||
+    (sessionId && sessionId === previous.sessionId && accountId === previous.accountId
+      ? normalizeSessionProfile(previous.sessionAnswerProfile) : '');
+  if (sessionId && sessionId === previous.sessionId && previous.sessionAnswerProfile && profile &&
+      previous.sessionAnswerProfile !== profile) {
+    throw Object.assign(new Error('session_profile_conflict'), { code: 'session_profile_conflict', statusCode: 409 });
+  }
+  return { accountId, sessionId, ...(sessionId && profile ? { sessionAnswerProfile: profile } : {}) };
 }
 
 function conversationTitle(value) {

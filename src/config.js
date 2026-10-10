@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseShareUrl } = require('./shared-kb-target');
+const { normalizeApplicationMappings } = require('./application-identity');
 
 const DEFAULT_MIMO_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const DEFAULT_MIMO_MODEL = 'mimo-v2.5';
@@ -187,7 +188,9 @@ function parseIntegerWithDefault(rawValue, name, fallback, options = {}) {
 
   const value = Number(raw);
   const min = Number.isFinite(options.min) ? options.min : 0;
-  if (!Number.isInteger(value) || value < min) {
+  const max = Number.isFinite(options.max) ? options.max : Infinity;
+  if (!Number.isInteger(value) || value < min || value > max) {
+    if (Number.isFinite(max)) throw new ConfigError(`${name} must be an integer between ${min} and ${max}`);
     throw new ConfigError(`${name} must be an integer greater than or equal to ${min}`);
   }
   return value;
@@ -235,12 +238,17 @@ function parseWebAgentAccounts(env) {
       if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
         throw new ConfigError(`IMA Web Agent account ${name} requires headers`);
       }
+      const maxConcurrent = Number(account.maxConcurrent ?? 1);
+      if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
+        throw new ConfigError(`IMA Web Agent account ${name} maxConcurrent must be a positive integer`);
+      }
 
       return {
         id,
         name,
         knowledgeBaseId,
         headers,
+        maxConcurrent,
         modelId: String(account.modelId || commonModelId),
         modelType: Number(account.modelType || commonModelType) || DEFAULT_WEB_AGENT_MODEL_TYPE,
         runtimeEnvPath: String(account.runtimeEnvPath || '').trim(),
@@ -281,6 +289,7 @@ function parseWebAgentAccounts(env) {
     {
       id: readEnv(env, 'IMA_WEB_AGENT_ACCOUNT_ID') || 'default',
       name: 'default',
+      maxConcurrent: 1,
       knowledgeBaseId: sharedKnowledgeBaseId,
       headers: parseJsonEnv(legacyHeaders, 'IMA_WEB_AGENT_HEADERS_JSON'),
       modelId: commonModelId,
@@ -308,6 +317,15 @@ function getWebAgentSharedKnowledgeBaseId(env) {
 }
 
 function getConfig(env = process.env) {
+  const applicationSecurity = {
+    apiToken: readEnv(env, 'IMA_QA_API_TOKEN'),
+    internalServiceToken: readEnv(env, 'IMA_QA_INTERNAL_SERVICE_TOKEN'),
+  };
+  let applications;
+  try {
+    applications = normalizeApplicationMappings(
+      readEnv(env, 'IMA_QA_APPLICATIONS_JSON') ? JSON.parse(readEnv(env, 'IMA_QA_APPLICATIONS_JSON')) : [], applicationSecurity);
+  } catch { throw new ConfigError('IMA_QA_APPLICATIONS_JSON contains an invalid or duplicate application mapping'); }
   const qaProvider = parseProvider(readEnv(env, 'IMA_QA_PROVIDER'));
   const accountStorePath =
     readEnv(env, 'IMA_WEB_AGENT_ACCOUNT_STORE_PATH') || DEFAULT_WEB_AGENT_ACCOUNT_STORE_PATH;
@@ -347,6 +365,7 @@ function getConfig(env = process.env) {
   }
 
   return {
+    airBot: require('./air/config').getAirConfig(env),
     qaProvider,
     port: parsePort(readEnv(env, 'PORT')),
     limits: {
@@ -358,8 +377,8 @@ function getConfig(env = process.env) {
       maxSourceContentLength: 1800,
     },
     security: {
-      apiToken: readEnv(env, 'IMA_QA_API_TOKEN'),
-      internalServiceToken: readEnv(env, 'IMA_QA_INTERNAL_SERVICE_TOKEN'),
+      ...applicationSecurity,
+      applications,
       adminToken: readEnv(env, 'IMA_QA_ADMIN_TOKEN'),
       allowedOrigins: parseAllowedOrigins(readEnv(env, 'ALLOWED_ORIGINS')),
       trustProxy: parseBoolean(readEnv(env, 'TRUST_PROXY')),
@@ -387,6 +406,18 @@ function getConfig(env = process.env) {
         'IMA_QA_REQUEST_TIMEOUT_MS',
         DEFAULT_REQUEST_TIMEOUT_MS,
         { min: 1 },
+      ),
+      taskConnectTimeoutMs: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_TASK_CONNECT_TIMEOUT_MS'),
+        'IMA_QA_TASK_CONNECT_TIMEOUT_MS',
+        60_000,
+        { min: 1, max: 2_147_483_647 },
+      ),
+      taskIdleTimeoutMs: parseIntegerWithDefault(
+        readEnv(env, 'IMA_QA_TASK_IDLE_TIMEOUT_MS'),
+        'IMA_QA_TASK_IDLE_TIMEOUT_MS',
+        600_000,
+        { min: 1, max: 2_147_483_647 },
       ),
     },
     rateLimit: {

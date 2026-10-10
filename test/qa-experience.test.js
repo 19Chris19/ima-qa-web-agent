@@ -24,7 +24,8 @@ async function page(t, { mode = 'index', history = null, clipboardFails = false 
   } } });
   if (history) w.localStorage.setItem('ima-qa-conversation-id', 'synthetic-history');
   w.fetch = async (url, options = {}) => {
-    if (url === '/healthz') return Response.json({ provider: 'ima-web-agent', model: 'synthetic' });
+    if (url === '/healthz') return Response.json({ provider: 'openapi-mimo', model: 'synthetic' });
+    if (url === '/api/capabilities') return Response.json({ features: { durable_qa_tasks_v1: false } });
     if (url.startsWith('/api/conversations?')) return Response.json({ conversations: [] });
     if (url === '/api/conversations/synthetic-history') return Response.json({
       conversation: { conversationId: 'synthetic-history' }, messages: history,
@@ -39,7 +40,7 @@ async function page(t, { mode = 'index', history = null, clipboardFails = false 
     }
     throw Error(`Unexpected synthetic URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await tick();

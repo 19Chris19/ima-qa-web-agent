@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { AuthMaintenance } = require('./auth-maintenance');
+const { taskTransportFetch, normalizeTransportTimeouts } = require('./task-transport');
 const { parseIMAWebAgentStream, parseIMAWebAgentEvent, mapIMAWebAgentEvent, extractSources } = require('./ima-upstream-protocol');
 const { buildIMAKnowledgeAgentHeaders, buildIMAKnowledgeAgentRequest, buildIMAKnowledgeAgentSessionRequest, classifyIMAKnowledgeAgentSource } = require('./ima-knowledge-agent-contract');
 
@@ -30,6 +31,7 @@ class IMAWebAgentClient {
     this.modelId = config.modelId;
     this.modelType = config.modelType;
     this.fetchImpl = fetchImpl;
+    this.taskFetchImpl = config.taskFetchImpl || taskTransportFetch;
     this.runtimeEnvPath = config.runtimeEnvPath || '';
     this.tokenExpiresAt = Number(config.tokenExpiresAt || 0) || null;
     this.refreshTokenExpiresAt = Number(config.refreshTokenExpiresAt || 0) || null;
@@ -44,29 +46,31 @@ class IMAWebAgentClient {
     this.pendingCredentialPersistence = false;
     this.maintenance = new AuthMaintenance({
       interval: () => this.refreshIntervalMs,
-      check: async () => {
-        const generation = this.credentialGeneration;
-        try {
-          this._assertCredentialGeneration(generation);
-          if (this.pendingCredentialPersistence) {
-            await this.onAutoRefreshed?.(this.getConfigSnapshot(), generation);
-            this._assertCredentialGeneration(generation);
-            this.pendingCredentialPersistence = false;
-          }
-          const refreshed = await this.ensureFreshAuth();
-          this._assertCredentialGeneration(generation);
-          if (refreshed) {
-            this.pendingCredentialPersistence = true;
-            await this.onAutoRefreshed?.(this.getConfigSnapshot(), generation);
-            this._assertCredentialGeneration(generation);
-            this.pendingCredentialPersistence = false;
-          }
-        } catch (error) {
-          if (generation === this.credentialGeneration) this.lastRefreshError = 'auth_refresh_failed';
-          throw error;
-        }
-      },
+      check: () => this.runAutoMaintenance ? this.runAutoMaintenance(() => this._autoRefresh()) : this._autoRefresh(),
     });
+  }
+
+  async _autoRefresh() {
+    const generation = this.credentialGeneration;
+    try {
+      this._assertCredentialGeneration(generation);
+      if (this.pendingCredentialPersistence) {
+        await this.onAutoRefreshed?.(this.getConfigSnapshot(), generation);
+        this._assertCredentialGeneration(generation);
+        this.pendingCredentialPersistence = false;
+      }
+      const refreshed = await this.ensureFreshAuth();
+      this._assertCredentialGeneration(generation);
+      if (refreshed) {
+        this.pendingCredentialPersistence = true;
+        await this.onAutoRefreshed?.(this.getConfigSnapshot(), generation);
+        this._assertCredentialGeneration(generation);
+        this.pendingCredentialPersistence = false;
+      }
+    } catch (error) {
+      if (generation === this.credentialGeneration) this.lastRefreshError = 'auth_refresh_failed';
+      throw error;
+    }
   }
 
   invalidateCredentials({ suspend = false } = {}) {
@@ -195,7 +199,7 @@ class IMAWebAgentClient {
   }
 
   async _initSessionOnce(options = {}) {
-    const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${INIT_SESSION_PATH}`, {
+    const response = await this._fetch(`${IMA_WEB_BASE_URL}${INIT_SESSION_PATH}`, {
       method: 'POST',
       headers: options.mode === 'knowledge_agent' ? buildIMAKnowledgeAgentHeaders(this.headers, { knowledgeBaseId: this.knowledgeBaseId }) : this._headers(options.clientContext),
       body: JSON.stringify(options.mode === 'knowledge_agent' ? buildIMAKnowledgeAgentSessionRequest({ knowledgeBaseId: this.knowledgeBaseId }) : {
@@ -210,6 +214,7 @@ class IMAWebAgentClient {
         },
       }),
       signal: options.signal,
+      transportTimeouts: options.transportTimeouts,
     });
 
     return readJsonResponse(response, 'IMA init_session', { allowBusinessError: true });
@@ -243,7 +248,7 @@ class IMAWebAgentClient {
       throw new Error('IMA Web login expired and refresh credentials are unavailable');
     }
 
-    const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${REFRESH_PATH}`, {
+    const response = await this._fetch(`${IMA_WEB_BASE_URL}${REFRESH_PATH}`, {
       method: 'POST',
       headers: {
         ...this._headers(),
@@ -255,6 +260,7 @@ class IMAWebAgentClient {
         token_type: tokenType,
       }),
       signal: options.signal,
+      transportTimeouts: options.transportTimeouts,
     });
 
     const payload = await readJsonResponse(response, 'IMA auth refresh');
@@ -298,18 +304,27 @@ class IMAWebAgentClient {
     this.persistRuntimeEnv(generation);
   }
 
-  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession, mode = 'classic_knowledge', onDispatch, allowAuthRefresh = true } = {}) {
-    if (allowAuthRefresh) await this.ensureFreshAuth({ signal });
-    let activeSessionId = requestedSessionId || await this.initSession({ signal, mode, allowAuthRefresh });
+  _fetch(url, options) {
+    if (options.transportTimeouts) return this.taskFetchImpl(url, options);
+    const { transportTimeouts, ...legacyOptions } = options;
+    return this.fetchImpl(url, legacyOptions);
+  }
+
+  async *streamAsk({ question, signal, sessionId: requestedSessionId, onSession, mode = 'classic_knowledge', onDispatch, onActivity, allowAuthRefresh = true, transportTimeouts = signal?.transportTimeouts } = {}) {
+    signal?.throwIfAborted();
+    if (transportTimeouts) transportTimeouts = normalizeTransportTimeouts(transportTimeouts);
+    if (allowAuthRefresh) await this.ensureFreshAuth({ signal, transportTimeouts });
+    const activeSessionId = requestedSessionId || await this.initSession({ signal, mode, allowAuthRefresh, transportTimeouts });
     onSession?.(activeSessionId);
 
     // Once dispatched, an interrupted question must not be asked again implicitly.
-    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId, mode, onDispatch });
+    yield* this._streamAskOnce({ question, signal, sessionId: activeSessionId, mode, onDispatch, onActivity, transportTimeouts });
   }
 
-  async *_streamAskOnce({ question, signal, sessionId, mode, onDispatch }) {
+  async *_streamAskOnce({ question, signal, sessionId, mode, onDispatch, onActivity, transportTimeouts }) {
+    signal?.throwIfAborted();
     onDispatch?.();
-    const response = await this.fetchImpl(`${IMA_WEB_BASE_URL}${QA_PATH}`, {
+    const response = await this._fetch(`${IMA_WEB_BASE_URL}${QA_PATH}`, {
       method: 'POST',
       headers: mode === 'knowledge_agent' ? buildIMAKnowledgeAgentHeaders(this.headers, { knowledgeBaseId: this.knowledgeBaseId }) : this._headers(),
       body: JSON.stringify(mode === 'knowledge_agent' ? buildIMAKnowledgeAgentRequest({ question, sessionId, knowledgeBaseId: this.knowledgeBaseId, clientId: crypto.randomUUID(), modelId: this.modelId, modelType: this.modelType }) : {
@@ -335,19 +350,28 @@ class IMAWebAgentClient {
         client_tools: [],
       }),
       signal,
+      transportTimeouts,
+      onActivity,
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`IMA Web Agent returned HTTP ${response.status}: ${text.slice(0, 200)}`);
-    }
+    try {
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`IMA Web Agent returned HTTP ${response.status}: ${text.slice(0, 200)}`);
+      }
 
-    yield* parseIMAWebAgentStream(response, mode === 'knowledge_agent' ? {
-      sourceClassifier: (item, context = {}) => classifyIMAKnowledgeAgentSource(item, {
-        expectedKnowledgeScopeRef: crypto.createHash('sha256').update(this.knowledgeBaseId).digest('hex'),
-        sourceEventName: typeof context === 'string' ? context : context.sourceEventName || context.eventName || '',
-      }).kind,
-    } : {});
+      yield* parseIMAWebAgentStream(response, mode === 'knowledge_agent' ? {
+        sourceClassifier: (item, context = {}) => classifyIMAKnowledgeAgentSource(item, {
+          expectedKnowledgeScopeRef: crypto.createHash('sha256').update(this.knowledgeBaseId).digest('hex'),
+          sourceEventName: typeof context === 'string' ? context : context.sourceEventName || context.eventName || '',
+        }).kind,
+      } : {});
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error;
+      throw response.transportError || error;
+    } finally {
+      response.closeTransport?.();
+    }
   }
 
   _headers(clientContext) {
