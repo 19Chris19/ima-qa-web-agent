@@ -2,6 +2,11 @@
 
 ## Stable publication preparation, 2026-10-10
 
+Final guide audit supersedes target v0.5.0 with v0.5.1: DEPLOYMENT.md and a second
+README paragraph still described the former stable/RC pair. Preparation tag
+v0.5.0 is retained unchanged with no stable Release; new v0.5.1 gates are required.
+See FIX-20261010-PROVIDER-STABLE-GUIDE. Runtime and executor remain unchanged.
+
 codex/REL-20261010-PROVIDER-STABLE targets new v0.5.0, preserving v0.5.0-rc.1.
 Promotion changes version/current installation documentation, not executor or
 account code. Local full suite: 822 pass, 6 optional skip, 0 fail. Clean install,

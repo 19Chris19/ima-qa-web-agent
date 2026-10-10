@@ -1,6 +1,6 @@
 # Provider A 高级部署与维护
 
-v0.4.2 稳定版的新安装统一使用 [Agent 部署与扫码引导](AGENT_DEPLOYMENT.md)，将分享链接解析与扫码通路准备纳入初始化。v0.5.0-rc.1 为持久任务灰度候选，只有对应预发布和镜像清单通过后才可受邀升级，见[预发布说明](PRERELEASE_UPGRADES.md)。以下是既有安装/手工 Node/源码 Docker 的高级兼容路径，不是新用户必须追加的步骤，不会自动改动原安装。数字 ID 仅在这些手工路径使用，引导安装从官方分享链接解析。
+本版本 v0.5.1 的新安装统一使用 [Agent 部署与扫码引导](AGENT_DEPLOYMENT.md)，将分享链接解析与扫码通路准备纳入初始化，并包含持久任务能力。先核对实际稳定 Release 及固定镜像清单；旧 v0.5.0-rc.1 tag 保留为历史灰度版，见[升级边界](PRERELEASE_UPGRADES.md)。以下是既有安装/手工 Node/源码 Docker 的高级兼容路径，不是新用户必须追加的步骤，不会自动改动原安装。数字 ID 仅在这些手工路径使用，引导安装从官方分享链接解析。
 
 无账号的容器部署与已复现的初始化注意事项见 [Docker 演练记录](./DOCKER_REHEARSAL.md)。这不代替真实 IMA 验收。
 
@@ -45,7 +45,7 @@ Provider A 有两种支持的首次接入方式。它们使用同一套加密账
 
 不要在无 GUI 的 Docker/纯 Linux 服务端期待自动弹出浏览器窗口，也不要为了扫码把管理 API 暴露到公网。
 
-旧 Docker Desktop 安装可手工配置[私有维护浏览器助手](./DOCKER_BROWSER_ENROLLMENT.md)。v0.4.2 的新桌面引导已把助手准备纳入流程，不应再次手工安装另一套助手。镜像本身不携带 GUI，Linux 仍使用远程维护路径。
+旧 Docker Desktop 安装可手工配置[私有维护浏览器助手](./DOCKER_BROWSER_ENROLLMENT.md)。当前桌面引导已把助手准备纳入流程，不应再次手工安装另一套助手。镜像本身不携带 GUI，Linux 仍使用远程维护路径。
 
 ### Docker 部署（服务器端）
 
