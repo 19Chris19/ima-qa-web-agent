@@ -22,18 +22,18 @@
 
 这份发布包只包含 **Provider A: IMA Web Agent**。部署它不需要 IMA OpenAPI、MIMO Key、本地语料或本地索引；启动时若配置成其他 Provider，会明确拒绝运行，避免交付时误走另一条链路。
 
-> 当前分支准备 **v0.5.0-rc.1 持久问答任务预发布候选**；已有稳定版为 v0.4.2。
+> 已发布 **[v0.5.0-rc.1 持久问答任务灰度版](https://github.com/19Chris19/ima-qa-web-agent/releases/tag/v0.5.0-rc.1)**；稳定 Latest 仍为 v0.4.2。
 > 参见[任务接口与恢复边界](./docs/DURABLE_QA_TASKS.md)：断开观看不取消任务，
 > 内置问答页要求 `durable_qa_tasks_v1`，旧接口继续兼容。
-> 只有 GitHub 上对应的预发布 Release 与镜像清单通过后才可用于受邀测试；不自动替换稳定版。
-> 真实 IMA 与 Air 预览已有单独的有日期记录，不代表当前候选已经完成公网或手机验收。
-> 最终固定候选、镜像身份与尚未通过的上线门槛见[长回答验收记录](./docs/DURABLE_TASK_ACCEPTANCE_20261009.md)。
+> 受邀测试请核对 Release 附件中的固定提交与双架构镜像摘要；不自动替换稳定版。
+> 发布、Air 割接与真实问答证据分别记录；本次未额外发送真实 IMA 问题。
+> 最新发布与运行状态、健康检查抖动及剩余门槛见[2026-10-10 验收记录](./docs/RELEASE_ACCEPTANCE_20261010.md)。
 
 灰度升级与回退见[预发布升级说明](./docs/PRERELEASE_UPGRADES.md)。
 
 ## 它看起来怎样
 
-> v0.4.2 已发布；本分支的持久任务升级属于 v0.5.0-rc.1 候选，不等同运行服务已经切换。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
+> v0.4.2 为稳定版，v0.5.0-rc.1 为受邀灰度版；合并、发布与各安装的实际升级是独立动作。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
 
 本版本还包含[通用问答交互](./docs/QA_EXPERIENCE.md)与[离线账号迁移工具](./docs/ACCOUNT_TRANSFER.md)。工具成功仅代表新增账号以停用状态导入，不代表来源调度已经退出或账号问答资格通过；发布和割接前必须逐项检查[候选验收记录](./docs/MANAGEMENT_CANDIDATE_ACCEPTANCE.md)。
 

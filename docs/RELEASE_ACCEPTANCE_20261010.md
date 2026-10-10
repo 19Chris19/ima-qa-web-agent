@@ -1,6 +1,6 @@
-# Durable release candidate checkpoint
+# Durable prerelease publication and rollout
 
-Date: 2026-10-10, Asia/Shanghai. Preparation, not publication.
+Date: 2026-10-10, Asia/Shanghai. Supersedes the earlier preparation checkpoint.
 Pair: Provider v0.5.0-rc.1 / website v0.3.0-rc.1.
 Tested Provider code: 7368be779040d049824f8ff37aeb7bffcb8172d8.
 Tested website code: 25721c52b5343fa5aa7273055b7085a84d5e498c.
@@ -32,22 +32,53 @@ Local image identities, not published registry digests:
 | Website | ARM64 | sha256:0e6be2efc7d76a3c03f1c171afa87559fe0d9e7c427c1c18f1bd65b1efbf980c |
 | Website | AMD64 | sha256:378ae2ca0541b0e14dce549e04c86015c41f61cfb814ec57695214d5c0a67eb5 |
 
-## Remaining gates / actual runtime
+## Published artifacts
 
-Draft PRs: public Provider #14 and private website #8. Neither is merged or
-published. Website container CI stops at missing fixed Provider RC image:
-publish/accept Provider first, then rerun; never substitute a legacy SSE fixture.
-Vercel preview deployed but its protected browser view is unaccepted. Ego
-verification is paused under user control; do not bypass it with a new space.
+User approved RC publication, local cutovers, skill update and browser control.
+PR #14 merged as cd79ee6f9a058805f664ee8591d1bc0b0c0947f7. Tag/Release
+v0.5.0-rc.1 points to that merge, is a prerelease and does not replace v0.4.2
+Latest. CI tests, build, native ARM64/AMD64 startup and manifest jobs passed.
+Public anonymous manifest pull verified both architectures and digest:
+`sha256:5280e6155eec6559d9a4c5456ffebb6a3e8fad093e928b831cbf265c697f329c`.
+The attached release-manifest.json pins this revision and image, not the local
+candidate image identities above. Private website v0.3.0-rc.1 fixes this pair.
 
-Air remains Provider 97dbb5c, preview website 418cbdb0 and stable/public website
-consolidation-32d469ce. This preparation preserves old admin/five-account data
-and does not restart live services, dormant Docker Provider or robot. Prior
-dated real first/follow-up evidence does not verify all latest corrections or
-public recovery. No new real question was sent.
+## Authorized Air rollout
 
-Promotion requires RC choice, paired image/manifest and CI acceptance, reviewed
-local skill drift, protected preview acceptance and fresh idle/backup proofs.
-Do not label RC stable Latest or automatically upgrade another installation.
-Rollback drains admission and preserves ledgers/accounts/new histories; never
-restore stale data or re-POST dispatched uncertain work.
+After closing website admission and proving ordinary/durable/website queues
+idle, private configuration and final runtime backups were taken. Air Provider
+now uses an immutable export of the published merge, with its three previous
+admin assets retained as an explicitly recorded local overlay. Five account
+identities, encryption key and runtime configuration hashes remained unchanged;
+capacity five, durable capability and recent-context robot extensions verified.
+The robot and dormant Docker Provider were neither started nor restarted.
+Websites and public proxy were updated independently; no account data was copied
+into an image or repository. Existing conversations/task logs were preserved.
+
+The initial startup readiness probe timed out; the same single process later
+became ready without another Provider restart. Subsequent health/capacity checks
+also showed intermittent latency. Air load averages exceeded 200 during rollout;
+one website container readiness request returned 503. Three later sequential
+health/capacity checks all succeeded (386-3886ms). This is correlated host load
+evidence, not a conclusive explanation of every timeout or proof of stability.
+Keep RC status and monitor; do not claim stable/24-hour acceptance.
+
+## Browser and remaining evidence
+
+Protected Vercel -> actual ngrok -> isolated candidate BFF/synthetic upstream
+passed duplicate submission, first-delta viewer disconnect/cursor replay,
+one terminal/history turn, table refresh and management/unknown-path blocking.
+Desktop/390x844 browser checked. Synthetic traffic never used the stable origin
+or real account pool; the temporary fixed-origin test router was removed.
+Final public website reports the new task capability and five-account capacity.
+
+Prior dated real first/follow-up evidence is not a new real IMA validation of
+the published images. No additional real question was sent. Physical phone,
+public long-running IMA recovery, Windows/SSH and Linux uptime remain unverified.
+The Air Provider still listens on all interfaces: review LAN/firewall exposure
+separately, without breaking the explicitly configured Docker host connection.
+
+Rollback first closes admission and drains tasks, then selects compatible
+durable-ledger code; keep new ledgers/history/accounts. Never overwrite live data
+with older backups, re-POST uncertain dispatched work or silently upgrade a
+colleague's installation. Legacy-only releases are not automatic fallbacks.
