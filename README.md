@@ -22,10 +22,10 @@
 
 这份发布包只包含 **Provider A: IMA Web Agent**。部署它不需要 IMA OpenAPI、MIMO Key、本地语料或本地索引；启动时若配置成其他 Provider，会明确拒绝运行，避免交付时误走另一条链路。
 
-> 已发布 **[v0.5.0-rc.1 持久问答任务灰度版](https://github.com/19Chris19/ima-qa-web-agent/releases/tag/v0.5.0-rc.1)**；稳定 Latest 仍为 v0.4.2。
+> 本次稳定版本为 **v0.5.0**，承接已发布 v0.5.0-rc.1 的持久问答任务能力；安装前核对 [Releases](https://github.com/19Chris19/ima-qa-web-agent/releases/latest) 的实际发布状态与附件镜像清单。
 > 参见[任务接口与恢复边界](./docs/DURABLE_QA_TASKS.md)：断开观看不取消任务，
 > 内置问答页要求 `durable_qa_tasks_v1`，旧接口继续兼容。
-> 受邀测试请核对 Release 附件中的固定提交与双架构镜像摘要；不自动替换稳定版。
+> Node 与 Docker 使用同一固定版本；知天下 v0.3.0 配套本版本，不自动替换已有安装。
 > 发布、Air 割接与真实问答证据分别记录；本次未额外发送真实 IMA 问题。
 > 最新发布与运行状态、健康检查抖动及剩余门槛见[2026-10-10 验收记录](./docs/RELEASE_ACCEPTANCE_20261010.md)。
 
@@ -87,7 +87,7 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 **新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
 
-新安装默认选择已发布稳定版 v0.4.2 的 tag 和镜像清单。受邀测试 v0.5.0-rc.1 时，必须先确认对应预发布 Release 与验收清单存在；未通过发布门槛的候选只能隔离演练，不混用不同版本命令。已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
+新安装选择最新已发布稳定 Release；本版本为 v0.5.0，固定 tag、源码与附件镜像摘要。v0.5.0-rc.1 保留为历史预发布，不修改旧 tag。若 v0.5.0 尚未发布，不把 main 当作已发布版本。已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
 
 标准部署输入是固定 Git tag 的检出，或该 tag 的完整源码归档，必须包含 `package-lock.json`；候选演练同样固定到已审查提交。npm tarball 不推荐作为独立部署目录：它不包含该锁文件，不能直接用于引导脚本的 `npm ci` 或源码 Docker 构建。不要临时生成锁文件代替发布版本的依赖锁定。
 
