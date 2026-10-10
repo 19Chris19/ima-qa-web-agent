@@ -1,5 +1,15 @@
 # Durable QA candidate handoff
 
+## Stable publication preparation, 2026-10-10
+
+codex/REL-20261010-PROVIDER-STABLE targets new v0.5.0, preserving v0.5.0-rc.1.
+Promotion changes version/current installation documentation, not executor or
+account code. Local full suite: 822 pass, 6 optional skip, 0 fail. Clean install,
+package checks, CI, native ARM64/AMD64 startup and public immutable image manifest
+are publication gates. Pair website v0.3.0. No new real IMA question or runtime
+cutover; Air readiness under host pressure remains separately unresolved.
+Older candidate and preview checkpoints below are historical evidence only.
+
 Current release preparation: docs/RELEASE_ACCEPTANCE_20261010.md. Draft PR #14
 is not merged/published/deployed. Following runtime references are dated evidence,
 not a claim that the new RC runs on Air.
