@@ -1,5 +1,11 @@
 # Account transfer (unreleased offline candidate)
 
+For an authorized move of one complete existing installation to a new host,
+see [Whole-host migration](HOST_MIGRATION.md). The 2026-10-12 macOS restoration
+preserved valid login state and passed real QA, but it did not use this add-only
+transfer tool or validate its live apply path. It does not release this candidate,
+bypass its pending QA guard, or prove cross-platform or permanent scan-free login.
+
 Two installations encrypt their accounts with different keys. Never concatenate account JSON,
 copy an entire runtime over another, or compare installation-specific HMAC fingerprints directly.
 
@@ -154,3 +160,4 @@ a distributed migration protocol or protection against an administrator replacin
 Only temporary synthetic stores, fake port listeners and local code were used for candidate verification.
 No real credentials, runtime directories, IMA requests, service restarts, push or release are involved.
 Live validity, historical visitor ownership and one-question/follow-up acceptance remain separate gates.
+
