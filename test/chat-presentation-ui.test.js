@@ -26,13 +26,18 @@ function page(t) {
 const mapping = { 'index:42': { type: 'web', sources: [{ url: 'https://example.org/paper', title: '<img onerror=alert(1)> Paper', snippet: 'Actual excerpt' }] },
   'index:5': { type: 'knowledge', sources: [{ url: 'https://example.org/private', title: 'PRIVATE TITLE', snippet: 'PRIVATE FILE' }] } };
 
-test('web marker uses the explicit key, hover/focus/tap preview; knowledge marker is static and private', t => {
+test('web marker previews on hover/focus and links to its exact source; knowledge marker is static and private', t => {
   const p = page(t);
   p.render('Web[7](@index-ref?id=42) Knowledge[2](@index-ref?id=5) Unknown[9](@index-ref?id=404)', { citationMap: mapping });
-  const trigger = p.answer.querySelector('button');
+  const trigger = p.answer.querySelector('[data-citation-key]');
   assert.equal(trigger.textContent, '7');
   assert.equal(trigger.dataset.citationKey, 'index:42');
-  assert.equal(p.answer.querySelectorAll('button').length, 1);
+  assert.equal(trigger.tagName, 'A');
+  assert.equal(trigger.href, 'https://example.org/paper');
+  assert.equal(trigger.target, '_blank');
+  assert.match(trigger.rel, /noopener/);
+  assert.match(trigger.rel, /noreferrer/);
+  assert.equal(p.answer.querySelectorAll('button').length, 0);
   assert.equal(p.answer.querySelectorAll('.chat-citation-static').length, 2);
   assert.doesNotMatch(p.answer.innerHTML, /PRIVATE/);
   trigger.dispatchEvent(new p.window.MouseEvent('pointerover', { bubbles: true }));
@@ -45,8 +50,8 @@ test('web marker uses the explicit key, hover/focus/tap preview; knowledge marke
   p.window.document.dispatchEvent(new p.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
   trigger.focus();
-  // Escape restores focus; a tap also opens it without navigating.
-  trigger.click();
+  // Escape restores focus; hovering previews again without navigating.
+  trigger.dispatchEvent(new p.window.MouseEvent('pointerover', { bubbles: true }));
   assert.ok(p.window.document.querySelector('.chat-citation-card'));
   p.window.document.querySelector('.chat-card-close').click();
   assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
@@ -164,4 +169,68 @@ test('dismissal restores the reference after the browser blurs a removed close c
   await new Promise(resolve => p.window.requestAnimationFrame(resolve));
   assert.equal(p.window.document.activeElement, marker);
   assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+});
+
+
+test('a unique web marker preserves native activation, while multiple destinations require an explicit choice', t => {
+  const p = page(t);
+  p.render('Web[7](@index-ref?id=42)', { citationMap: mapping });
+  const marker = p.answer.querySelector('[data-citation-key]');
+  let componentPrevented;
+  // Observe the component before suppressing jsdom's unsupported external navigation.
+  p.answer.addEventListener('click', event => { componentPrevented = event.defaultPrevented; event.preventDefault(); }, { once: true });
+  marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(componentPrevented, false);
+  assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+  const a = { url: 'https://example.org/a', title: 'A', snippet: '' };
+  const b = { url: 'https://example.org/b', title: 'B', snippet: '' };
+  p.render('Multiple[7](@index-ref?id=42)', { citationMap: { 'index:42': { type: 'web', sources: [b, a] } } });
+  const multiple = p.answer.querySelector('[data-citation-key]');
+  assert.equal(multiple.tagName, 'BUTTON');
+  assert.equal(multiple.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true })), false);
+  assert.deepEqual([...p.window.document.querySelectorAll('.chat-source-open')].map(n => n.href), [b.url, a.url]);
+  p.ui.closeCard();
+  p.render('Same page[7](@index-ref?id=42)', { citationMap: { 'index:42': { type: 'web', sources: [a, a] } } });
+  assert.equal(p.answer.querySelector('[data-citation-key]').tagName, 'A');
+  assert.equal(p.answer.querySelector('[data-citation-key]').href, a.url);
+});
+
+
+test('touch/pen first tap pins a preview, second tap navigates; outside tap closes without losing draft', async t => {
+  const p = page(t);
+  p.input.value = 'Keep this draft';
+  p.render('Web[7](@index-ref?id=42)', { citationMap: mapping });
+  const marker = p.answer.querySelector('[data-citation-key]');
+  const pointer = (type, pointerType) => { const event = new p.window.MouseEvent(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'pointerType', { value: pointerType }); marker.dispatchEvent(event); };
+  for (const pointerType of ['touch', 'pen']) {
+    pointer('pointerover', pointerType);
+    assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+    pointer('pointerdown', pointerType);
+    const first = new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
+    assert.equal(marker.dispatchEvent(first), false);
+    pointer('pointerout', pointerType);
+    await new Promise(resolve => setTimeout(resolve, 220));
+    const card = p.window.document.querySelector('.chat-citation-card');
+    assert.ok(card);
+    assert.match(card.textContent, /再次点按角标/);
+    assert.equal(card.querySelector('.chat-source-title a').href, marker.href);
+    assert.equal(p.input.value, 'Keep this draft');
+    pointer('pointerdown', pointerType);
+    let componentPrevented;
+    p.answer.addEventListener('click', event => { componentPrevented = event.defaultPrevented; event.preventDefault(); }, { once: true });
+    marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+    assert.equal(componentPrevented, false);
+    assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+  }
+  pointer('pointerdown', 'touch');
+  marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  p.input.dispatchEvent(new p.window.MouseEvent('pointerdown', { bubbles: true }));
+  assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+  assert.equal(p.input.value, 'Keep this draft');
+  pointer('pointerdown', 'touch');
+  marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  p.window.document.dispatchEvent(new p.window.Event('scroll'));
+  assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+  assert.equal(p.input.value, 'Keep this draft');
 });

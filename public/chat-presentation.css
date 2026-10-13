@@ -2,15 +2,16 @@
 .chat-citation-web { --citation-ink: #1f65b8; --citation-fill: #eaf2ff; }
 .chat-citation-knowledge { --citation-ink: #18724f; --citation-fill: #e8f5ed; }
 .chat-citation-mark { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 1.5em; min-height: 1.5em; padding: 0 .25em; border: 1px solid transparent; border-radius: 4px; background: var(--citation-fill); color: inherit; font: inherit; line-height: 1; text-align: center; }
-.chat-citation-button { cursor: pointer; }
-.chat-citation-button:hover, .chat-citation-button:focus-visible { outline: 1px solid var(--citation-ink); outline-offset: 1px; }
+.chat-citation-button, .chat-citation-link { cursor: pointer; touch-action: manipulation; }
+.chat-citation a.chat-citation-mark { color: inherit; text-decoration: none; }
+.chat-citation-button:hover, .chat-citation-button:focus-visible, .chat-citation-link:hover, .chat-citation-link:focus-visible { outline: 1px solid var(--citation-ink); outline-offset: 1px; }
 .chat-citation-card { position: fixed; z-index: 9999; width: min(370px, calc(100vw - 16px)); max-height: min(400px, calc(100vh - 16px)); overflow: auto; box-sizing: border-box; padding: 14px; color: var(--text, #25344a); background: var(--surface, #fff); border: 1px solid var(--line, #dce4ef); border-radius: 12px; box-shadow: 0 8px 32px #18304b26; font-size: 14px; line-height: 1.5; }
 .chat-citation-card section + section { border-top: 1px solid #e6ebf2; margin-top: 12px; padding-top: 12px; }
 .chat-citation-card strong, .chat-citation-card small { display: block; overflow-wrap: anywhere; }
 .chat-citation-card small { color: var(--muted, #687890); margin: 4px 0; }
 .chat-citation-card p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-citation-card a { color: var(--accent, #2465b8); }
-.chat-tool { font: inherit; font-size: 12px; line-height: 1.5; padding: 5px 9px; color: inherit; background: transparent; border: 1px solid #d8e1ec; border-radius: 6px; cursor: pointer; }
+.chat-tool { touch-action: manipulation; font: inherit; font-size: 12px; line-height: 1.5; padding: 5px 9px; color: inherit; background: transparent; border: 1px solid #d8e1ec; border-radius: 6px; cursor: pointer; }
 .chat-tool:hover { background: #edf3fa; }
 .chat-tool:disabled { opacity: .45; cursor: default; }
 .chat-tool:focus-visible { outline: 2px solid #4778c6; outline-offset: 2px; }
@@ -32,7 +33,7 @@
 .answer-code > .chat-tool-icon { position: absolute; top: 6px; right: 6px; margin: 0; }
 .answer-code > code { display: block; padding-inline-end: 30px; }
 .chat-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.chat-suggestions .chat-tool { font-size: 13px; text-align: left; white-space: normal; }
+.chat-suggestions .chat-tool { font-size: 13px; text-align: left; white-space: normal; max-width: 100%; overflow-wrap: anywhere; }
 .chat-process { font-size: 12px; color: #687890; margin: 4px 0 12px; }
 .chat-process summary { cursor: pointer; }
 .chat-process ol { margin: 8px 0; padding-left: 20px; }
@@ -41,4 +42,14 @@
 .dark .chat-citation-web { --citation-ink: #a9cbff; --citation-fill: #243b56; }
 .dark .chat-citation-knowledge { --citation-ink: #91dbb2; --citation-fill: #203d31; }
 .dark .chat-tool-icon.is-success { color: #91dbb2; }
-@media (pointer: coarse) { .chat-tool-icon { width: 36px; height: 36px; } }
+.chat-source-title .chat-source-open { font-size: inherit; color: inherit; max-width: 100%; overflow-wrap: anywhere; }
+.chat-citation-card .chat-citation-touch-hint { font-size: 12px; line-height: 1.5; color: var(--muted, #687890); margin: 10px 0 0; }
+@media (pointer: coarse), (any-pointer: coarse) {
+  .chat-tool-icon { width: 44px; height: 44px; }
+  .chat-citation-mark { min-width: 24px; min-height: 24px; }
+  .chat-citation-card section:first-of-type { padding-right: 40px; }
+  .chat-source-title .chat-source-open { min-height: 44px; }
+  .chat-suggestions .chat-tool { min-height: 44px; padding: 9px 12px; }
+  .chat-process summary { min-height: 44px; line-height: 44px; }
+  .answer-code > code { padding-inline-end: 48px; }
+}

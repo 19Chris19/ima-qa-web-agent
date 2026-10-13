@@ -25,13 +25,15 @@
     if (!key && !isStatic) return null;
     if (token.chatInMath || !/^\d{1,6}(?:,\d{1,6})*$/u.test(token.text || '')) return escape(token.raw || token.text);
     const entry = options.citationMap?.[key];
-    const previewable = entry?.type === 'web' && entry.sources?.some(source => webUrl(source.url));
+    const targets = entry?.type === 'web' ? [...new Set((entry.sources || []).map(source => webUrl(source?.url)).filter(Boolean))] : [];
+    const previewable = targets.length > 0;
     const content = escape(token.text);
     const kind = ['web', 'knowledge'].includes(entry?.type) ? entry.type : 'unknown';
     const classes = `chat-citation chat-citation-${kind}`;
-    return previewable
-      ? `<sup class="${classes}"><button type="button" class="chat-citation-mark chat-citation-button" data-citation-key="${escape(key)}" aria-label="查看网页引用 ${content}" aria-haspopup="dialog" aria-expanded="false">${content}</button></sup>`
-      : `<sup class="${classes} chat-citation-static" aria-label="${kind === 'knowledge' ? '知识库引用' : '引用'} ${content}"><span class="chat-citation-mark">${content}</span></sup>`;
+    if (!previewable) return `<sup class="${classes} chat-citation-static" aria-label="${kind === 'knowledge' ? '知识库引用' : '引用'} ${content}"><span class="chat-citation-mark">${content}</span></sup>`;
+    if (targets.length === 1) return `<sup class="${classes}"><a class="chat-citation-mark chat-citation-link" href="${escape(targets[0])}" target="_blank" rel="noopener noreferrer" data-citation-key="${escape(key)}" aria-label="打开网页引用 ${content}（新标签页）" aria-haspopup="dialog" aria-expanded="false" title="悬停预览，点击打开网页">${content}</a></sup>`;
+    // A reference may explicitly point to several pages. Never pick one by order.
+    return `<sup class="${classes}"><button type="button" class="chat-citation-mark chat-citation-button" data-citation-key="${escape(key)}" aria-label="选择网页引用 ${content}（${targets.length} 个来源）" aria-haspopup="dialog" aria-expanded="false" title="此引用包含多个网页，请在预览卡片中选择">${content}</button></sup>`;
   }
   function protectMath(tokens, state = { math: '' }) {
     for (const token of tokens || []) {
@@ -156,12 +158,12 @@
   }
 
   const bound = new WeakSet();
-  let card, anchor, closing, restoringFocus = false;
+  let card, anchor, closing, touchPreview, touchActivation, restoringFocus = false;
   function closeCard(restore = false) {
     clearTimeout(closing);
     const previous = anchor;
     previous?.setAttribute('aria-expanded', 'false'); previous?.removeAttribute('aria-controls');
-    card?.remove(); card = null; anchor = null;
+    card?.remove(); card = null; anchor = null; touchPreview = null;
     if (restore && previous?.isConnected) {
       const focus = () => { restoringFocus = true; previous.focus({ preventScroll: true }); restoringFocus = false; };
       focus();
@@ -172,6 +174,19 @@
         if (previous.isConnected && !card && [document.body, previous].includes(document.activeElement)) focus();
       });
     }
+  }
+  function positionCard(trigger) {
+    if (!card) return;
+    card.style.maxHeight = '';
+    const rect = trigger.getBoundingClientRect();
+    card.style.left = `${Math.max(8, Math.min(rect.left, root.innerWidth - card.offsetWidth - 8))}px`;
+    // Pick a side before placing the card. Clamping a tall card upward can
+    // cover its own trigger and intercept the tap that just opened it.
+    const below = Math.max(0, root.innerHeight - rect.bottom - 8);
+    const above = Math.max(0, rect.top - 8);
+    const placeBelow = card.offsetHeight <= below || below >= above;
+    card.style.maxHeight = `${Math.min(400, Math.max(80, placeBelow ? below : above))}px`;
+    card.style.top = `${Math.max(8, placeBelow ? rect.bottom + 8 : rect.top - card.offsetHeight - 8)}px`;
   }
   function showCard(trigger, options) {
     if (restoringFocus) return;
@@ -187,30 +202,24 @@
     close.addEventListener('click', () => closeCard(true)); card.append(close);
     for (const source of sources) {
       const section = document.createElement('section');
-      const title = document.createElement('strong'); title.className = 'chat-source-title'; title.textContent = source.title || '网页来源';
+      const title = document.createElement('strong'); title.className = 'chat-source-title';
+      const open = document.createElement('a'); open.href = webUrl(source.url); open.target = '_blank';
+      open.rel = 'noopener noreferrer'; open.className = 'chat-source-open'; open.textContent = source.title || '网页来源';
+      open.setAttribute('aria-label', `${source.title || '网页来源'}（新标签页打开）`); title.append(open);
       const domain = document.createElement('small'); domain.className = 'chat-source-domain'; domain.textContent = new URL(webUrl(source.url)).hostname;
       section.append(title, domain);
       const excerpt = document.createElement('p'); excerpt.className = 'chat-source-excerpt';
       excerpt.textContent = source.snippet || '该网页未提供内容摘录';
       if (!source.snippet) excerpt.classList.add('is-empty');
       section.append(excerpt);
-      const open = document.createElement('a'); open.href = webUrl(source.url); open.target = '_blank';
-      open.rel = 'noopener noreferrer'; open.className = 'chat-source-open'; open.textContent = '打开网页 ↗'; section.append(open); card.append(section);
+      card.append(section);
     }
     document.body.append(card);
     trigger.setAttribute('aria-expanded', 'true'); trigger.setAttribute('aria-controls', card.id);
-    const rect = trigger.getBoundingClientRect();
-    card.style.left = `${Math.max(8, Math.min(rect.left, root.innerWidth - card.offsetWidth - 8))}px`;
-    // Pick a side before placing the card. Clamping a tall card upward can
-    // cover its own trigger and intercept the tap that just opened it.
-    const below = Math.max(0, root.innerHeight - rect.bottom - 8);
-    const above = Math.max(0, rect.top - 8);
-    const placeBelow = card.offsetHeight <= below || below >= above;
-    card.style.maxHeight = `${Math.min(400, Math.max(80, placeBelow ? below : above))}px`;
-    card.style.top = `${Math.max(8, placeBelow ? rect.bottom + 8 : rect.top - card.offsetHeight - 8)}px`;
-    card.addEventListener('focusout', event => { if (event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
+    positionCard(trigger);
+    card.addEventListener('focusout', event => { if ((event.relatedTarget || touchPreview !== anchor) && event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
     card.addEventListener('pointerenter', () => clearTimeout(closing));
-    card.addEventListener('pointerleave', () => { closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });
+    card.addEventListener('pointerleave', () => { if (touchPreview === anchor) return; closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });
   }
   function bind(element, options = {}) {
     if (anchor && !anchor.isConnected) closeCard();
@@ -225,11 +234,19 @@
     element.chatPresentation = options;
     if (bound.has(element)) return;
     bound.add(element);
+    element.addEventListener('pointerdown', event => {
+      const trigger = event.target.closest?.('[data-citation-key]');
+      touchActivation = trigger && ['touch', 'pen'].includes(event.pointerType)
+        ? { trigger, again: touchPreview === trigger && anchor === trigger && card?.isConnected, at: root.performance.now() } : null;
+    });
+    element.addEventListener('pointercancel', () => { touchActivation = null; });
     element.addEventListener('pointerover', event => {
+      if (['touch', 'pen'].includes(event.pointerType)) return;
       const trigger = event.target.closest?.('[data-citation-key]');
       if (trigger) showCard(trigger, element.chatPresentation);
     });
     element.addEventListener('pointerout', event => {
+      if (touchPreview === anchor) return;
       if (event.target.closest?.('[data-citation-key]') && !card?.contains(event.relatedTarget)) {
         closing = setTimeout(() => { if (anchor !== element.ownerDocument.activeElement && !card?.contains(element.ownerDocument.activeElement)) closeCard(); }, 180);
       }
@@ -239,7 +256,7 @@
       if (trigger) showCard(trigger, element.chatPresentation);
     });
     element.addEventListener('focusout', event => {
-      if (!card?.contains(event.relatedTarget) && !event.relatedTarget?.closest?.('[data-citation-key]')) closeCard();
+      if ((event.relatedTarget || touchPreview !== anchor) && !card?.contains(event.relatedTarget) && !event.relatedTarget?.closest?.('[data-citation-key]')) closeCard();
     });
     element.addEventListener('keydown', event => {
       const trigger = event.target.closest?.('[data-citation-key]');
@@ -249,8 +266,26 @@
     });
     element.addEventListener('click', async event => {
       const trigger = event.target.closest?.('[data-citation-key]');
-      if (trigger) { event.preventDefault(); showCard(trigger, element.chatPresentation);
-        if (event.detail === 0) card?.querySelector('button, a')?.focus(); return; }
+      if (trigger) {
+        const entry = element.chatPresentation.citationMap?.[trigger.dataset.citationKey];
+        const targets = entry?.type === 'web' ? [...new Set((entry.sources || []).map(source => webUrl(source?.url)).filter(Boolean))] : [];
+        const activation = touchActivation; touchActivation = null;
+        const touch = ['touch', 'pen'].includes(event.pointerType) || (!event.pointerType && event.detail !== 0
+          && activation?.trigger === trigger && root.performance.now() - activation.at < 1000);
+        if (trigger.tagName === 'A' && targets.length === 1 && trigger.href === targets[0]
+          && (!touch || activation?.again)) {
+          closeCard(); return; // Preserve native new-tab, modifier-click and keyboard navigation.
+        }
+        event.preventDefault(); showCard(trigger, element.chatPresentation);
+        if (touch && card) {
+          touchPreview = trigger; clearTimeout(closing);
+          let hint = card.querySelector('.chat-citation-touch-hint');
+          if (!hint) { hint = element.ownerDocument.createElement('p'); hint.className = 'chat-citation-touch-hint'; card.append(hint); }
+          hint.textContent = targets.length === 1 ? '再次点按角标，或点标题打开原网页' : '点选标题，打开对应的原网页';
+          positionCard(trigger);
+        }
+        if (event.detail === 0 && !touch) card?.querySelector('button, a')?.focus(); return;
+      }
       const control = event.target.closest?.('[data-chat-action]');
       if (!control || control.disabled) return;
       const action = control.dataset.chatAction;
@@ -313,7 +348,10 @@
   if (root.document) {
     root.document.addEventListener('pointerdown', event => { if (card && !card.contains(event.target) && !event.target.closest?.('[data-citation-key]')) closeCard(); });
     root.document.addEventListener('keydown', event => { if (event.key === 'Escape' && card) { event.preventDefault(); closeCard(true); } });
-    root.document.addEventListener('scroll', () => { if (anchor && !anchor.isConnected) closeCard(); }, true);
+    root.document.addEventListener('scroll', event => {
+      if (anchor && (!anchor.isConnected || (touchPreview === anchor && event.target !== card && !card?.contains(event.target)))) closeCard();
+    }, true);
+    root.addEventListener('resize', () => { if (anchor?.isConnected && card) positionCard(anchor); });
   }
   function stableHtml(element) {
     return element.outerHTML.replace(/ aria-controls="chat-citation-card"/gu, '')
