@@ -34,12 +34,12 @@ function fixture(t, options = {}) {
 test('first text is immediately durable; a burst is coalesced with exact Unicode and whitespace', t => {
   const f = fixture(t);
   const chunks = ['首', ' 次', '\n\n', '😀', 'e\u0301', ' 末尾  \n'];
-  f.buffer.append('delta', { text: chunks[0] });
+  f.buffer.append('delta', { text: chunks[0], requestId: 'synthetic-request' });
   assert.equal(f.seen.length, 1);
   assert.equal(f.text(), chunks[0]);
   for (const text of chunks.slice(1)) {
     f.buffer.activity(10); f.buffer.upstream({ type: 'delta', text });
-    f.buffer.append('delta', { text });
+    f.buffer.append('delta', { text, requestId: 'synthetic-request' });
   }
   assert.equal(f.seen.length, 1);
   assert.equal(f.current().events.length, 3);
@@ -49,6 +49,7 @@ test('first text is immediately durable; a burst is coalesced with exact Unicode
   assert.equal(f.current().trace.rawUpstreamChunks, chunks.length - 1);
   assert.equal(f.current().trace.upstreamEvents, chunks.length - 1);
   assert.equal(f.current().trace.firstAnswerDeltaAt, 1000);
+  assert.ok(f.current().events.filter(e => e.event === 'delta').every(e => e.data.requestId === 'synthetic-request'));
   assert.deepEqual(f.current().events.map(e => e.id), [1, 2, 3, 4]);
 });
 
@@ -74,6 +75,19 @@ test('process, sources and structured deltas retain their order and payloads', t
   assert.deepEqual(events.map(e => e.event), ['delta', 'delta', 'sources', 'delta', 'process', 'delta']);
   assert.equal(f.text(), 'ABCD');
   assert.deepEqual(events.at(-1).data, { text: 'D', extra: 'preserved' });
+});
+
+test('different request metadata envelopes cannot be combined or dropped', t => {
+  const f = fixture(t);
+  f.buffer.append('delta', { text: 'A', requestId: 'request-a' });
+  f.buffer.append('delta', { text: 'B', requestId: 'request-a' });
+  f.buffer.append('delta', { text: 'C', requestId: 'request-b' });
+  f.buffer.append('delta', { text: 'D' });
+  f.buffer.flush();
+  assert.deepEqual(f.current().events.slice(2).map(e => e.data), [
+    { text: 'A', requestId: 'request-a' }, { text: 'B', requestId: 'request-a' },
+    { text: 'C', requestId: 'request-b' }, { text: 'D' },
+  ]);
 });
 
 test('metadata alone checkpoints without inventing events or requiring subscribers', async t => {
