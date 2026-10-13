@@ -606,7 +606,7 @@ test('durable failures retain safe transport/protocol reasons but never arbitrar
   }
 });
 
-test('raw activity advances trace without normalized events or subscriber influence', async t => {
+test('raw activity checkpoints trace within one second without normalized events or subscriber influence', async t => {
   let sendActivity;
   let release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -622,6 +622,9 @@ test('raw activity advances trace without normalized events or subscriber influe
   assert.equal(typeof sendActivity, 'function');
   manager.store.now = () => 123456789;
   sendActivity({ bytes: 17 });
+  // Diagnostic counters have a bounded checkpoint interval; they are no longer
+  // a synchronous disk transaction for every upstream transport chunk.
+  await pause(1100);
   let current = manager.store.publicTask(manager.store.tasks.get(task.id));
   assert.equal(current.trace.lastUpstreamActivityAt, 123456789);
   assert.equal(current.trace.firstUpstreamEventAt, null);
@@ -629,6 +632,7 @@ test('raw activity advances trace without normalized events or subscriber influe
   assert.equal(current.trace.rawUpstreamChunks, 1);
   manager.store.now = () => 123456790;
   sendActivity({ bytes: 8 });
+  await pause(1100);
   current = (await (await f.request(`/api/tasks/${task.id}`)).json()).task;
   assert.equal(current.trace.lastUpstreamActivityAt, 123456790);
   assert.equal(current.trace.rawUpstreamBytes, 25);
@@ -717,3 +721,4 @@ test('binding journal repairs history after a binding write fault without repeat
   assert.equal(conversations.getHistory(f.conversationId, owner).length, 0);
   recovered.close();
 });
+

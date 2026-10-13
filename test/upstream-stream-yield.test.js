@@ -42,7 +42,7 @@ for (const controls of [false, true]) {
   });
 }
 
-test('native dense task stays observable while persisting every delta exactly once', async t => {
+test('native dense task stays observable while committing coalesced text exactly once', async t => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
@@ -91,14 +91,17 @@ test('native dense task stays observable while persisting every delta exactly on
   const headers = { authorization: 'Bearer synthetic-api', 'content-type': 'application/json',
     'x-ima-client-id': owner, 'Idempotency-Key': 'synthetic-dense-task' };
   const store = app.locals.durableQATasks.store;
-  const append = store.append.bind(store);
+  const manager = app.locals.durableQATasks;
+  const publish = manager.publish.bind(manager);
   let health;
-  store.append = (id, event, data) => {
-    const result = append(id, event, data);
-    if (event === 'delta' && !health) {
+  // Observe the durable publication boundary rather than a particular store
+  // method: multiple tiny deltas can share one atomic commit.
+  manager.publish = current => {
+    const result = publish(current);
+    if (current.events.at(-1)?.event === 'delta' && !health) {
       health = fetch(`${base}/healthz`, { signal: AbortSignal.timeout(3000) }).then(async response => {
         await response.text();
-        return { status: response.status, duringStream: store.tasks.get(id).status === 'running' };
+        return { status: response.status, duringStream: store.tasks.get(current.id).status === 'running' };
       });
     }
     return result;
@@ -114,6 +117,10 @@ test('native dense task stays observable while persisting every delta exactly on
   assert.equal(final.task.status, 'succeeded');
   assert.equal(final.snapshot.events.filter(e => e.event === 'done').length, 1);
   assert.equal(final.snapshot.events.filter(e => e.event === 'delta').map(e => e.data.text).join(''), texts.join(''));
+  const deltas = final.snapshot.events.filter(e => e.event === 'delta');
+  assert.ok(deltas.length < texts.length / 2, 'the actual Provider response envelope must use short batches');
+  assert.ok(deltas.every(e => e.data.requestId === task.id));
   assert.equal(conversations.getHistory(conversationId, owner).at(-1).content, texts.join(''));
   assert.equal(posts, 1);
 });
+

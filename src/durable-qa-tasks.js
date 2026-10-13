@@ -2,6 +2,7 @@
 
 const { DurableQATaskStore, TERMINAL, fault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
+const { DurableQAStreamBuffer } = require('./durable-qa-stream-buffer');
 
 class DurableQATasks {
   constructor({ directory, conversations, queue, execute, accountPool = null, mode, routingOptions = () => ({}), storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
@@ -16,6 +17,7 @@ class DurableQATasks {
     this.activeConversations = new Map();
     this.pending = new Map();
     this.subscribers = new Map();
+    this.streamBuffers = new Map();
     this.closed = false;
     this.heartbeatMs = heartbeatMs;
     this.rotationMs = rotationMs;
@@ -148,6 +150,7 @@ class DurableQATasks {
         appendTurn: (_id, question, answer, metadata) => { check(); turn = { question, answer, metadata, upstream }; },
       };
       const response = this.response(task, () => turn);
+      const streamBuffer = this.streamBuffers.get(task.id);
       await this.execute({ task, signal: controller.signal, res: response, conversationStore,
         accountLease,
         onUpstreamBinding: bindUpstream,
@@ -157,23 +160,11 @@ class DurableQATasks {
         },
         onUpstreamActivity: ({ bytes } = {}) => {
           check();
-          if (!Number.isSafeInteger(bytes) || bytes <= 0) return;
-          this.store.update(task.id, current => {
-            current.trace.lastUpstreamActivityAt = this.store.now();
-            current.trace.rawUpstreamBytes = Math.min(Number.MAX_SAFE_INTEGER, (current.trace.rawUpstreamBytes || 0) + bytes);
-            current.trace.rawUpstreamChunks = Math.min(Number.MAX_SAFE_INTEGER, (current.trace.rawUpstreamChunks || 0) + 1);
-          }, true);
+          streamBuffer.activity(bytes);
         },
         onUpstreamEvent: event => {
           check();
-          this.store.update(task.id, current => {
-            if (current.trace.dispatchedAt === null) throw fault('task_dispatch_marker_missing');
-            current.trace.firstUpstreamEventAt ??= this.store.now();
-            current.trace.lastUpstreamEventAt = this.store.now();
-            current.trace.upstreamBytes = (current.trace.upstreamBytes || 0) + Buffer.byteLength(JSON.stringify(event));
-            current.trace.upstreamEvents = (current.trace.upstreamEvents || 0) + 1;
-            if (current.trace.upstreamBytes > this.store.maxTaskBytes || current.trace.upstreamEvents > this.store.maxEvents) throw fault('task_capacity', 429);
-          });
+          streamBuffer.upstream(event);
         },
       });
       if (this.available && !TERMINAL.has(this.store.tasks.get(task.id).status)) this.terminal(task.id, 'failed', 'upstream_terminal_missing');
@@ -184,6 +175,8 @@ class DurableQATasks {
       try { this.terminal(task.id, 'failed', safeTaskFailureReason(error?.code, 'execution_failed')); }
       catch { this.store.unavailable(); }
     }).finally(() => {
+      this.streamBuffers.get(task.id)?.close();
+      this.streamBuffers.delete(task.id);
       this.controllers.delete(task.id);
       if (acquired) {
         this.conversations.endRequest(task.input.conversationId, task.ownerKey);
@@ -220,6 +213,17 @@ class DurableQATasks {
   response(task, getTurn) {
     let buffer = '';
     const manager = this;
+    const streamBuffer = new DurableQAStreamBuffer({ store: this.store, id: task.id,
+      publish: current => this.publish(current), onError: error => {
+        if (this.available && !TERMINAL.has(this.store.tasks.get(task.id)?.status)) {
+          try { this.terminal(task.id, 'failed', safeTaskFailureReason(error?.code, 'execution_failed')); }
+          catch { this.store.unavailable(); }
+        }
+        // Match explicit cancellation: persist the outcome before synchronous
+        // abort handlers can attempt to write a competing terminal response.
+        this.controllers.get(task.id)?.abort();
+      } });
+    this.streamBuffers.set(task.id, streamBuffer);
     return {
       writableEnded: false,
       status() { return this; },
@@ -243,6 +247,7 @@ class DurableQATasks {
             const turn = getTurn();
             if (!turn) throw fault('task_completion_missing');
             const completion = { ...turn, done: data };
+            streamBuffer.flush();
             manager.store.journal(task.id, completion);
             manager.complete(task.id, completion);
           } else if (event === 'error') {
@@ -252,7 +257,7 @@ class DurableQATasks {
             }
             manager.terminal(task.id, 'failed', safeTaskFailureReason(data.failureReason));
           } else if (['conversation', 'process', 'sources', 'delta'].includes(event)) {
-            manager.publish(manager.store.append(task.id, event, data));
+            streamBuffer.append(event, data);
           }
         }
         return true;
@@ -274,6 +279,9 @@ class DurableQATasks {
   }
 
   terminal(id, status, reason) {
+    this.streamBuffers.get(id)?.flush();
+    this.streamBuffers.get(id)?.close();
+    this.streamBuffers.delete(id);
     const task = this.store.tasks.get(id);
     this.publish(this.store.finish(id, status, { error: reason, failureReason: reason,
       conversationId: task.input.conversationId, requestId: id }));
@@ -327,8 +335,10 @@ class DurableQATasks {
     const end = (reason = 'complete') => { cleanup(reason); res.end(); };
     const subscription = { end, send: current => {
       if (ended) return;
-      for (const event of current.events) {
-        if (event.id <= cursor) continue;
+      // Event IDs are contiguous and one-based; avoid rescanning the prefix on
+      // every tiny update for each subscriber.
+      for (let index = cursor; index < current.events.length; index++) {
+        const event = current.events[index];
         if (res.writableLength > 256 * 1024) { cleanup(); res.destroy(); return; }
         res.write(`id: ${event.id}\nevent: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
         cursor = event.id;
@@ -349,6 +359,8 @@ class DurableQATasks {
   }
 
   stopExecution() {
+    for (const buffer of this.streamBuffers.values()) buffer.close();
+    this.streamBuffers.clear();
     for (const controller of this.controllers.values()) controller.abort();
     for (const subscribers of this.subscribers.values()) for (const subscriber of subscribers) subscriber.end();
   }
