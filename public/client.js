@@ -59,6 +59,12 @@
     else void recoverSubmission(activeView);
   });
   window.addEventListener('pagehide', detachView);
+  window.addEventListener('pageshow', event => {
+    // BFCache restores the old DOM and closures; recover the saved task before enabling sends.
+    if (!event.persisted) return;
+    if (conversationId) void openConversation(conversationId);
+    else { renderWelcome(); setStatus('', 'ready'); updateComposer(); }
+  });
   experience.selectionCopy(chatLog);
   latest.addEventListener('click', () => {
     followStreamingAnswer = true;

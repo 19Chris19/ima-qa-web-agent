@@ -262,6 +262,26 @@ test('switching conversation discards an unpainted frame without cancelling the 
   assert.equal(p.calls.some(call => call.method === 'DELETE'), false);
 });
 
+test('BFCache return discards old paint and restores the same task with GET before allowing sends', async t => {
+  const p = await page(t, { manualFrames: true });
+  p.submit(); await waitFor(() => p.streams.size === 1);
+  p.emit('synthetic-task-1', 'delta', { text: 'Synthetic resumed answer' });
+  await waitFor(() => p.frames.size === 1);
+  p.w.dispatchEvent(new p.w.Event('pagehide'));
+  await waitFor(() => p.streams.size === 0);
+  assert.equal(p.frames.size, 0);
+  p.w.dispatchEvent(new p.w.PageTransitionEvent('pageshow', { persisted: true }));
+  assert.equal(p.d.querySelector('#sendButton').disabled, true, 'restoration gates new submissions synchronously');
+  await waitFor(() => p.streams.size === 1);
+  p.paintFrame();
+  assert.match(p.d.querySelector('.message:last-child .answer-markdown').textContent, /Synthetic resumed answer/);
+  assert.equal(p.calls.filter(call => call.url === '/api/tasks' && call.method === 'POST').length, 1);
+  assert.equal(p.calls.some(call => call.method === 'DELETE'), false);
+  p.histories['synthetic-conversation-1'] = [{ role: 'user', content: 'synthetic question' },
+    { role: 'assistant', content: 'Synthetic resumed answer' }];
+  p.complete(); await waitFor(() => p.d.querySelector('.answer-copy'));
+});
+
 for (const status of ['failed', 'cancelled', 'indeterminate']) {
   test(`${status} flushes an unpainted partial answer and cancels the pending frame`, async t => {
     const p = await page(t, { manualFrames: true });

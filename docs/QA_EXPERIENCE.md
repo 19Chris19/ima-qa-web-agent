@@ -13,6 +13,8 @@ No production service, credential, backend, admin, vendor or renderer-core chang
   DOM painting and scroll following are coalesced. Completion, failure,
   cancellation and observation failure flush pending received text immediately.
   Navigation/pagehide disposes the old updater without cancelling the task.
+  A browser back/forward-cache return restores the saved task with GET before
+  enabling a new send, instead of reusing its disposed view.
   Hidden-tab frame suspension does not delay terminal painting or event intake.
 - Submission keeps its immediate local question bubble and assistant placeholder.
   These indicate a local submission, not server acceptance. Before a task receipt,
