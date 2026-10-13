@@ -151,3 +151,17 @@ test('a card near the viewport bottom opens above its marker without interceptin
   const card = p.window.document.querySelector('.chat-citation-card');
   assert.ok(parseFloat(card.style.top) + card.offsetHeight < marker.getBoundingClientRect().top);
 });
+
+
+test('dismissal restores the reference after the browser blurs a removed close control', async t => {
+  const p = page(t);
+  p.render('Web[7](@index-ref?id=42)', { citationMap: mapping });
+  const marker = p.answer.querySelector('[data-citation-key]');
+  marker.focus();
+  p.window.document.querySelector('.chat-card-close').focus();
+  p.window.document.querySelector('.chat-card-close').click();
+  marker.blur(); // Chromium's default action can follow the close handler.
+  await new Promise(resolve => p.window.requestAnimationFrame(resolve));
+  assert.equal(p.window.document.activeElement, marker);
+  assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+});

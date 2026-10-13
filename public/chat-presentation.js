@@ -162,7 +162,16 @@
     const previous = anchor;
     previous?.setAttribute('aria-expanded', 'false'); previous?.removeAttribute('aria-controls');
     card?.remove(); card = null; anchor = null;
-    if (restore && previous?.isConnected) { restoringFocus = true; previous.focus({ preventScroll: true }); restoringFocus = false; }
+    if (restore && previous?.isConnected) {
+      const focus = () => { restoringFocus = true; previous.focus({ preventScroll: true }); restoringFocus = false; };
+      focus();
+      // Chromium may apply its default blur after removing the focused close
+      // button. Retry after that action, without stealing a newly chosen focus.
+      root.requestAnimationFrame?.(() => {
+        const document = previous.ownerDocument;
+        if (previous.isConnected && !card && [document.body, previous].includes(document.activeElement)) focus();
+      });
+    }
   }
   function showCard(trigger, options) {
     if (restoringFocus) return;
