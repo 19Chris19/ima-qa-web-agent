@@ -215,10 +215,13 @@ class DurableQATasks {
     const manager = this;
     const streamBuffer = new DurableQAStreamBuffer({ store: this.store, id: task.id,
       publish: current => this.publish(current), onError: error => {
+        if (this.available && !TERMINAL.has(this.store.tasks.get(task.id)?.status)) {
+          try { this.terminal(task.id, 'failed', safeTaskFailureReason(error?.code, 'execution_failed')); }
+          catch { this.store.unavailable(); }
+        }
+        // Match explicit cancellation: persist the outcome before synchronous
+        // abort handlers can attempt to write a competing terminal response.
         this.controllers.get(task.id)?.abort();
-        if (!this.available || TERMINAL.has(this.store.tasks.get(task.id)?.status)) return;
-        try { this.terminal(task.id, 'failed', safeTaskFailureReason(error?.code, 'execution_failed')); }
-        catch { this.store.unavailable(); }
       } });
     this.streamBuffers.set(task.id, streamBuffer);
     return {
