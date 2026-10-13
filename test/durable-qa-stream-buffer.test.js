@@ -212,3 +212,30 @@ test('restart after an interrupted batch retains the durable prefix and never re
     assert.equal(calls, 0);
   } finally { recovered.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('a timer capacity failure persists its reason before a synchronous abort handler can overwrite it', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'durable-batch-capacity-'));
+  const conversations = new ConversationStore({ storePath: path.join(directory, 'history.json') });
+  const conversationId = conversations.create('synthetic-owner').conversationId;
+  let aborted = false;
+  const manager = new DurableQATasks({ directory: path.join(directory, 'tasks'), conversations,
+    queue: createAskQueue({}), async execute({ task, res, signal, onDispatch }) {
+      onDispatch(); res.write('event: delta\ndata: {"text":"prefix"}\n\n');
+      manager.store.maxTaskBytes = manager.store.bytes.get(task.id) + 100;
+      res.write(`event: delta\ndata: ${JSON.stringify({ text: 'x'.repeat(200) })}\n\n`);
+      await new Promise(resolve => signal.addEventListener('abort', () => {
+        aborted = true;
+        res.write('event: error\ndata: {"failureReason":"competing_abort"}\n\n');
+        resolve();
+      }, { once: true }));
+    } });
+  t.after(() => { manager.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const { task } = manager.submit({ ownerKey: 'synthetic-owner', scope: 'ordinary', key: 'synthetic',
+    input: { conversationId, question: 'Synthetic capacity test' } });
+  for (let i = 0; i < 100 && !aborted; i++) await pause(10);
+  assert.equal(aborted, true);
+  const saved = manager.store.tasks.get(task.id);
+  assert.equal(saved.status, 'failed');
+  assert.equal(saved.trace.terminalReason, 'task_capacity');
+  assert.equal(saved.events.filter(e => e.event === 'error').length, 1);
+});
