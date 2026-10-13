@@ -117,6 +117,9 @@ test('native dense task stays observable while committing coalesced text exactly
   assert.equal(final.task.status, 'succeeded');
   assert.equal(final.snapshot.events.filter(e => e.event === 'done').length, 1);
   assert.equal(final.snapshot.events.filter(e => e.event === 'delta').map(e => e.data.text).join(''), texts.join(''));
+  const deltas = final.snapshot.events.filter(e => e.event === 'delta');
+  assert.ok(deltas.length < texts.length / 2, 'the actual Provider response envelope must use short batches');
+  assert.ok(deltas.every(e => e.data.requestId === task.id));
   assert.equal(conversations.getHistory(conversationId, owner).at(-1).content, texts.join(''));
   assert.equal(posts, 1);
 });
