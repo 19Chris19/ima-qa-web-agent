@@ -1,0 +1,273 @@
+(function (root) {
+  'use strict';
+  const escape = value => String(value ?? '').replace(/&/gu, '&amp;').replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;').replace(/"/gu, '&quot;').replace(/'/gu, '&#39;');
+  const labels = { knowledge: '资料检索', web: '联网搜索', answer: '回答生成' };
+  function webUrl(value) {
+    try {
+      const url = new URL(value);
+      return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+        && !/(^|\.)ima\.qq\.com$/iu.test(url.hostname)
+        && ![...url.searchParams.keys(), ...new URLSearchParams(url.hash.slice(1)).keys()]
+          .some(key => /token|cookie|credential|secret|password|authorization|api[_-]?key|signature/iu.test(key)) ? url.href : '';
+    } catch { return ''; }
+  }
+  function target(href) {
+    const match = /^@(context|index)-ref\?([^\s]+)$/u.exec(String(href || ''));
+    if (!match) return null;
+    const params = new URLSearchParams(match[2]);
+    const id = params.get('id');
+    return id && id.length <= 128 ? `${match[1]}:${id}` : null;
+  }
+  function citation(token, options = {}) {
+    const key = target(token.href);
+    const isStatic = /^@(ref|para-ref)$/u.test(String(token.href));
+    if (!key && !isStatic) return null;
+    if (token.chatInMath || !/^\d{1,6}(?:,\d{1,6})*$/u.test(token.text || '')) return escape(token.raw || token.text);
+    const entry = options.citationMap?.[key];
+    const previewable = entry?.type === 'web' && entry.sources?.some(source => webUrl(source.url));
+    const content = escape(token.text);
+    return previewable
+      ? `<sup class="chat-citation"><button type="button" class="chat-citation-button" data-citation-key="${escape(key)}" aria-label="查看网页引用 ${content}" aria-haspopup="dialog" aria-expanded="false">${content}</button></sup>`
+      : `<sup class="chat-citation chat-citation-static" aria-label="引用 ${content}">${content}</sup>`;
+  }
+  function protectMath(tokens, state = { math: '' }) {
+    for (const token of tokens || []) {
+      if (token.type === 'link' && state.math) token.chatInMath = true;
+      if (token.type === 'text' && !token.tokens) {
+        for (const match of String(token.raw || token.text).matchAll(/(?<!\\)(\$\$|\$)/gu)) {
+          if (!state.math) state.math = match[1]; else if (state.math === match[1]) state.math = '';
+        }
+      }
+      if (!['code', 'codespan', 'link', 'image'].includes(token.type)) {
+        if (token.tokens) protectMath(token.tokens, state);
+        for (const item of token.items || []) protectMath(item.tokens, state);
+        for (const cell of [...(token.header || []), ...(token.rows || []).flat()]) protectMath(cell.tokens, state);
+      }
+    }
+  }
+  function button(document, action, label, disabled = false) {
+    const node = document.createElement('button');
+    node.type = 'button'; node.className = 'chat-tool'; node.dataset.chatAction = action;
+    node.textContent = label; node.disabled = disabled;
+    return node;
+  }
+  function validTable(table) {
+    const width = table.querySelectorAll('thead tr:first-child th').length;
+    const rows = [...table.querySelectorAll('tbody tr')];
+    return width > 0 && rows.length > 0 && rows.every(row => row.children.length === width);
+  }
+  function decorate(container, options = {}) {
+    const document = container.ownerDocument;
+    const busy = options.streaming === true || options.answerComplete === false;
+    for (const wrap of container.querySelectorAll('.answer-table-wrap')) {
+      const table = wrap.querySelector('table');
+      const tools = document.createElement('div'); tools.className = 'chat-table-tools';
+      const disabled = busy || !validTable(table);
+      tools.append(button(document, 'copy-table', '复制表格', disabled), button(document, 'csv', '下载 CSV', disabled));
+      if (options.partial) {
+        const note = document.createElement('span'); note.className = 'chat-partial'; note.textContent = '部分回答'; tools.append(note);
+      }
+      wrap.prepend(tools);
+    }
+    for (const pre of container.querySelectorAll('pre.answer-code')) {
+      pre.prepend(button(document, 'copy-code', '复制代码', busy));
+    }
+  }
+  function cleanTable(table) {
+    const clone = table.cloneNode(true);
+    clone.querySelectorAll('.chat-citation, button').forEach(node => node.remove());
+    for (const node of [clone, ...clone.querySelectorAll('*')]) for (const attr of [...node.attributes]) node.removeAttribute(attr.name);
+    return clone;
+  }
+  function tableRows(table) {
+    return [...cleanTable(table).querySelectorAll('tr')].map(row => [...row.children]
+      .map(cell => cell.innerHTML.replace(/<br\s*\/?\s*>/giu, '\n'))
+      .map(html => { const cell = table.ownerDocument.createElement('div'); cell.innerHTML = html; return cell.textContent; }));
+  }
+  function spreadsheetCell(value) {
+    const cell = String(value);
+    return /^[\s\uFEFF]*[=+@-]/u.test(cell) && !/^-\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/u.test(cell.trim()) ? `'${cell}` : cell;
+  }
+  function csv(rows) {
+    return '\uFEFF' + rows.map(row => row.map(value => `"${spreadsheetCell(value).replace(/"/gu, '""')}"`).join(',')).join('\r\n') + '\r\n';
+  }
+  function tsv(rows) {
+    return rows.map(row => row.map(value => {
+      const cell = spreadsheetCell(value);
+      return /[\t\r\n"]/u.test(cell) ? `"${cell.replace(/"/gu, '""')}"` : cell;
+    }).join('\t')).join('\r\n');
+  }
+  async function copyText(value) {
+    if (root.navigator.clipboard?.writeText) return root.navigator.clipboard.writeText(value);
+    throw new Error('clipboard unavailable');
+  }
+  async function copyTable(table) {
+    const clone = cleanTable(table), rows = tableRows(table), plain = tsv(rows);
+    [...clone.querySelectorAll('tr')].forEach((row, i) => [...row.children].forEach((cell, j) => {
+      const safe = spreadsheetCell(rows[i][j]);
+      if (safe !== rows[i][j]) cell.textContent = safe;
+    }));
+    if (root.ClipboardItem && root.navigator.clipboard?.write) {
+      return root.navigator.clipboard.write([new root.ClipboardItem({
+        'text/html': new root.Blob([clone.outerHTML], { type: 'text/html' }),
+        'text/plain': new root.Blob([plain], { type: 'text/plain' }),
+      })]);
+    }
+    // A copy event supplies both formats on older desktop browsers.
+    const listener = event => { event.clipboardData.setData('text/html', clone.outerHTML);
+      event.clipboardData.setData('text/plain', plain); event.preventDefault(); };
+    root.document.addEventListener('copy', listener, { once: true });
+    try { if (!root.document.execCommand('copy')) throw new Error('clipboard unavailable'); }
+    finally { root.document.removeEventListener('copy', listener); }
+  }
+
+  const bound = new WeakSet();
+  let card, anchor, closing, restoringFocus = false;
+  function closeCard(restore = false) {
+    clearTimeout(closing);
+    const previous = anchor;
+    previous?.setAttribute('aria-expanded', 'false'); previous?.removeAttribute('aria-controls');
+    card?.remove(); card = null; anchor = null;
+    if (restore && previous?.isConnected) { restoringFocus = true; previous.focus({ preventScroll: true }); restoringFocus = false; }
+  }
+  function showCard(trigger, options) {
+    if (restoringFocus) return;
+    const entry = options.citationMap?.[trigger.dataset.citationKey];
+    const sources = entry?.type === 'web' ? (entry.sources || []).filter(source => webUrl(source.url)) : [];
+    if (!sources.length) return;
+    if (anchor === trigger && card?.isConnected) { clearTimeout(closing); return; }
+    closeCard(); anchor = trigger;
+    const document = trigger.ownerDocument;
+    card = document.createElement('div'); card.className = 'chat-citation-card'; card.id = 'chat-citation-card';
+    card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', `网页引用 ${trigger.textContent}`);
+    const close = button(document, 'close-citation', '关闭引用'); close.classList.add('chat-card-close');
+    close.addEventListener('click', () => closeCard(true)); card.append(close);
+    for (const source of sources) {
+      const section = document.createElement('section');
+      const title = document.createElement('strong'); title.textContent = source.title || '网页来源';
+      const domain = document.createElement('small'); domain.textContent = new URL(webUrl(source.url)).hostname;
+      section.append(title, domain);
+      if (source.snippet) { const excerpt = document.createElement('p'); excerpt.textContent = source.snippet; section.append(excerpt); }
+      const open = document.createElement('a'); open.href = webUrl(source.url); open.target = '_blank';
+      open.rel = 'noopener noreferrer'; open.textContent = '打开网页'; section.append(open); card.append(section);
+    }
+    document.body.append(card);
+    trigger.setAttribute('aria-expanded', 'true'); trigger.setAttribute('aria-controls', card.id);
+    const rect = trigger.getBoundingClientRect();
+    card.style.left = `${Math.max(8, Math.min(rect.left, root.innerWidth - card.offsetWidth - 8))}px`;
+    card.style.top = `${Math.max(8, Math.min(rect.bottom + 8, root.innerHeight - card.offsetHeight - 8))}px`;
+    card.addEventListener('focusout', event => { if (event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
+    card.addEventListener('pointerenter', () => clearTimeout(closing));
+    card.addEventListener('pointerleave', () => { closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });
+  }
+  function bind(element, options = {}) {
+    if (anchor && !anchor.isConnected) closeCard();
+    if (anchor && element.contains(anchor) && card) {
+      const key = anchor.dataset.citationKey;
+      if (JSON.stringify(element.chatPresentation?.citationMap?.[key]) !== JSON.stringify(options.citationMap?.[key])) {
+        const trigger = anchor, focused = card.contains(element.ownerDocument.activeElement);
+        closeCard(); showCard(trigger, options);
+        if (focused) card?.querySelector('button, a')?.focus();
+      }
+    }
+    element.chatPresentation = options;
+    if (bound.has(element)) return;
+    bound.add(element);
+    element.addEventListener('pointerover', event => {
+      const trigger = event.target.closest?.('[data-citation-key]');
+      if (trigger) showCard(trigger, element.chatPresentation);
+    });
+    element.addEventListener('pointerout', event => {
+      if (event.target.closest?.('[data-citation-key]') && !card?.contains(event.relatedTarget)) {
+        closing = setTimeout(() => { if (anchor !== element.ownerDocument.activeElement && !card?.contains(element.ownerDocument.activeElement)) closeCard(); }, 180);
+      }
+    });
+    element.addEventListener('focusin', event => {
+      const trigger = event.target.closest?.('[data-citation-key]');
+      if (trigger) showCard(trigger, element.chatPresentation);
+    });
+    element.addEventListener('focusout', event => {
+      if (!card?.contains(event.relatedTarget) && !event.relatedTarget?.closest?.('[data-citation-key]')) closeCard();
+    });
+    element.addEventListener('keydown', event => {
+      const trigger = event.target.closest?.('[data-citation-key]');
+      if (trigger && ['ArrowDown', 'Tab'].includes(event.key) && !event.shiftKey && anchor === trigger && card) {
+        event.preventDefault(); card.querySelector('button, a')?.focus();
+      }
+    });
+    element.addEventListener('click', async event => {
+      const trigger = event.target.closest?.('[data-citation-key]');
+      if (trigger) { event.preventDefault(); showCard(trigger, element.chatPresentation);
+        if (event.detail === 0) card?.querySelector('button, a')?.focus(); return; }
+      const control = event.target.closest?.('[data-chat-action]');
+      if (!control || control.disabled) return;
+      const action = control.dataset.chatAction;
+      try {
+        if (action === 'copy-code') await copyText(control.closest('pre').querySelector('code')?.textContent || '');
+        else if (action === 'copy-table') await copyTable(control.closest('.answer-table-wrap').querySelector('table'));
+        else if (action === 'csv') {
+          const table = control.closest('.answer-table-wrap').querySelector('table');
+          const url = root.URL.createObjectURL(new root.Blob([csv(tableRows(table))], { type: 'text/csv;charset=utf-8' }));
+          const link = element.ownerDocument.createElement('a'); link.href = url; link.download = 'table.csv'; link.click();
+          setTimeout(() => root.URL.revokeObjectURL(url), 1000);
+        } else return;
+        control.textContent = action === 'csv' ? '已下载' : '已复制';
+      } catch { control.textContent = '复制失败，请重试'; }
+    });
+  }
+  function renderSuggestions(container, values, input, disabled = false) {
+    const questions = [...new Set((Array.isArray(values) ? values : []).filter(value => typeof value === 'string' && value.trim() && value.length <= 2000))].slice(0, 3);
+    let section = container.querySelector(':scope > .chat-suggestions');
+    if (!questions.length) { section?.remove(); return; }
+    if (!section) { section = container.ownerDocument.createElement('div'); section.className = 'chat-suggestions'; container.append(section); }
+    if (section.dataset.questions !== JSON.stringify(questions)) {
+      section.replaceChildren(); section.dataset.questions = JSON.stringify(questions);
+      section.setAttribute('aria-label', '继续追问');
+      for (const question of questions) {
+        const control = button(container.ownerDocument, 'suggestion', question);
+        control.addEventListener('click', () => {
+          if (control.disabled || input.value.trim()) return;
+          input.value = question; input.dispatchEvent(new root.Event('input', { bubbles: true })); input.focus();
+        }); section.append(control);
+      }
+    }
+    for (const control of section.querySelectorAll('button')) {
+      control.disabled = disabled || Boolean(input.value.trim());
+      control.title = input.value.trim() ? '请先处理输入框中的草稿' : '填入输入框，编辑后发送';
+    }
+  }
+  function renderProcess(container, values, complete = false) {
+    const steps = new Map();
+    for (const step of values || []) {
+      if (Object.hasOwn(labels, step?.phase) && ['running', 'completed', 'failed', 'cancelled'].includes(step.status)) steps.set(step.phase, step);
+    }
+    let details = container.querySelector(':scope > .chat-process');
+    if (!steps.size) { details?.remove(); return; }
+    if (!details) {
+      details = container.ownerDocument.createElement('details'); details.className = 'chat-process';
+      const summary = container.ownerDocument.createElement('summary'); summary.textContent = '回答过程';
+      details.append(summary, container.ownerDocument.createElement('ol'));
+      const body = container.querySelector(':scope > .message-content, :scope > .answer-markdown');
+      if (body) body.before(details); else container.prepend(details);
+    }
+    if (complete && details.dataset.settled !== 'true') { details.open = false; details.dataset.settled = 'true'; }
+    const list = details.querySelector('ol'); list.replaceChildren();
+    for (const [phase, step] of steps) {
+      const item = container.ownerDocument.createElement('li'); item.dataset.stepId = `chat:${phase}`;
+      item.textContent = `${labels[phase]} · ${{ running: complete ? '已中断' : '进行中', completed: '已完成', failed: '未完成', cancelled: '已停止' }[step.status]}`;
+      list.append(item);
+    }
+  }
+  if (root.document) {
+    root.document.addEventListener('pointerdown', event => { if (card && !card.contains(event.target) && !event.target.closest?.('[data-citation-key]')) closeCard(); });
+    root.document.addEventListener('keydown', event => { if (event.key === 'Escape' && card) { event.preventDefault(); closeCard(true); } });
+    root.document.addEventListener('scroll', () => { if (anchor && !anchor.isConnected) closeCard(); }, true);
+  }
+  function stableHtml(element) {
+    return element.outerHTML.replace(/ aria-controls="chat-citation-card"/gu, '')
+      .replace(/ aria-expanded="true"/gu, ' aria-expanded="false"');
+  }
+  root.ChatPresentation = { stableHtml, citation, protectMath, decorate, bind, closeCard, renderSuggestions, renderProcess,
+    webUrl, tableRows, csv, tsv, spreadsheetCell, copyTable };
+})(globalThis);

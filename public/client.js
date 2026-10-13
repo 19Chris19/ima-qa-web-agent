@@ -73,6 +73,9 @@
   });
 
   function updateComposer() {
+    for (const section of chatLog.querySelectorAll('.chat-suggestions')) {
+      for (const control of section.querySelectorAll('button')) control.disabled = Boolean(input.value.trim()) || isBusy || navigating || recoveryRequired;
+    }
     const hasDraft = Boolean(input.value.trim());
     const stop = isBusy;
     const submitting = isBusy && !legacyProvider && ['preparing', 'submitting', 'confirming'].includes(activeView?.phase);
@@ -179,7 +182,7 @@
     updateComposer();
     try {
       const response = await fetch(
-        `/api/conversations/${encodeURIComponent(nextConversationId)}`,
+        `/api/conversations/${encodeURIComponent(nextConversationId)}?presentation=chat_v1`,
         requestOptions(),
       );
       if (epoch !== viewEpoch) return;
@@ -361,6 +364,7 @@
   }
 
   function detachView() {
+    window.ChatPresentation?.closeCard();
     activeView?.frame.dispose();
     activeView?.controller?.abort();
     activeView = null;
@@ -454,6 +458,7 @@
     if (view.message) {
       view.message.answer = '';
       view.message.sources = [];
+      view.message.citationMap = {}; view.message.suggestions = []; view.message.process = [];
       view.message.bubble.querySelector('.sources')?.remove();
     }
     view.answerDirty = false;
@@ -476,7 +481,7 @@
       });
       if (!subscribed() || !result) return;
       if ((view.restored && result.task.status === 'succeeded') || result.eventsExpired) {
-        const response = await fetch(`/api/conversations/${encodeURIComponent(view.reference.conversationId)}`, requestOptions());
+        const response = await fetch(`/api/conversations/${encodeURIComponent(view.reference.conversationId)}?presentation=chat_v1`, requestOptions());
         if (!response.ok) throw new Error('无法恢复会话历史');
         const data = await response.json();
         if (!subscribed()) return;
@@ -493,13 +498,18 @@
   }
 
   function renderTaskEvent(view, event) {
-    if (!['sources', 'delta', 'process', 'error'].includes(event.event)) return;
+    if (!['sources', 'delta', 'process', 'suggestions', 'error', 'done'].includes(event.event)) return;
     const message = view.message ||= appendMessage('assistant', '', { pending: true });
     if (event.event === 'sources') {
       message.sources = event.data.sources || [];
+      message.citationMap = event.data.citationMap || message.citationMap || {};
       message.searchSummary = event.data.searchSummary || '';
       view.sourcesDirty = true;
       view.answerDirty = true;
+    }
+    if (event.event === 'suggestions' || event.event === 'done') {
+      if (event.data.suggestions) message.suggestions = event.data.suggestions;
+      if (event.data.citationMap) message.citationMap = event.data.citationMap;
     }
     if (event.event === 'delta') {
       message.answer += event.data.text || '';
@@ -508,6 +518,8 @@
     }
     if (event.event === 'error') view.error = event.data.error || '回答未完成';
     if (event.event === 'process') {
+      message.process ||= [];
+      message.process.push(event.data);
       const text = event.data.message || event.data.text || event.data.label;
       if (typeof text === 'string' && text) {
         view.processText = text;
@@ -524,7 +536,8 @@
       renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary });
       view.sourcesDirty = false;
     }
-    if (view.processDirty) {
+    if (window.ChatPresentation) window.ChatPresentation.renderProcess(message.bubble, message.process);
+    if (view.processDirty && !window.ChatPresentation) {
       let process = message.bubble.querySelector('.task-process');
       if (!process) {
         process = document.createElement('p');
@@ -535,7 +548,7 @@
       view.processDirty = false;
     }
     if (view.answerDirty) {
-      renderAnswer(message.text, message.answer, { streaming: true, sourceIndexes: sourceIndexes(message.sources) });
+      renderAnswer(message.text, message.answer, { streaming: true, citationMap: message.citationMap, sourceIndexes: sourceIndexes(message.sources) });
       view.answerDirty = false;
     }
     scrollToBottom({ force: followStreamingAnswer });
@@ -550,7 +563,7 @@
       message.settled = true;
       message.bubble.classList.remove('pending');
       message.bubble.querySelector('.task-process')?.remove();
-      renderAnswer(message.text, message.answer, { sourceIndexes: sourceIndexes(message.sources) });
+      renderAnswer(message.text, message.answer, { citationMap: message.citationMap, sourceIndexes: sourceIndexes(message.sources), partial: status !== 'succeeded' });
       renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary, answer: message.answer });
       if (status !== 'succeeded') {
         const failure = document.createElement('p');
@@ -559,6 +572,8 @@
         message.bubble.append(failure);
       }
       experience.answerCopy(message, status !== 'succeeded');
+      window.ChatPresentation?.renderProcess(message.bubble, message.process, true);
+      if (status === 'succeeded') window.ChatPresentation?.renderSuggestions(message.bubble, message.suggestions, input, true);
     }
     setStatus(status === 'succeeded' ? '' : 'error', {
       succeeded: 'ready', cancelled: '已停止', failed: '未完成', indeterminate: '结果未知',
@@ -613,8 +628,10 @@
       const view = appendMessage(message.role, message.content || '');
       view.answer = message.content || '';
       view.sources = message.sources || [];
-      if (message.role === 'assistant' && message.sources?.length) {
-        renderAnswer(view.text, message.content || '', { sourceIndexes: sourceIndexes(message.sources) });
+      if (message.role === 'assistant' && (message.sources?.length || message.citationMap || window.ChatPresentation)) {
+        renderAnswer(view.text, message.content || '', { citationMap: message.citationMap, sourceIndexes: sourceIndexes(message.sources), partial: message.complete === false || message.interrupted === true });
+        window.ChatPresentation?.renderProcess(view.bubble, message.process, true);
+        window.ChatPresentation?.renderSuggestions(view.bubble, message.suggestions, input, isBusy || navigating);
         renderSources(view.bubble, message.sources, {
           searchSummary: message.searchSummary || '',
           answer: message.content || '',
@@ -681,7 +698,7 @@
 
   function renderAnswer(target, markdown, options = {}) {
     try {
-      window.ImaAnswerRenderer.updateAnswerElement(target, markdown, options);
+      window.ImaAnswerRenderer.updateAnswerElement(target, markdown, { ...options, ...(window.ChatPresentation ? { presentation: 'chat_v1' } : {}) });
     } catch {
       target.textContent = markdown;
     }
@@ -701,6 +718,7 @@
   }
 
   function renderSources(bubble, sources, options = {}) {
+    if (window.ChatPresentation) { bubble.querySelector('.sources')?.remove(); return; }
     bubble.querySelector('.sources')?.remove();
     const compactSources = selectCompactSources(sources, options.answer);
     if (!compactSources.length) {
