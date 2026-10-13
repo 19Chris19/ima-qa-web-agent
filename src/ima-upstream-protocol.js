@@ -23,7 +23,7 @@ const OPAQUE_DIAGNOSTIC_FIELDS = new Set(['DebugProfile', 'IntentReportID']);
 const REFERENCE_ITEM_KEYS = new Set([
   'content', 'href', 'jumpUrl', 'jump_url', 'kbName', 'kb_name', 'logoUrl', 'logo_url',
   'mediaId', 'media_id', 'name', 'official', 'positions', 'publisher', 'source',
-  'sourceType', 'title', 'type', 'url',
+  'sourceType', 'title', 'type', 'url', 'reference_content_type',
 ]);
 const AUXILIARY_SEMANTIC_KEY = /answer|code|complete|content|description|error|message|result|status|summary|terminal|text/iu;
 
@@ -506,14 +506,14 @@ function isProvedStructuredFileListBlock(data) {
       || !exactKeys(block, ['file_list'])) return false;
   const fileList = block.file_list;
   if (!fileList || typeof fileList !== 'object' || Array.isArray(fileList)
-      || !exactKeys(fileList, ['description', 'files', 'status', 'tool_id'])
+      || !(exactKeys(fileList, ['description', 'files', 'status', 'tool_id'])
+        || (exactKeys(fileList, ['description', 'status', 'tool_id']) && fileList.status === 1))
       || !boundedOptionalString(fileList.description, 2_048)
       || !boundedOptionalString(fileList.tool_id, 512)
       || !Number.isInteger(fileList.status)
-      || !Array.isArray(fileList.files)
-      || fileList.files.length < 1
-      || fileList.files.length > MAX_NORMALIZED_SOURCES) return false;
-  return fileList.files.every(isProvedStructuredFileItem);
+      || (fileList.files !== undefined && (!Array.isArray(fileList.files)
+        || fileList.files.length < 1 || fileList.files.length > MAX_NORMALIZED_SOURCES))) return false;
+  return (fileList.files || []).every(isProvedStructuredFileItem);
 }
 
 function isProvedStructuredFileContentBlock(data) {
@@ -534,7 +534,36 @@ function isProvedStructuredFileContentBlock(data) {
   return isProvedStructuredFileItem(content.media);
 }
 
+// Observed in the first-party browser's completed 2026-10-14 answer. These
+// expanded file cards remain operational metadata, never citation associations.
+function isProvedExpandedFileItem(item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+  const common = ['cover', 'index', 'introduction', 'jumpUrl', 'logo', 'subtitle', 'title', 'type'];
+  const webShape = exactKeys(item, common) || exactKeys(item, [...common, 'timestamp']);
+  const knowledgeShape = exactKeys(item, [...common, 'timestamp', 'id', 'sourceType', 'knowledgeBaseInfo']);
+  if (!webShape && !knowledgeShape) return false;
+  if (!boundedControlString(item.title, MAX_SOURCE_TITLE_LENGTH)
+      || !boundedOptionalString(item.subtitle, 2_048)
+      || !boundedOptionalMessageText(item.introduction, MAX_SOURCE_SNIPPET_LENGTH)
+      || !boundedOptionalString(item.jumpUrl, 8_192)
+      || !boundedOptionalString(item.logo, 8_192) || !boundedOptionalString(item.cover, 8_192)
+      || !Number.isSafeInteger(item.index) || item.index < 0
+      || (item.timestamp !== undefined && (!Number.isSafeInteger(item.timestamp) || item.timestamp < 0))) return false;
+  if (webShape) return item.type === 2;
+  const kb = item.knowledgeBaseInfo;
+  return [1, 6].includes(item.type) && item.sourceType === 1
+    && boundedControlString(item.id, 2_048)
+    && kb && typeof kb === 'object' && !Array.isArray(kb)
+    && exactKeys(kb, ['id', 'name', 'introduction', 'description', 'creatorName', 'permissionType'])
+    && boundedControlString(kb.id, 2_048) && boundedOptionalString(kb.name, MAX_SOURCE_TITLE_LENGTH)
+    && boundedOptionalMessageText(kb.introduction, MAX_SOURCE_SNIPPET_LENGTH)
+    && boundedOptionalMessageText(kb.description, MAX_SOURCE_SNIPPET_LENGTH)
+    && boundedOptionalString(kb.creatorName, MAX_SOURCE_TITLE_LENGTH)
+    && Number.isSafeInteger(kb.permissionType);
+}
+
 function isProvedStructuredFileItem(item) {
+  if (isProvedExpandedFileItem(item)) return true;
   if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
   if (exactKeys(item, ['id', 'logo', 'sourceType', 'title', 'type'])) {
     return boundedControlString(item.id, 2_048)
@@ -624,6 +653,7 @@ function structuredReferenceItemCategory(item) {
     return 'discardable';
   }
   if (item.type !== undefined && !Number.isInteger(item.type)) return 'discardable';
+  if (item.reference_content_type !== undefined && item.reference_content_type !== 2) return 'discardable';
   if (item.sourceType !== undefined && ![0, 1, 2].includes(item.sourceType)) {
     return 'discardable';
   }
@@ -861,7 +891,7 @@ function extractSourceRecords(event, seenSources, options = {}) {
     .concat(Array.isArray(data.Medias) ? data.Medias : [])
     .concat(Array.isArray(data.references) ? data.references : [])
     .concat(Array.isArray(data.items) ? data.items : [])
-    .concat(isProvedStructuredFileListBlock(data) ? data.Data.file_list.files : [])
+    .concat(isProvedStructuredFileListBlock(data) ? (data.Data.file_list.files || []) : [])
     .concat(isProvedStructuredFileContentBlock(data) ? [data.Data.file_content.media] : [])
     .concat(isProvedStructuredReferenceIndexesBlock(data)
       ? Object.entries(data.Data.reference_indexes.indexes)
@@ -881,6 +911,9 @@ function extractSourceRecords(event, seenSources, options = {}) {
       observeNormalizationDiagnostic(options.onNormalizationDiagnostic, 'source_item_discarded');
       continue;
     }
+    // Expanded cards without an explicit sourceType do not prove knowledge
+    // provenance. Their keyed referenceIndexes provide the actual web evidence.
+    if (isProvedExpandedFileItem(item) && item.sourceType === undefined) continue;
     const rawTitle = String(item.title || item.name || '未命名资料').trim();
     const rawSnippet = String(
       item.publisher || item.knowledgeBaseInfo?.name || item.content
