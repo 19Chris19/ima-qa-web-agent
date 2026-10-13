@@ -23,6 +23,12 @@ async function page(t, options = {}) {
   w.TextEncoder = TextEncoder;
   Object.defineProperty(w, 'crypto', { value: webcrypto });
   const calls = [], copied = [], delays = [], records = options.records || [];
+  const frames = new Map(), paints = [];
+  let nextFrame = 0;
+  if (options.manualFrames) {
+    w.requestAnimationFrame = callback => { frames.set(++nextFrame, callback); return nextFrame; };
+    w.cancelAnimationFrame = id => frames.delete(id);
+  }
   const streams = new Map(), histories = options.histories || {};
   let nextConversation = 0;
   if (options.conversationId) w.localStorage.setItem('ima-qa-conversation-id', options.conversationId);
@@ -53,7 +59,7 @@ async function page(t, options = {}) {
     if (url === '/api/tasks' && init.method === 'POST') {
       const payload = JSON.parse(init.body);
       const record = { task: {
-        id: `synthetic-task-${records.length + 1}`, conversationId: payload.conversationId, status: 'running',
+        id: `synthetic-task-${records.length + 1}`, conversationId: payload.conversationId, status: options.taskStatus || 'running',
         requestKey: createHash('sha256').update(init.headers['Idempotency-Key']).digest('hex'),
       }, events: [] };
       records.push(record);
@@ -95,11 +101,19 @@ async function page(t, options = {}) {
   }
   for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
+    if (file === 'answer-renderer.js') {
+      const render = w.ImaAnswerRenderer.updateAnswerElement;
+      w.ImaAnswerRenderer.updateAnswerElement = (target, markdown, settings) => {
+        paints.push({ markdown, settings });
+        return render(target, markdown, settings);
+      };
+    }
   }
   t.after(() => { w.dispatchEvent(new w.Event('pagehide')); w.close(); });
   await waitFor(() => calls.some(call => call.url.startsWith('/api/conversations?')));
   await tick();
-  return { w, d, calls, copied, delays, records, streams, histories, emit,
+  return { w, d, calls, copied, delays, records, streams, histories, emit, paints, frames,
+    paintFrame() { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); },
     submit(text = 'synthetic question') {
       d.querySelector('#questionInput').value = text;
       d.querySelector('#askForm').dispatchEvent(new w.Event('submit', { cancelable: true }));
@@ -110,6 +124,157 @@ async function page(t, options = {}) {
       emit(id, 'task.status', { status });
     },
   };
+}
+
+const deferred = () => {
+  let release;
+  const promise = new Promise(resolve => { release = resolve; });
+  return { promise, release };
+};
+
+for (const mode of ['index', 'embed']) {
+  test(`${mode}: burst paints once per frame and terminal flush preserves exact Markdown`, async t => {
+    const p = await page(t, { mode, manualFrames: true });
+    p.submit(); await waitFor(() => p.streams.size === 1);
+    const first = '\r\n# Synthetic burst\r\n\r\n| A | B |\r\n| --- | --- |\r\n| 你好 | 👩‍💻 |\r\n' + ' body '.repeat(80);
+    for (const text of Array.from(first)) p.emit('synthetic-task-1', 'delta', { text });
+    await waitFor(() => p.d.querySelector('#statusPill').textContent === '生成中');
+    await tick();
+    assert.equal(p.frames.size, 1);
+    assert.equal(p.paints.filter(row => row.settings?.streaming).length, 0);
+    p.paintFrame();
+    const streaming = p.paints.filter(row => row.settings?.streaming);
+    assert.equal(streaming.length, 1);
+    assert.equal(streaming[0].markdown, first);
+    const final = first + '\r\n```js\r\n  const n = 1;\r\n```\r\n';
+    p.emit('synthetic-task-1', 'delta', { text: final.slice(first.length) });
+    await tick();
+    assert.equal(p.frames.size, 1);
+    p.complete(); await waitFor(() => p.d.querySelector('.answer-copy'));
+    assert.equal(p.frames.size, 0, 'terminal flush must not wait for another animation frame');
+    p.d.querySelector('.answer-copy').click(); await tick();
+    assert.deepEqual(p.copied, [final]);
+    assert.equal(p.d.querySelectorAll('.message.user').length, 1);
+    assert.equal(p.calls.filter(call => call.url === '/api/tasks' && call.method === 'POST').length, 1);
+  });
+
+  test(`${mode}: click feedback precedes network and definite rejection restores the exact draft`, async t => {
+    const create = deferred(), post = deferred();
+    t.after(() => { create.release(); post.release(); });
+    const p = await page(t, { mode, intercept: async (url, init) => {
+      if (url === '/api/conversations') { await create.promise; return Response.json({ conversation: { conversationId: 'synthetic-conversation-1' } }); }
+      if (url === '/api/tasks' && init.method === 'POST') { await post.promise; return Response.json({ error: 'synthetic rejected' }, { status: 429 }); }
+    } });
+    const original = '  Synthetic retained draft\n';
+    p.submit(original);
+    const primary = p.d.querySelector('#sendButton');
+    assert.equal(primary.classList.contains('is-submitting'), true);
+    assert.equal(primary.getAttribute('aria-busy'), 'true');
+    assert.equal(primary.disabled, true);
+    assert.match(p.d.querySelector('#composerNotice').textContent, /准备会话/);
+    assert.equal(p.d.querySelectorAll('.message.user').length, 1);
+    p.d.querySelector('#askForm').dispatchEvent(new p.w.Event('submit', { cancelable: true }));
+    assert.equal(p.calls.filter(call => call.url === '/api/conversations' && call.method === 'POST').length, 1);
+    create.release(); await waitFor(() => p.calls.some(call => call.url === '/api/tasks'));
+    assert.match(p.d.querySelector('#composerNotice').textContent, /发送问题/);
+    post.release(); await waitFor(() => primary.getAttribute('aria-label') === '发送');
+    assert.equal(p.d.querySelector('#questionInput').value, original);
+    assert.match(p.d.querySelector('#composerNotice').textContent, /草稿已恢复/);
+    assert.equal(primary.getAttribute('aria-busy'), 'false');
+    assert.equal(p.w.localStorage.getItem('ima-qa-task-reference'), null);
+    assert.equal(p.calls.filter(call => call.url === '/api/tasks' && call.method === 'POST').length, 1);
+  });
+}
+
+for (const newerDraft of ['Synthetic next draft', '']) {
+  test(`definite rejection never overwrites an edited draft (${newerDraft ? 'text' : 'deleted'})`, async t => {
+    const post = deferred(); t.after(() => post.release());
+    const p = await page(t, { intercept: async (url, init) => {
+      if (url === '/api/tasks' && init.method === 'POST') { await post.promise; return Response.json({}, { status: 409 }); }
+    } });
+    p.submit('Synthetic original'); await waitFor(() => p.calls.some(call => call.url === '/api/tasks'));
+    const input = p.d.querySelector('#questionInput');
+    input.value = 'edited'; input.dispatchEvent(new p.w.Event('input'));
+    input.value = newerDraft; input.dispatchEvent(new p.w.Event('input'));
+    post.release(); await waitFor(() => p.d.querySelector('#sendButton').getAttribute('aria-label') === '发送');
+    assert.equal(input.value, newerDraft);
+    assert.doesNotMatch(p.d.querySelector('#composerNotice').textContent, /草稿已恢复/);
+  });
+}
+
+test('failed conversation creation restores draft without dispatching a task', async t => {
+  const p = await page(t, { intercept: url => url === '/api/conversations' ? Response.json({}, { status: 503 }) : undefined });
+  p.submit('Synthetic retained question');
+  await waitFor(() => p.d.querySelector('#sendButton').getAttribute('aria-label') === '发送');
+  assert.equal(p.d.querySelector('#questionInput').value, 'Synthetic retained question');
+  assert.equal(p.calls.some(call => call.url === '/api/tasks'), false);
+});
+
+test('HTTP 408 remains ambiguous: query the original identity, keep sends blocked and never restore/resubmit', async t => {
+  const p = await page(t, { intercept: (url, init) => url === '/api/tasks' && init.method === 'POST'
+    ? Response.json({}, { status: 408 }) : undefined });
+  p.submit('Synthetic uncertain question');
+  await waitFor(() => !p.d.querySelector('.task-reconnect').hidden);
+  assert.equal(p.d.querySelector('#questionInput').value, '');
+  assert.ok(p.w.localStorage.getItem('ima-qa-task-reference'));
+  assert.ok(p.calls.some(call => call.url.includes('requestKey=')));
+  assert.equal(p.d.querySelector('#sendButton').disabled, true);
+  p.submit('Do not dispatch'); await tick();
+  assert.equal(p.calls.filter(call => call.url === '/api/tasks' && call.method === 'POST').length, 1);
+  assert.equal(p.calls.some(call => call.method === 'DELETE'), false);
+});
+
+test('queued, waiting, generating and reconnecting reflect real task/transport evidence', async t => {
+  let snapshots = 0;
+  const recovery = deferred(); t.after(() => recovery.release());
+  const p = await page(t, { taskStatus: 'queued', intercept: async url => {
+    if (url === '/api/tasks/synthetic-task-1' && ++snapshots > 1) await recovery.promise;
+  } });
+  p.submit(); await waitFor(() => p.streams.size === 1);
+  assert.equal(p.d.querySelector('#statusPill').textContent, '排队中');
+  p.records[0].task.status = 'running';
+  p.emit('synthetic-task-1', 'task.status', { status: 'running' });
+  await waitFor(() => p.d.querySelector('#statusPill').textContent === '等待回答');
+  p.emit('synthetic-task-1', 'process', { text: 'Synthetic upstream message' });
+  await tick(); assert.equal(p.d.querySelector('#statusPill').textContent, '等待回答');
+  p.emit('synthetic-task-1', 'delta', { text: 'Synthetic received text' });
+  await waitFor(() => p.d.querySelector('#statusPill').textContent === '生成中');
+  p.streams.get('synthetic-task-1').close(); p.streams.delete('synthetic-task-1');
+  await waitFor(() => p.d.querySelector('#statusPill').textContent === '重新连接中');
+  assert.match(p.d.querySelector('#composerNotice').textContent, /同一任务/);
+  assert.match(p.d.querySelector('.message:last-child .answer-markdown').textContent, /Synthetic received text/);
+  recovery.release(); await waitFor(() => p.streams.size === 1);
+  assert.equal(p.d.querySelector('#statusPill').textContent, '生成中');
+  p.complete(); await waitFor(() => p.d.querySelector('.answer-copy'));
+});
+
+test('switching conversation discards an unpainted frame without cancelling the old task', async t => {
+  const p = await page(t, { manualFrames: true });
+  p.submit(); await waitFor(() => p.streams.size === 1);
+  p.emit('synthetic-task-1', 'delta', { text: 'Synthetic stale frame' });
+  await waitFor(() => p.frames.size === 1);
+  p.d.querySelector('#newConversationButton').click();
+  await waitFor(() => p.w.localStorage.getItem('ima-qa-conversation-id') === 'synthetic-conversation-2');
+  assert.equal(p.frames.size, 0);
+  p.paintFrame();
+  assert.doesNotMatch(p.d.querySelector('#chatLog').textContent, /stale frame/);
+  assert.equal(p.records[0].task.status, 'running');
+  assert.equal(p.calls.some(call => call.method === 'DELETE'), false);
+});
+
+for (const status of ['failed', 'cancelled', 'indeterminate']) {
+  test(`${status} flushes an unpainted partial answer and cancels the pending frame`, async t => {
+    const p = await page(t, { manualFrames: true });
+    p.submit(); await waitFor(() => p.streams.size === 1);
+    p.emit('synthetic-task-1', 'delta', { text: '**Synthetic exact partial**\n' });
+    await waitFor(() => p.frames.size === 1);
+    p.complete('synthetic-task-1', status);
+    await waitFor(() => p.d.querySelector('.answer-copy'));
+    assert.equal(p.frames.size, 0);
+    assert.match(p.d.querySelector('.answer-failure').textContent, /未完成/);
+    p.d.querySelector('.answer-copy').click(); await tick();
+    assert.deepEqual(p.copied, ['**Synthetic exact partial**\n']);
+  });
 }
 
 for (const mode of ['index', 'embed']) {

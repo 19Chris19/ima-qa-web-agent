@@ -24,6 +24,17 @@
   let navigating = true;
   let recoveryRequired = false;
   let connectionNotice = '';
+  let draftRevision = 0;
+  const phases = {
+    preparing: ['准备会话', '正在准备会话…'],
+    submitting: ['提交中', '正在发送问题…'],
+    confirming: ['确认提交结果', '正在确认是否已接收，请勿重复提交。'],
+    queued: ['排队中', '问题已接收，正在排队…'],
+    waiting: ['等待回答', '问题已接收，正在等待回答内容…'],
+    generating: ['生成中', ''],
+    reconnecting: ['重新连接中', '连接暂时中断，正在恢复同一任务，请勿重复提交。'],
+    stopping: ['停止确认中', '正在确认停止结果…'],
+  };
   const taskStorageKey = 'ima-qa-task-reference';
   const tasks = window.ProviderQaTasks.create(requestOptions);
   const terminal = window.ProviderQaTasks.terminal;
@@ -47,7 +58,7 @@
     if (activeView.task) void watchTask(activeView);
     else void recoverSubmission(activeView);
   });
-  window.addEventListener('pagehide', () => activeView?.controller?.abort());
+  window.addEventListener('pagehide', detachView);
   experience.selectionCopy(chatLog);
   latest.addEventListener('click', () => {
     followStreamingAnswer = true;
@@ -58,14 +69,19 @@
   function updateComposer() {
     const hasDraft = Boolean(input.value.trim());
     const stop = isBusy;
+    const submitting = isBusy && !legacyProvider && ['preparing', 'submitting', 'confirming'].includes(activeView?.phase);
     sendButton.classList.toggle('is-busy', stop);
-    sendButton.title = stop ? '停止回答' : '发送';
+    sendButton.classList.toggle('is-submitting', submitting);
+    sendButton.title = submitting ? phases[activeView.phase][0] : stop ? '停止回答' : '发送';
     sendButton.setAttribute('aria-label', sendButton.title);
+    sendButton.setAttribute('aria-busy', String(submitting));
+    form.setAttribute('aria-busy', String(submitting));
     sendButton.disabled = navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)
       || (isBusy && ((!legacyProvider && !activeView?.task) || activeView.stopping));
     sendButton.setAttribute('aria-disabled', String(sendButton.disabled));
     notice.textContent = connectionNotice || (!tasksEnabled && !legacyProvider ? '持久任务暂不可用。'
-      : isBusy && hasDraft ? '草稿已保留。请先停止或等待当前回答完成，再发送。' : '');
+      : [isBusy ? phases[activeView?.phase]?.[1] : '',
+        isBusy && hasDraft ? '草稿已保留。请先停止或等待当前回答完成，再发送。' : ''].filter(Boolean).join(' '));
     newConversationButton.disabled = navigating;
     resizeComposer();
   }
@@ -80,6 +96,7 @@
   });
 
   input.addEventListener('input', () => {
+    draftRevision += 1;
     updateComposer();
   });
 
@@ -279,10 +296,11 @@
     const question = rawQuestion.trim();
     if (!question || isBusy || navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)) return;
     const view = beginView();
+    view.originalDraft = rawQuestion;
+    view.draftRevision = draftRevision;
     followStreamingAnswer = true;
-    setStatus('busy', '提交中');
     input.value = '';
-    updateComposer();
+    setTaskPhase(view, legacyProvider || conversationId ? 'submitting' : 'preparing');
     appendMessage('user', question);
     view.message = appendMessage('assistant', '', { pending: true });
     if (legacyProvider) {
@@ -311,6 +329,7 @@
       }
       const identity = await tasks.identity();
       if (!current(view)) return;
+      setTaskPhase(view, 'submitting');
       view.reference = { conversationId, requestKey: identity.requestKey };
       localStorage.setItem(taskStorageKey, JSON.stringify(view.reference));
       view.submitted = true;
@@ -321,15 +340,22 @@
       void watchTask(view);
     } catch (error) {
       if (!current(view)) return;
-      if (view.submitted && (!error.status || error.status >= 500)) {
+      if (view.submitted && (!error.status || error.status === 408 || error.status >= 500)) {
         await recoverSubmission(view);
       } else {
+        // Only definite non-acceptance restores a draft; ambiguous submissions stay blocked.
+        view.submissionRejected = true;
+        if (draftRevision === view.draftRevision && !input.value) {
+          input.value = view.originalDraft;
+          view.draftRestored = true;
+        }
         finishTask(view, 'failed', error.message);
       }
     }
   }
 
   function detachView() {
+    activeView?.frame.dispose();
     activeView?.controller?.abort();
     activeView = null;
     isBusy = false;
@@ -341,12 +367,20 @@
 
   function beginView(epoch = detachView()) {
     const view = { epoch, controller: new AbortController(), message: null, restored: false, subscription: 0 };
+    view.frame = experience.frameUpdater(() => paintTask(view));
     activeView = view;
     isBusy = true;
     return view;
   }
 
   function current(view) { return activeView === view && view.epoch === viewEpoch; }
+
+  function setTaskPhase(view, phase) {
+    if (!current(view) || view.phase === phase) return;
+    view.phase = phase;
+    setStatus('busy', phases[phase][0]);
+    updateComposer();
+  }
 
   function attachTask(view, task) {
     view.task = task;
@@ -356,12 +390,13 @@
     }
     view.reference = { ...view.reference, id: task.id, conversationId: task.conversationId };
     localStorage.setItem(taskStorageKey, JSON.stringify(view.reference));
+    setTaskPhase(view, task.status === 'queued' ? 'queued' : view.message?.answer ? 'generating' : 'waiting');
     updateComposer();
   }
 
   async function recoverSubmission(view) {
     connectionNotice = '';
-    setStatus('busy', '确认提交结果');
+    setTaskPhase(view, 'confirming');
     try {
       const matches = await tasks.list({ conversationId: view.reference.conversationId, requestKey: view.reference.requestKey });
       if (!current(view)) return;
@@ -392,6 +427,8 @@
   }
 
   function showReconnect(message) {
+    activeView?.frame.flush();
+    if (activeView) activeView.phase = '';
     connectionNotice = message;
     setStatus('error', '待恢复');
     reconnect.hidden = false;
@@ -407,11 +444,15 @@
     const subscribed = () => current(view) && subscription === view.subscription;
     reconnect.hidden = true;
     // A fresh subscription replays the full snapshot into the same answer slot.
+    view.frame.flush();
     if (view.message) {
       view.message.answer = '';
       view.message.sources = [];
       view.message.bubble.querySelector('.sources')?.remove();
     }
+    view.answerDirty = false;
+    view.sourcesDirty = false;
+    view.processDirty = false;
     view.error = '';
     try {
       const result = await tasks.follow(view.task.id, {
@@ -420,9 +461,12 @@
           if (subscribed() && !(view.restored && view.task.status === 'succeeded')) renderTaskEvent(view, event);
         },
         onStatus: status => {
-          if (subscribed()) setStatus('busy', status === 'queued' ? '排队中' : '回答中');
+          if (!subscribed() || terminal(status)) return;
+          setTaskPhase(view, view.stopping ? 'stopping' : view.message?.answer ? 'generating' : status === 'queued' ? 'queued' : 'waiting');
         },
-        onReconnect: () => { if (subscribed()) setStatus('busy', '重新连接中'); },
+        onReconnect: () => {
+          if (subscribed()) { view.frame.flush(); setTaskPhase(view, 'reconnecting'); }
+        },
       });
       if (!subscribed() || !result) return;
       if ((view.restored && result.task.status === 'succeeded') || result.eventsExpired) {
@@ -430,6 +474,7 @@
         if (!response.ok) throw new Error('无法恢复会话历史');
         const data = await response.json();
         if (!subscribed()) return;
+        view.frame.dispose();
         renderHistory(data.messages || []);
         view.message = null;
       }
@@ -447,28 +492,53 @@
     if (event.event === 'sources') {
       message.sources = event.data.sources || [];
       message.searchSummary = event.data.searchSummary || '';
-      renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary });
+      view.sourcesDirty = true;
+      view.answerDirty = true;
     }
-    if (event.event === 'delta') message.answer += event.data.text || '';
+    if (event.event === 'delta') {
+      message.answer += event.data.text || '';
+      view.answerDirty = true;
+      if (message.answer) setTaskPhase(view, view.stopping ? 'stopping' : 'generating');
+    }
     if (event.event === 'error') view.error = event.data.error || '回答未完成';
     if (event.event === 'process') {
       const text = event.data.message || event.data.text || event.data.label;
       if (typeof text === 'string' && text) {
-        let process = message.bubble.querySelector('.task-process');
-        if (!process) {
-          process = document.createElement('p');
-          process.className = 'task-process';
-          message.bubble.prepend(process);
-        }
-        process.textContent = text;
+        view.processText = text;
+        view.processDirty = true;
       }
     }
-    renderAnswer(message.text, message.answer, { streaming: true, sourceIndexes: sourceIndexes(message.sources) });
+    view.frame.schedule();
+  }
+
+  function paintTask(view) {
+    if (!current(view) || !view.message?.article.isConnected) return;
+    const message = view.message;
+    if (view.sourcesDirty) {
+      renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary });
+      view.sourcesDirty = false;
+    }
+    if (view.processDirty) {
+      let process = message.bubble.querySelector('.task-process');
+      if (!process) {
+        process = document.createElement('p');
+        process.className = 'task-process';
+        message.bubble.prepend(process);
+      }
+      process.textContent = view.processText;
+      view.processDirty = false;
+    }
+    if (view.answerDirty) {
+      renderAnswer(message.text, message.answer, { streaming: true, sourceIndexes: sourceIndexes(message.sources) });
+      view.answerDirty = false;
+    }
     scrollToBottom({ force: followStreamingAnswer });
   }
 
   function finishTask(view, status, error = '') {
     if (!current(view)) return;
+    view.frame.flush();
+    view.frame.dispose();
     const message = view.message;
     if (message) {
       message.settled = true;
@@ -489,7 +559,9 @@
     }[status] || '未完成');
     localStorage.removeItem(taskStorageKey);
     isBusy = false;
-    connectionNotice = '';
+    connectionNotice = view.submissionRejected
+      ? view.draftRestored ? '问题未被接收，草稿已恢复。请检查后重新发送。' : '问题未被接收，请检查输入后重新发送。'
+      : '';
     activeView = null;
     reconnect.hidden = true;
     updateComposer();
@@ -501,6 +573,7 @@
     if (legacyProvider) { view?.controller.abort(); return; }
     if (!view?.task || view.stopping) return;
     view.stopping = true;
+    setTaskPhase(view, 'stopping');
     updateComposer();
     try {
       await tasks.cancel(view.task.id);
