@@ -18,7 +18,14 @@
 .chat-tool-icon svg { display: block; width: 16px; height: 16px; pointer-events: none; }
 .chat-tool-icon.is-success { color: #18724f; }
 .chat-tool-icon.is-error { color: #ba4545; }
-.chat-card-close { display: block; margin-left: auto; margin-bottom: 8px; }
+.chat-card-close { position: absolute; top: 6px; right: 6px; margin: 0; }
+.chat-citation-card section:first-of-type { padding-right: 24px; }
+.chat-source-title { font-size: 14px; font-weight: 600; line-height: 1.5; }
+.chat-source-domain { font-size: 12px; }
+.chat-citation-card .chat-source-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; font-size: 13px; line-height: 1.65; margin: 10px 0; }
+.chat-source-excerpt.is-empty { color: var(--muted, #687890); }
+.chat-source-open { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; text-decoration: none; }
+.chat-source-open:hover { text-decoration: underline; }
 .chat-table-tools { display: flex; justify-content: flex-end; gap: 2px; align-items: center; min-height: 32px; padding: 3px 6px; color: var(--muted, #718093); position: sticky; left: 0; }
 .chat-partial { order: -1; margin-right: auto; font-size: 12px; }
 .answer-code { position: relative; }

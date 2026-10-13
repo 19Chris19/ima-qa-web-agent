@@ -52,3 +52,18 @@ Supported late citation metadata and recommendations are consumed through upstre
 ## Rollout boundary
 
 Validate synthetic replay first. Real IMA questions and production deployment need separate approval. Deploy the compatible Provider backend before either frontend, preserve private state and the migration compatibility patches, and retain a private backup plus code rollback patch. Never replace the running migration checkout with GitHub main. The Air bot, tunnels and credentials are not changed by this feature.
+
+## First-party browser replay, 2026-10-14
+
+A user-authorized knowledge-and-web question returned a successful terminal,
+21 explicitly keyed web references with supplied excerpts, and three followups.
+The captured browser response also proved `reference_content_type=2`, an initial
+`file_list` progress envelope without `files`, and expanded file-card shapes.
+These shapes now have bounded field validation; extra semantic fields still fail
+closed. Expanded cards without an explicit `sourceType` are not counted as
+knowledge evidence and never determine citation associations. No captured answer,
+knowledge metadata, account state or credentials is committed to the repository.
+
+This validates parsing and local rendering of a real browser response, not a
+production Provider transport deployment. Existing production services remain
+unchanged pending separate deployment approval.

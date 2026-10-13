@@ -53,8 +53,9 @@
     download: '<path d="M12 3v12m-5-5 5 5 5-5M5 17v3h14v-3"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     error: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>',
+    close: '<path d="m6 6 12 12M18 6 6 18"/>',
   };
-  const toolActions = { 'copy-table': 'copy', csv: 'download', 'copy-code': 'copy' };
+  const toolActions = { 'copy-table': 'copy', csv: 'download', 'copy-code': 'copy', 'close-citation': 'close' };
   const feedbackTimers = new WeakMap();
   function setToolIcon(node, icon) {
     node.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${toolIcons[icon]}</svg>`;
@@ -177,18 +178,27 @@
     close.addEventListener('click', () => closeCard(true)); card.append(close);
     for (const source of sources) {
       const section = document.createElement('section');
-      const title = document.createElement('strong'); title.textContent = source.title || '网页来源';
-      const domain = document.createElement('small'); domain.textContent = new URL(webUrl(source.url)).hostname;
+      const title = document.createElement('strong'); title.className = 'chat-source-title'; title.textContent = source.title || '网页来源';
+      const domain = document.createElement('small'); domain.className = 'chat-source-domain'; domain.textContent = new URL(webUrl(source.url)).hostname;
       section.append(title, domain);
-      if (source.snippet) { const excerpt = document.createElement('p'); excerpt.textContent = source.snippet; section.append(excerpt); }
+      const excerpt = document.createElement('p'); excerpt.className = 'chat-source-excerpt';
+      excerpt.textContent = source.snippet || '该网页未提供内容摘录';
+      if (!source.snippet) excerpt.classList.add('is-empty');
+      section.append(excerpt);
       const open = document.createElement('a'); open.href = webUrl(source.url); open.target = '_blank';
-      open.rel = 'noopener noreferrer'; open.textContent = '打开网页'; section.append(open); card.append(section);
+      open.rel = 'noopener noreferrer'; open.className = 'chat-source-open'; open.textContent = '打开网页 ↗'; section.append(open); card.append(section);
     }
     document.body.append(card);
     trigger.setAttribute('aria-expanded', 'true'); trigger.setAttribute('aria-controls', card.id);
     const rect = trigger.getBoundingClientRect();
     card.style.left = `${Math.max(8, Math.min(rect.left, root.innerWidth - card.offsetWidth - 8))}px`;
-    card.style.top = `${Math.max(8, Math.min(rect.bottom + 8, root.innerHeight - card.offsetHeight - 8))}px`;
+    // Pick a side before placing the card. Clamping a tall card upward can
+    // cover its own trigger and intercept the tap that just opened it.
+    const below = Math.max(0, root.innerHeight - rect.bottom - 8);
+    const above = Math.max(0, rect.top - 8);
+    const placeBelow = card.offsetHeight <= below || below >= above;
+    card.style.maxHeight = `${Math.min(400, Math.max(80, placeBelow ? below : above))}px`;
+    card.style.top = `${Math.max(8, placeBelow ? rect.bottom + 8 : rect.top - card.offsetHeight - 8)}px`;
     card.addEventListener('focusout', event => { if (event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
     card.addEventListener('pointerenter', () => clearTimeout(closing));
     card.addEventListener('pointerleave', () => { closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });

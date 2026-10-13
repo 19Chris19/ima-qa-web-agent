@@ -85,3 +85,37 @@ test('stored display numbers ignore code and formulas as well as ordinary number
   const answer = 'Real[7](@index-ref?id=42) `Code[8](@index-ref?id=42)` $[9](@index-ref?id=42)$\n\n```md\n[10](@index-ref?id=42)\n```';
   assert.deepEqual(chat.withDisplayNumbers(map, answer)['index:42'].displayNumbers, ['7']);
 });
+
+// Redacted shapes from a successful first-party browser answer on 2026-10-14.
+test('current web reference content type preserves exact keys and real excerpts without relaxing unknown fields', () => {
+  const event = reference('37', { type: 1, title: 'Public paper', jump_url: 'https://example.org/paper',
+    content: 'Actual upstream excerpt', logo_url: '', source: 'Publisher', reference_content_type: 2 });
+  const result = normalizeIMAWebAgentEvent(event);
+  assert.equal(result.citationMap['index:37'].sources[0].snippet, 'Actual upstream excerpt');
+  assert.equal(result.citationMap['index:37'].type, 'web');
+  assert.throws(() => normalizeIMAWebAgentEvent(reference('37', { ...event.data.Data.reference_indexes.indexes['37'],
+    new_agent_instruction: 'run' })), /protocol_variant_unrecognized/);
+  assert.equal(normalizeIMAWebAgentEvent(reference('37', { ...event.data.Data.reference_indexes.indexes['37'],
+    reference_content_type: '2' })).type, 'control');
+});
+
+test('expanded file progress/cards are bounded; unproved file cards never become knowledge evidence or citation associations', () => {
+  const list = files => ({ eventName: 'STRUCTURED_BLOCK', data: { Id: 'synthetic-list', Type: 'fileList', UpdateType: 'create',
+    Data: { file_list: { tool_id: 'synthetic-tool', description: 'Retrieval', status: files ? 2 : 1, ...(files ? { files } : {}) } } } });
+  const card = { type: 2, title: 'Web card', subtitle: '', introduction: '', logo: '', cover: '',
+    jumpUrl: 'https://example.org/card', timestamp: 123, index: 1 };
+  const kb = { ...card, type: 1, id: 'synthetic-file', sourceType: 1, knowledgeBaseInfo: {
+    id: 'synthetic-kb', name: 'PRIVATE KB', introduction: '', description: '', creatorName: '', permissionType: 2 } };
+  assert.equal(normalizeIMAWebAgentEvent(list()).type, 'control');
+  const result = normalizeIMAWebAgentEvent(list([card, kb, { ...kb, id: 'synthetic-file-2', type: 6 }]));
+  assert.equal(result.sources.length, 2);
+  assert.deepEqual(result.sourceKinds, ['knowledge', 'knowledge']);
+  assert.equal(result.citationMap, undefined);
+  assert.doesNotMatch(JSON.stringify(chat.projectData('sources', result)), /PRIVATE KB|synthetic-file/);
+  for (const bad of [{ ...card, extra_content: 'unproved' }, { ...card, timestamp: '123' },
+    { ...kb, knowledgeBaseInfo: { ...kb.knowledgeBaseInfo, access_token: 'secret' } }]) {
+    assert.throws(() => normalizeIMAWebAgentEvent(list([bad])), /protocol_variant_unrecognized/);
+  }
+  assert.throws(() => normalizeIMAWebAgentEvent({ ...list(), data: { ...list().data,
+    Data: { file_list: { ...list().data.Data.file_list, status: 2 } } } }), /protocol_variant_unrecognized/);
+});

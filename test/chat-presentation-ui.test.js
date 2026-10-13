@@ -38,6 +38,7 @@ test('web marker uses the explicit key, hover/focus/tap preview; knowledge marke
   trigger.dispatchEvent(new p.window.MouseEvent('pointerover', { bubbles: true }));
   const card = p.window.document.querySelector('.chat-citation-card');
   assert.match(card.textContent, /Actual excerpt/);
+  assert.equal(card.querySelector('.chat-card-close').getAttribute('aria-label'), '关闭引用');
   assert.equal(card.querySelector('img'), null);
   assert.equal(card.querySelector('a').href, 'https://example.org/paper');
   assert.equal(p.window.location.href, 'http://127.0.0.1/');
@@ -49,6 +50,7 @@ test('web marker uses the explicit key, hover/focus/tap preview; knowledge marke
   assert.ok(p.window.document.querySelector('.chat-citation-card'));
   p.window.document.querySelector('.chat-card-close').click();
   assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+  assert.equal(p.window.document.activeElement, trigger);
 });
 
 test('ordinary numbers, code and formulas remain literal; source order never turns them into links', t => {
@@ -130,7 +132,22 @@ test('an already open card refreshes when metadata arrives without replacing the
   const marker = p.answer.querySelector('[data-citation-key]');
   marker.focus();
   assert.doesNotMatch(p.window.document.querySelector('.chat-citation-card').textContent, /Late excerpt/);
+  assert.match(p.window.document.querySelector('.chat-citation-card').textContent, /该网页未提供内容摘录/);
   p.render('Reference[7](@index-ref?id=42)', { citationMap: { 'index:42': { type: 'web', sources: [{ url: 'https://example.org/paper', title: 'Web', snippet: 'Late excerpt' }] } } });
   assert.equal(p.answer.querySelector('[data-citation-key]'), marker);
   assert.match(p.window.document.querySelector('.chat-citation-card').textContent, /Late excerpt/);
+  assert.doesNotMatch(p.window.document.querySelector('.chat-citation-card').textContent, /该网页未提供内容摘录/);
+});
+
+
+test('a card near the viewport bottom opens above its marker without intercepting the pending tap', t => {
+  const p = page(t);
+  p.render('Web[7](@index-ref?id=42)', { citationMap: mapping });
+  const marker = p.answer.querySelector('[data-citation-key]');
+  marker.getBoundingClientRect = () => ({ left: 10, top: 740, bottom: 760 });
+  Object.defineProperty(p.window.HTMLElement.prototype, 'offsetHeight', {
+    configurable: true, get() { return this.classList.contains('chat-citation-card') ? 200 : 0; } });
+  marker.focus();
+  const card = p.window.document.querySelector('.chat-citation-card');
+  assert.ok(parseFloat(card.style.top) + card.offsetHeight < marker.getBoundingClientRect().top);
 });
