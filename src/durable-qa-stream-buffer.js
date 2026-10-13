@@ -58,11 +58,19 @@ class DurableQAStreamBuffer {
 
   append(event, data) {
     if (this.closed) return;
-    if (event !== 'delta' || typeof data.text !== 'string' || Object.keys(data).length !== 1) {
+    const hasRequestId = Object.hasOwn(data, 'requestId');
+    if (event !== 'delta' || typeof data.text !== 'string' ||
+        Object.keys(data).some(key => !['text', 'requestId'].includes(key)) ||
+        (hasRequestId && typeof data.requestId !== 'string')) {
       this.flush({ event, data });
       return;
     }
     if (!data.text) { this.flush({ event, data }); return; }
+    // Provider response deltas include the request ID. Keep it unchanged, and
+    // never merge text belonging to a different metadata envelope.
+    if (this.text && (this.hasRequestId !== hasRequestId || this.requestId !== data.requestId)) this.flush();
+    this.hasRequestId = hasRequestId;
+    this.requestId = data.requestId;
     this.trace.firstAnswerDeltaAt ??= this.store.now();
     this.text += data.text;
     this.textBytes += Buffer.byteLength(data.text);
@@ -80,7 +88,8 @@ class DurableQAStreamBuffer {
     clearTimeout(this.deltaTimer); this.deltaTimer = null;
     clearTimeout(this.traceTimer); this.traceTimer = null;
     const events = [];
-    if (this.text) events.push({ event: 'delta', data: { text: this.text } });
+    if (this.text) events.push({ event: 'delta', data: { text: this.text,
+      ...(this.hasRequestId ? { requestId: this.requestId } : {}) } });
     if (extra) events.push(extra);
     const trace = this.trace;
     // On a rejected write none of these events were published. Do not retry an
