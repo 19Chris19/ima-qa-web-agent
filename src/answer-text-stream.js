@@ -7,13 +7,13 @@ function sanitizeIMAAnswerText(answer) {
   return String(answer || '').replace(COMPLETE_CONTEXT_REF, '');
 }
 
-function createAnswerTextStream() {
+function createAnswerTextStream({ preserveCitations = false } = {}) {
   let pending = '';
 
   return {
     push(chunk) {
       pending += String(chunk || '');
-      const candidate = contextRefTailStart(pending);
+      const candidate = preserveCitations ? -1 : contextRefTailStart(pending);
       if (candidate >= 0) {
         const stable = pending.slice(0, candidate);
         pending = pending.slice(candidate);
@@ -25,7 +25,7 @@ function createAnswerTextStream() {
       return stable;
     },
     finish() {
-      const stable = sanitizeIMAAnswerText(pending);
+      const stable = preserveCitations ? pending : sanitizeIMAAnswerText(pending);
       pending = '';
       return stable;
     },

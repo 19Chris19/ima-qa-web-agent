@@ -1,3 +1,4 @@
+const chat = require('./chat-presentation');
 // Pure JSON-input audit against the website's schema-v1 archive contract.
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const fail = code => { throw code; };
@@ -140,7 +141,7 @@ function conversation(row, report, options) {
   let previous = created;
   const turns = [];
   for (const turn of row.turns) {
-    fields(turn, ['question', 'answer', 'createdAt', 'sources', 'searchSummary', 'evidence', ...Object.keys(nativeEvidence)],
+    fields(turn, ['question', 'answer', 'createdAt', 'sources', 'searchSummary', 'evidence', 'citationMap', 'suggestions', 'process', ...Object.keys(nativeEvidence)],
       ['turnRef', 'taskId', 'cookie', ...l0Fields], report);
     for (const key of l0Fields.filter(key => own(turn, key))) {
       const value = turn[key];
@@ -160,7 +161,8 @@ function conversation(row, report, options) {
       sources = turn.sources.map(item => source(item, report, options));
     }
     if (own(turn, 'searchSummary') && turn.searchSummary !== null) text(turn.searchSummary, 16000, true);
-    const result = { ...turn, sources, evidence: turnEvidence(turn, report) };
+    const result = { ...turn, sources, evidence: turnEvidence(turn, report),
+      ...(Object.hasOwn(turn, 'citationMap') || Object.hasOwn(turn, 'suggestions') || Object.hasOwn(turn, 'process') ? chat.metadata(turn) : {}) };
     turns.push(result);
   }
   return { ...row, turns };

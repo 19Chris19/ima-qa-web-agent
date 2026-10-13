@@ -1,3 +1,4 @@
+const chat = require('./chat-presentation');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -150,6 +151,7 @@ function exportHistoryWithReport(store, options = {}) {
         return { question: turn.question, answer: turn.answer, createdAt: turn.createdAt,
           sources: Array.isArray(turn.sources) ? turn.sources.map(exportSource) : [],
           searchSummary: turn.searchSummary ?? null,
+          ...chat.metadata(turn),
           evidence: turn.evidence ? exportEvidence(turn.evidence) : undefined };
       }) };
   }) };

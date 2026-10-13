@@ -1,5 +1,6 @@
 'use strict';
 
+const chat = require('./chat-presentation');
 const { setImmediate: yieldToEventLoop } = require('node:timers/promises');
 
 const DEFAULT_MAX_EVENT_BYTES = 896 * 1024;
@@ -93,7 +94,7 @@ async function* parseIMAWebAgentStream(response, options = {}) {
           boundary = buffer.indexOf('\n\n');
           continue;
         }
-        if (terminalSeen) {
+        if (terminalSeen && result.type !== 'suggestions' && !(result.type === 'sources' && Object.keys(result.citationMap || {}).length)) {
           throw new IMAUpstreamProtocolError(
             result.type === 'done' ? 'upstream_terminal_duplicate' : 'upstream_event_after_terminal',
           );
@@ -139,7 +140,7 @@ async function* parseIMAWebAgentStream(response, options = {}) {
         statusNoticeSeen = true;
       }
     } else {
-      if (terminalSeen) {
+      if (terminalSeen && result.type !== 'suggestions' && !(result.type === 'sources' && Object.keys(result.citationMap || {}).length)) {
         throw new IMAUpstreamProtocolError(
           result.type === 'done' ? 'upstream_terminal_duplicate' : 'upstream_event_after_terminal',
         );
@@ -219,6 +220,10 @@ function parseIMAWebAgentEvent(eventBlock) {
 
 function normalizeIMAWebAgentEvent(event, seenSources = new Set(), options = {}) {
   const eventFamily = eventFamilyFromName(canonicalEventName(event), event?.data);
+  if (String(canonicalEventName(event)).replace(/[_\s-]/gu, '').toLowerCase() === 'suggestquestion') {
+    const questions = chat.suggestions(event.data);
+    return questions.length ? { type: 'suggestions', suggestions: questions } : { type: 'control' };
+  }
   if (eventFamily === 'unknown') {
     observeEventDescriptor(options.onUnknownEventDescriptor, event);
     throw new IMAUpstreamProtocolError('protocol_variant_unrecognized');
@@ -245,8 +250,9 @@ function normalizeIMAWebAgentEvent(event, seenSources = new Set(), options = {})
     const searchSummary = typeof event.data?.processing === 'string'
       ? event.data.processing
       : '';
-    return sources.length > 0 || searchSummary
-      ? { type: 'sources', sources, searchSummary, sourceKind, sourceKinds }
+    const citationMap = extractCitationMap(event, options);
+    return sources.length > 0 || searchSummary || Object.keys(citationMap).length
+      ? { type: 'sources', sources, searchSummary, sourceKind, sourceKinds, ...(Object.keys(citationMap).length ? { citationMap } : {}) }
       : { type: 'control' };
   }
   const completion = completionCode(event.data);
@@ -808,6 +814,45 @@ function pickMessageChunk(data) {
   return '';
 }
 
+function extractCitationMap(event, options) {
+  const result = {};
+  const data = event.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return result;
+  const add = (namespace, key, item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    const isContext = namespace === 'context';
+    const type = isContext && item.sourceType === undefined ? 'unknown' : classifySourceKind(options.sourceClassifier, event, item);
+    const url = chat.webUrl(item.url || item.href || item.jumpUrl || item.jump_url);
+    const entry = { type, ...(type === 'web' && url ? { sources: [{ url,
+      title: normalizeSourceText(item.title || item.name, 512),
+      // Publisher / knowledge-base names are not excerpts.
+      snippet: normalizeSourceText(item.content || item.snippet || item.context, 5000) }] } : {}) };
+    const merged = chat.mergeCitations(result, { [`${namespace}:${key}`]: entry });
+    Object.assign(result, merged);
+  };
+  if (isProvedStructuredReferenceIndexesBlock(data)) {
+    for (const [key, item] of Object.entries(data.Data.reference_indexes.indexes)) {
+      if (structuredReferenceItemCategory(item) === 'valid') add('index', key, item);
+    }
+  } else if (String(canonicalEventName(event)).replace(/[_\s-]/gu, '').toLowerCase() === 'contextreferences') {
+    // CONTEXT_REFERENCES is a dictionary keyed by the id in @context-ref.
+    // Older array envelopes require an explicit referenceKey/id, never their position.
+    const arrays = ['references', 'items'].flatMap(key => Array.isArray(data[key]) ? data[key] : []);
+    if (arrays.length) {
+      for (const item of arrays) {
+        const key = item?.referenceKey ?? item?.reference_key ?? item?.id;
+        if (typeof key === 'string' || Number.isSafeInteger(key)) add('context', key, item);
+      }
+    } else {
+      for (const [key, values] of Object.entries(data).slice(0, 100)) {
+        if (!Array.isArray(values)) continue;
+        for (const item of values.slice(0, 10)) add('context', key, item);
+      }
+    }
+  }
+  return result;
+}
+
 function extractSourceRecords(event, seenSources, options = {}) {
   const data = event?.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
@@ -875,6 +920,8 @@ function extractSourceRecords(event, seenSources, options = {}) {
 }
 
 function classifySourceKind(classifier, event, item) {
+  if (isProvedStructuredReferenceIndexesBlock(event?.data) && item?.sourceType === undefined
+      && [1, 2].includes(item?.type)) item = { ...item, sourceType: item.type === 1 ? 0 : 2 };
   if (typeof classifier !== 'function') return sourceKindFromEvent(event, item);
   let result;
   try {

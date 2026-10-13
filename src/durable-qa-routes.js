@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const chat = require('./chat-presentation');
 const { fault } = require('./durable-qa-store');
 
 function registerDurableQARoutes(app, { tasks, config, conversations, webReadiness,
@@ -14,6 +15,8 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
     router.use(auth, (req, res, next) => {
       res.setHeader('Cache-Control', 'no-store');
       if (!tasks?.available) return res.status(503).json({ error: 'task_store_unavailable', failureReason: 'task_store_unavailable' });
+      if (req.query.presentation !== undefined && req.query.presentation !== 'chat_v1')
+        return res.status(400).json({ error: 'invalid_presentation' });
       req.taskOwner = getConversationOwnerKey(req, res);
       next();
     });
@@ -61,8 +64,9 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
     }));
     router.get('/:id', route((req, res) => {
       const task = tasks.store.owned(req.params.id, req.taskOwner, scope, req.applicationKey || scope);
-      res.json({ task: tasks.store.publicTask(task), snapshot: { events: task.events,
-        ...(task.eventsExpired ? { eventsExpired: true, history: { conversationId: task.input.conversationId, taskId: task.id } } : {}) } });
+      const result = { task: tasks.store.publicTask(task), snapshot: { events: task.events,
+        ...(task.eventsExpired ? { eventsExpired: true, history: { conversationId: task.input.conversationId, taskId: task.id } } : {}) } };
+      res.json(req.query.presentation === 'chat_v1' ? chat.projectSnapshot(result) : result);
     }));
     router.delete('/:id', route((req, res) => {
       res.json({ task: tasks.cancel(req.params.id, req.taskOwner, scope, req.applicationKey || scope) });
@@ -74,7 +78,7 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       const after = Number(cursor);
       if (after > (task.lastEventId ?? task.events.length)) throw fault('cursor_ahead', 409);
       if (task.eventsExpired) throw fault('task_events_expired', 410);
-      tasks.subscribe(task, after, res);
+      tasks.subscribe(task, after, res, req.query.presentation === 'chat_v1' ? chat.projectData : undefined);
     }));
     app.use(base, router);
   }
