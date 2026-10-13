@@ -27,9 +27,11 @@
     const entry = options.citationMap?.[key];
     const previewable = entry?.type === 'web' && entry.sources?.some(source => webUrl(source.url));
     const content = escape(token.text);
+    const kind = ['web', 'knowledge'].includes(entry?.type) ? entry.type : 'unknown';
+    const classes = `chat-citation chat-citation-${kind}`;
     return previewable
-      ? `<sup class="chat-citation"><button type="button" class="chat-citation-button" data-citation-key="${escape(key)}" aria-label="查看网页引用 ${content}" aria-haspopup="dialog" aria-expanded="false">${content}</button></sup>`
-      : `<sup class="chat-citation chat-citation-static" aria-label="引用 ${content}">${content}</sup>`;
+      ? `<sup class="${classes}"><button type="button" class="chat-citation-mark chat-citation-button" data-citation-key="${escape(key)}" aria-label="查看网页引用 ${content}" aria-haspopup="dialog" aria-expanded="false">${content}</button></sup>`
+      : `<sup class="${classes} chat-citation-static" aria-label="${kind === 'knowledge' ? '知识库引用' : '引用'} ${content}"><span class="chat-citation-mark">${content}</span></sup>`;
   }
   function protectMath(tokens, state = { math: '' }) {
     for (const token of tokens || []) {
@@ -46,11 +48,41 @@
       }
     }
   }
+  const toolIcons = {
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+    download: '<path d="M12 3v12m-5-5 5 5 5-5M5 17v3h14v-3"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+    error: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>',
+  };
+  const toolActions = { 'copy-table': 'copy', csv: 'download', 'copy-code': 'copy' };
+  const feedbackTimers = new WeakMap();
+  function setToolIcon(node, icon) {
+    node.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${toolIcons[icon]}</svg>`;
+  }
   function button(document, action, label, disabled = false) {
     const node = document.createElement('button');
     node.type = 'button'; node.className = 'chat-tool'; node.dataset.chatAction = action;
-    node.textContent = label; node.disabled = disabled;
+    node.title = label; node.setAttribute('aria-label', label); node.disabled = disabled;
+    if (toolActions[action]) {
+      node.classList.add('chat-tool-icon'); node.dataset.chatLabel = label;
+      setToolIcon(node, toolActions[action]);
+    } else node.textContent = label;
     return node;
+  }
+  function showToolFeedback(node, success) {
+    const action = node.dataset.chatAction;
+    const label = success ? action === 'csv' ? '表格已下载' : action === 'copy-table' ? '表格已复制' : '代码已复制'
+      : action === 'csv' ? '下载失败，请重试' : '复制失败，请重试';
+    root.clearTimeout(feedbackTimers.get(node));
+    setToolIcon(node, success ? 'check' : 'error');
+    node.classList.toggle('is-success', success); node.classList.toggle('is-error', !success);
+    node.title = label; node.setAttribute('aria-label', label);
+    feedbackTimers.set(node, root.setTimeout(() => {
+      setToolIcon(node, toolActions[action]);
+      node.classList.remove('is-success', 'is-error');
+      node.title = node.dataset.chatLabel; node.setAttribute('aria-label', node.dataset.chatLabel);
+      feedbackTimers.delete(node);
+    }, 1500));
   }
   function validTable(table) {
     const width = table.querySelectorAll('thead tr:first-child th').length;
@@ -64,7 +96,7 @@
       const table = wrap.querySelector('table');
       const tools = document.createElement('div'); tools.className = 'chat-table-tools';
       const disabled = busy || !validTable(table);
-      tools.append(button(document, 'copy-table', '复制表格', disabled), button(document, 'csv', '下载 CSV', disabled));
+      tools.append(button(document, 'copy-table', '复制表格', disabled), button(document, 'csv', '下载表格（CSV）', disabled));
       if (options.partial) {
         const note = document.createElement('span'); note.className = 'chat-partial'; note.textContent = '部分回答'; tools.append(note);
       }
@@ -212,8 +244,8 @@
           const link = element.ownerDocument.createElement('a'); link.href = url; link.download = 'table.csv'; link.click();
           setTimeout(() => root.URL.revokeObjectURL(url), 1000);
         } else return;
-        control.textContent = action === 'csv' ? '已下载' : '已复制';
-      } catch { control.textContent = '复制失败，请重试'; }
+        showToolFeedback(control, true);
+      } catch { showToolFeedback(control, false); }
     });
   }
   function renderSuggestions(container, values, input, disabled = false) {
