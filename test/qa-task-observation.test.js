@@ -108,7 +108,7 @@ test('blackholed status bodies exhaust finite GET retries instead of waiting ind
   await p.advance(15000);
   await rejected;
   assert.equal(p.calls.length, 6);
-  assert.equal(p.calls.every(call => call.signal.aborted && call.url === '/api/tasks/synthetic-task'), true);
+  assert.equal(p.calls.every(call => call.signal.aborted && call.url === '/api/tasks/synthetic-task?presentation=chat_v1'), true);
   assert.equal(controller.signal.aborted, false);
   assert.equal(p.timers.size, 0);
 });

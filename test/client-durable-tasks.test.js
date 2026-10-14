@@ -43,6 +43,8 @@ async function page(t, options = {}) {
   const metadata = record => ({ ...record.task, lastEventId: record.events.length });
   w.fetch = async (url, init = {}) => {
     calls.push({ url, ...init });
+    const parsed = new URL(url, w.location.href); parsed.searchParams.delete('presentation');
+    url = parsed.pathname + (parsed.searchParams.size ? '?' + parsed.searchParams : '');
     const custom = await options.intercept?.(url, init, records);
     if (custom) return custom;
     if (url === '/healthz') return Response.json({ provider: options.provider || 'ima-web-agent', model: 'synthetic' });
@@ -99,7 +101,7 @@ async function page(t, options = {}) {
     if (!sequence) record.events.push(item);
     streams.get(id)?.enqueue(new TextEncoder().encode(`id: ${item.id}\r\nevent: ${event}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`));
   }
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', ...(options.presentation ? ['chat-presentation.js'] : []), 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
     if (file === 'answer-renderer.js') {
       const render = w.ImaAnswerRenderer.updateAnswerElement;
@@ -335,7 +337,7 @@ test('EOF resumes GET same task, snapshot and SSE duplicates never duplicate del
   p.submit(); await waitFor(() => p.streams.size === 1);
   p.emit('synthetic-task-1', 'delta', { text: 'first ' });
   p.streams.get('synthetic-task-1').close(); p.streams.delete('synthetic-task-1');
-  await waitFor(() => p.calls.some(call => call.url.endsWith('/events?after=1')));
+  await waitFor(() => p.calls.some(call => call.url.endsWith('/events?after=1&presentation=chat_v1')));
   await waitFor(() => p.streams.size === 1);
   p.emit('synthetic-task-1', 'delta', { text: 'first ' }, 1);
   p.emit('synthetic-task-1', 'delta', { text: 'second' });
@@ -414,7 +416,7 @@ test('refresh discovers active task from ordinary owner list and reconstructs it
     id: 'synthetic-task-1', conversationId: cid, status: 'running',
   }, events: [{ id: 1, event: 'delta', data: { text: 'partial ' } }] }] });
   await waitFor(() => p.streams.size === 1);
-  assert.ok(p.calls.some(call => call.url.endsWith('/events?after=1')));
+  assert.ok(p.calls.some(call => call.url.endsWith('/events?after=1&presentation=chat_v1')));
   assert.match(p.d.querySelector('.message:last-child .answer-markdown').textContent, /partial/);
   p.histories[cid] = [{ role: 'assistant', content: 'partial complete' }];
   p.emit('synthetic-task-1', 'delta', { text: 'complete' }); p.complete();
@@ -479,7 +481,7 @@ test('sequence gap reconnects through full snapshot and does not commit an out-o
   p.emit('synthetic-task-1', 'delta', { text: 'invalid future' }, 3);
   p.records[0].events.push({ id: 1, event: 'delta', data: { text: 'valid first ' } },
     { id: 2, event: 'delta', data: { text: 'valid second' } });
-  await waitFor(() => p.calls.some(call => call.url.endsWith('/events?after=2')));
+  await waitFor(() => p.calls.some(call => call.url.endsWith('/events?after=2&presentation=chat_v1')));
   await waitFor(() => p.streams.size === 1);
   p.complete(); await waitFor(() => p.d.querySelector('.answer-copy'));
   assert.equal(p.d.querySelector('.message:last-child .answer-markdown').textContent.trim(), 'valid first valid second');
@@ -523,4 +525,26 @@ test('non-IMA local RAG intentionally retains legacy ask without durable capabil
   await waitFor(() => p.d.querySelector('.answer-copy'));
   assert.equal(p.calls.filter(call => call.url === '/api/ask').length, 1);
   assert.equal(p.calls.some(call => call.url === '/api/tasks'), false);
+});
+
+
+for (const mode of ['index', 'embed']) test(`${mode}: chat_v1 metadata reaches the actual composer and native page`, async t => {
+  const p = await page(t, { mode, presentation: true });
+  p.submit(); await waitFor(() => p.streams.size === 1);
+  const id = p.records[0].task.id;
+  p.emit(id, 'sources', { citationMap: { 'index:42': { type: 'web', sources: [{ url: 'https://example.org/one', title: 'Web', snippet: 'excerpt' }] },
+    'index:5': { type: 'knowledge', title: 'PRIVATE KB' } } });
+  p.emit(id, 'process', { phase: 'web', status: 'completed', text: 'PRIVATE PROCESS' });
+  p.emit(id, 'delta', { text: 'Answer[7](@index-ref?id=42)[2](@index-ref?id=5)' });
+  p.emit(id, 'suggestions', { suggestions: ['one', 'two', 'three'] });
+  p.complete(id);
+  await waitFor(() => p.d.querySelector('.chat-suggestions button') && !p.d.querySelector('#sendButton').classList.contains('is-busy'));
+  assert.equal(p.d.querySelector('[data-citation-key="index:42"]').textContent, '7');
+  assert.equal(p.d.querySelectorAll('.chat-citation-static').length, 1);
+  assert.doesNotMatch(p.d.querySelector('#chatLog').textContent, /PRIVATE/);
+  assert.ok(p.calls.some(call => /tasks\/[^/]+\?presentation=chat_v1$/u.test(call.url)));
+  p.d.querySelector('.chat-suggestions button').click();
+  assert.equal(p.d.querySelector('#questionInput').value, 'one');
+  assert.ok([...p.d.querySelectorAll('.chat-suggestions button')].every(control => control.disabled));
+  assert.equal(p.calls.filter(call => call.method === 'POST' && call.url === '/api/tasks').length, 1);
 });

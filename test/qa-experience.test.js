@@ -24,6 +24,8 @@ async function page(t, { mode = 'index', history = null, clipboardFails = false 
   } } });
   if (history) w.localStorage.setItem('ima-qa-conversation-id', 'synthetic-history');
   w.fetch = async (url, options = {}) => {
+    const parsed = new URL(url, w.location.href); parsed.searchParams.delete('presentation');
+    url = parsed.pathname + (parsed.searchParams.size ? '?' + parsed.searchParams : '');
     if (url === '/healthz') return Response.json({ provider: 'openapi-mimo', model: 'synthetic' });
     if (url === '/api/capabilities') return Response.json({ features: { durable_qa_tasks_v1: false } });
     if (url.startsWith('/api/conversations?')) return Response.json({ conversations: [] });

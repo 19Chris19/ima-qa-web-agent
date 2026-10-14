@@ -37,6 +37,7 @@
     async function json(url, options = {}) {
       // Includes body consumption, not just response headers. A timed-out POST
       // has an unknown outcome; callers must recover its requestKey via GET.
+      if (url.startsWith('/api/tasks') && (!options.method || options.method === 'GET')) url += (url.includes('?') ? '&' : '?') + 'presentation=chat_v1';
       return observe(url, options, async response => {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw Object.assign(new Error(data.error || `请求失败 (${response.status})`), { status: response.status });
@@ -129,7 +130,7 @@
           onStatus(status);
           if (terminal(status)) return { task: snapshot.task };
 
-          const result = await observe(`/api/tasks/${encodeURIComponent(id)}/events?after=${cursor}`, {
+          const result = await observe(`/api/tasks/${encodeURIComponent(id)}/events?after=${cursor}&presentation=chat_v1`, {
             signal, headers: { Accept: 'text/event-stream' },
           }, async (response, observer) => {
             if (!response.ok) throw Object.assign(new Error(`订阅失败 (${response.status})`), { status: response.status });
