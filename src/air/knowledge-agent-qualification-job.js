@@ -429,7 +429,7 @@ class KnowledgeAgentQualificationManager {
         locked = { account: current, events: current.events,
           digest: crypto.createHash('sha256').update(JSON.stringify(current)).digest('hex') };
       },
-      persist: (snapshot) => {
+      persist: async (snapshot) => {
         const current = this.accountDirectory.getAccount(accountId);
         if (!locked || current !== locked.account || current?.events !== locked.events
             || crypto.createHash('sha256').update(JSON.stringify(current)).digest('hex') !== locked.digest
@@ -437,7 +437,7 @@ class KnowledgeAgentQualificationManager {
             || current.runtime.disabledReason !== 'migration_verification_required') {
           throw new KnowledgeAgentQualificationError('qualification_binding_changed', 409);
         }
-        this.accountDirectory.updateCredentialsFromClient(accountId, {
+        await this.accountDirectory.updateCredentialsFromClient(accountId, {
           ...snapshot,
           runtimeEnvPath: current.runtimeEnvPath,
         });
@@ -544,11 +544,11 @@ class KnowledgeAgentQualificationManager {
         },
       }));
       if (run.accountBinding) {
-        this.accountDirectory.applyKnowledgeAgentQualification(
+        await this.accountDirectory.applyKnowledgeAgentQualification(
           entries[0].accountId, entries[0].proof, run.accountBinding,
         );
       } else {
-        this.accountDirectory.recordKnowledgeAgentQualifications(entries);
+        await this.accountDirectory.recordKnowledgeAgentQualifications(entries);
       }
       // The directory write is the commit point; downstream failures cannot undo it.
       run.commitApplied = true;
