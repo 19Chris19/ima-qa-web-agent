@@ -548,7 +548,7 @@
       view.processDirty = false;
     }
     if (view.answerDirty) {
-      renderAnswer(message.text, message.answer, { streaming: true, citationMap: message.citationMap, sourceIndexes: sourceIndexes(message.sources) });
+      renderAnswer(message.text, message.answer, { streaming: true, citationMap: message.citationMap, taskId: view.task?.id, sourceIndexes: sourceIndexes(message.sources) });
       view.answerDirty = false;
     }
     scrollToBottom({ force: followStreamingAnswer });
@@ -563,7 +563,7 @@
       message.settled = true;
       message.bubble.classList.remove('pending');
       message.bubble.querySelector('.task-process')?.remove();
-      renderAnswer(message.text, message.answer, { citationMap: message.citationMap, sourceIndexes: sourceIndexes(message.sources), partial: status !== 'succeeded' });
+      renderAnswer(message.text, message.answer, { citationMap: message.citationMap, taskId: view.task?.id, sourceIndexes: sourceIndexes(message.sources), partial: status !== 'succeeded' });
       renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary, answer: message.answer });
       if (status !== 'succeeded') {
         const failure = document.createElement('p');
@@ -629,7 +629,7 @@
       view.answer = message.content || '';
       view.sources = message.sources || [];
       if (message.role === 'assistant' && (message.sources?.length || message.citationMap || window.ChatPresentation)) {
-        renderAnswer(view.text, message.content || '', { citationMap: message.citationMap, sourceIndexes: sourceIndexes(message.sources), partial: message.complete === false || message.interrupted === true });
+        renderAnswer(view.text, message.content || '', { citationMap: message.citationMap, taskId: message.taskId, sourceIndexes: sourceIndexes(message.sources), partial: message.complete === false || message.interrupted === true });
         window.ChatPresentation?.renderProcess(view.bubble, message.process, true);
         window.ChatPresentation?.renderSuggestions(view.bubble, message.suggestions, input, isBusy || navigating);
         renderSources(view.bubble, message.sources, {
@@ -698,7 +698,10 @@
 
   function renderAnswer(target, markdown, options = {}) {
     try {
-      window.ImaAnswerRenderer.updateAnswerElement(target, markdown, { ...options, ...(window.ChatPresentation ? { presentation: 'chat_v1' } : {}) });
+      window.ImaAnswerRenderer.updateAnswerElement(target, markdown, { ...options, ...(window.ChatPresentation ? {
+        presentation: 'chat_v1', conversationId, loadPreview: window.ChatPresentation.previewLoader(
+          (url, init) => fetch(url, requestOptions(init)), '/api/source-preview'),
+      } : {}) });
     } catch {
       target.textContent = markdown;
     }

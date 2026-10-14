@@ -158,17 +158,19 @@
   }
 
   const bound = new WeakSet();
-  let card, anchor, closing, touchPreview, touchActivation, restoringFocus = false;
+  let card, anchor, closing, touchActivation, restoringFocus = false, backdrop, modal = false;
+  let coverTimer, previewController, generation = 0, cleanup = [], loadingPreview = false;
+  function narrow() { return root.matchMedia?.('(max-width: 640px)').matches === true; }
   function closeCard(restore = false) {
-    clearTimeout(closing);
+    clearTimeout(closing); clearTimeout(coverTimer); generation++;
+    previewController?.abort(); previewController = null;
+    for (const dispose of cleanup.splice(0)) dispose();
     const previous = anchor;
     previous?.setAttribute('aria-expanded', 'false'); previous?.removeAttribute('aria-controls');
-    card?.remove(); card = null; anchor = null; touchPreview = null;
+    card?.remove(); backdrop?.remove(); card = null; backdrop = null; anchor = null; modal = false;
     if (restore && previous?.isConnected) {
       const focus = () => { restoringFocus = true; previous.focus({ preventScroll: true }); restoringFocus = false; };
       focus();
-      // Chromium may apply its default blur after removing the focused close
-      // button. Retry after that action, without stealing a newly chosen focus.
       root.requestAnimationFrame?.(() => {
         const document = previous.ownerDocument;
         if (previous.isConnected && !card && [document.body, previous].includes(document.activeElement)) focus();
@@ -176,58 +178,123 @@
     }
   }
   function positionCard(trigger) {
-    if (!card) return;
+    if (!card || modal) return;
     card.style.maxHeight = '';
     const rect = trigger.getBoundingClientRect();
     card.style.left = `${Math.max(8, Math.min(rect.left, root.innerWidth - card.offsetWidth - 8))}px`;
-    // Pick a side before placing the card. Clamping a tall card upward can
-    // cover its own trigger and intercept the tap that just opened it.
     const below = Math.max(0, root.innerHeight - rect.bottom - 8);
     const above = Math.max(0, rect.top - 8);
     const placeBelow = card.offsetHeight <= below || below >= above;
-    card.style.maxHeight = `${Math.min(400, Math.max(80, placeBelow ? below : above))}px`;
+    card.style.maxHeight = `${Math.min(480, Math.max(80, placeBelow ? below : above))}px`;
     card.style.top = `${Math.max(8, placeBelow ? rect.bottom + 8 : rect.top - card.offsetHeight - 8)}px`;
   }
-  function showCard(trigger, options) {
+  function lockBackground(document) {
+    const body = document.body, html = document.documentElement, y = root.scrollY || 0;
+    const before = { overflow: body.style.overflow, position: body.style.position, top: body.style.top, width: body.style.width, htmlOverflow: html.style.overflow };
+    body.style.overflow = 'hidden'; body.style.position = 'fixed'; body.style.top = `-${y}px`; body.style.width = '100%'; html.style.overflow = 'hidden';
+    const inert = [...body.children].filter(node => node !== card && node !== backdrop).map(node => [node, node.inert]);
+    for (const [node] of inert) node.inert = true;
+    cleanup.push(() => {
+      for (const [node, value] of inert) node.inert = value;
+      for (const key of ['overflow', 'position', 'top', 'width']) body.style[key] = before[key];
+      html.style.overflow = before.htmlOverflow;
+      if (y) root.scrollTo(0, y);
+    });
+  }
+  function bindHandle(handle) {
+    let start = null, distance = 0;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button && event.button !== 0) return;
+      start = event.clientY; distance = 0; handle.setPointerCapture?.(event.pointerId);
+    });
+    handle.addEventListener('pointermove', event => {
+      if (start === null || !card) return;
+      distance = Math.max(0, event.clientY - start); card.style.transform = `translateY(${distance}px)`;
+    });
+    const end = () => { if (distance >= 64) closeCard(true); else if (card) card.style.transform = ''; start = null; distance = 0; };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', () => { start = null; distance = 0; if (card) card.style.transform = ''; });
+    handle.addEventListener('click', event => { if (event.detail === 0) closeCard(true); });
+  }
+  async function loadCovers(options, rows, ticket) {
+    if (loadingPreview || ticket !== generation || !card || typeof options.loadPreview !== 'function') return;
+    loadingPreview = true;
+    previewController = new root.AbortController();
+    const controller = previewController;
+    try {
+      for (const row of rows) {
+        const { source, open } = row;
+        if (ticket !== generation || controller.signal.aborted) break;
+        const rect = open.getBoundingClientRect(), bounds = card.getBoundingClientRect();
+        if (row.attempted || rect.bottom < bounds.top || rect.top > bounds.bottom || !/^[a-f0-9]{64}$/u.test(source.sourceId || '')) continue;
+        row.attempted = true;
+        const result = await options.loadPreview({ conversationId: options.conversationId, taskId: options.taskId,
+          citationKey: anchor.dataset.citationKey, sourceId: source.sourceId }, controller.signal);
+        if (!result?.blob) continue;
+        const url = root.URL.createObjectURL(result.blob);
+        if (ticket !== generation || controller.signal.aborted || !open.isConnected) { root.URL.revokeObjectURL(url); break; }
+        cleanup.push(() => root.URL.revokeObjectURL(url));
+        const frame = open.ownerDocument.createElement('div'); frame.className = 'chat-source-cover';
+        const image = open.ownerDocument.createElement('img'); image.src = url; image.alt = '网页封面'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer';
+        image.addEventListener('error', () => frame.remove(), { once: true });
+        frame.append(image); open.prepend(frame); positionCard(anchor);
+      }
+    } catch { /* Optional media never changes answer or source text. */ }
+    finally { loadingPreview = false; if (previewController === controller) previewController = null; }
+  }
+  function showCard(trigger, options, sheet = false) {
     if (restoringFocus) return;
     const entry = options.citationMap?.[trigger.dataset.citationKey];
     const sources = entry?.type === 'web' ? (entry.sources || []).filter(source => webUrl(source.url)) : [];
     if (!sources.length) return;
-    if (anchor === trigger && card?.isConnected) { clearTimeout(closing); return; }
-    closeCard(); anchor = trigger;
-    const document = trigger.ownerDocument;
-    card = document.createElement('div'); card.className = 'chat-citation-card'; card.id = 'chat-citation-card';
+    if (anchor === trigger && card?.isConnected && modal === sheet) { clearTimeout(closing); return; }
+    closeCard(); anchor = trigger; modal = sheet;
+    const document = trigger.ownerDocument, ticket = generation;
+    card = document.createElement('div'); card.className = `chat-citation-card${sheet ? ' chat-citation-sheet' : ''}`; card.id = 'chat-citation-card';
     card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', `网页引用 ${trigger.textContent}`);
+    if (sheet) {
+      card.setAttribute('aria-modal', 'true');
+      backdrop = document.createElement('div'); backdrop.className = 'chat-citation-backdrop'; backdrop.setAttribute('aria-hidden', 'true');
+      backdrop.addEventListener('click', () => closeCard(true)); document.body.append(backdrop);
+      const handle = button(document, 'close-sheet', '下拉关闭来源面板'); handle.className = 'chat-sheet-handle';
+      handle.replaceChildren(document.createElement('span')); bindHandle(handle); card.append(handle);
+      const title = document.createElement('h2'); title.className = 'chat-sheet-heading'; title.textContent = `网页来源 · ${trigger.textContent}`; card.append(title);
+    }
     const close = button(document, 'close-citation', '关闭引用'); close.classList.add('chat-card-close');
     close.addEventListener('click', () => closeCard(true)); card.append(close);
+    const content = document.createElement('div'); content.className = 'chat-citation-sources';
+    const rows = [];
     for (const source of sources) {
       const section = document.createElement('section');
-      const title = document.createElement('strong'); title.className = 'chat-source-title';
       const open = document.createElement('a'); open.href = webUrl(source.url); open.target = '_blank';
-      open.rel = 'noopener noreferrer'; open.className = 'chat-source-open'; open.textContent = source.title || '网页来源';
-      open.setAttribute('aria-label', `${source.title || '网页来源'}（新标签页打开）`); title.append(open);
+      open.rel = 'noopener noreferrer'; open.className = 'chat-source-open';
+      open.setAttribute('aria-label', `${source.title || '网页来源'}（新标签页打开）`);
+      const title = document.createElement('strong'); title.className = 'chat-source-title'; title.textContent = source.title || '网页来源';
       const domain = document.createElement('small'); domain.className = 'chat-source-domain'; domain.textContent = new URL(webUrl(source.url)).hostname;
-      section.append(title, domain);
       const excerpt = document.createElement('p'); excerpt.className = 'chat-source-excerpt';
       excerpt.textContent = source.snippet || '该网页未提供内容摘录';
       if (!source.snippet) excerpt.classList.add('is-empty');
-      section.append(excerpt);
-      card.append(section);
+      open.append(title, domain, excerpt); section.append(open); content.append(section); rows.push({ source, open });
     }
-    document.body.append(card);
+    card.append(content); document.body.append(card);
     trigger.setAttribute('aria-expanded', 'true'); trigger.setAttribute('aria-controls', card.id);
-    positionCard(trigger);
-    card.addEventListener('focusout', event => { if ((event.relatedTarget || touchPreview !== anchor) && event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
+    if (sheet) { lockBackground(document); close.focus({ preventScroll: true }); } else positionCard(trigger);
+    card.addEventListener('focusout', event => { if (!modal && event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
     card.addEventListener('pointerenter', () => clearTimeout(closing));
-    card.addEventListener('pointerleave', () => { if (touchPreview === anchor) return; closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });
+    card.addEventListener('pointerleave', () => { if (!modal) closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });
+    coverTimer = setTimeout(() => loadCovers(options, rows, ticket), sheet ? 0 : 300);
+    // Scroll is a new explicit view of another card, not a background retry loop.
+    content.addEventListener('scroll', () => {
+      clearTimeout(coverTimer); coverTimer = setTimeout(() => loadCovers(options, rows.filter(row => !row.open.querySelector('img')), ticket), 300);
+    }, { passive: true });
   }
   function bind(element, options = {}) {
     if (anchor && !anchor.isConnected) closeCard();
     if (anchor && element.contains(anchor) && card) {
       const key = anchor.dataset.citationKey;
       if (JSON.stringify(element.chatPresentation?.citationMap?.[key]) !== JSON.stringify(options.citationMap?.[key])) {
-        const trigger = anchor, focused = card.contains(element.ownerDocument.activeElement);
-        closeCard(); showCard(trigger, options);
+        const trigger = anchor, focused = card.contains(element.ownerDocument.activeElement), wasModal = modal;
+        closeCard(); showCard(trigger, options, wasModal);
         if (focused) card?.querySelector('button, a')?.focus();
       }
     }
@@ -237,26 +304,26 @@
     element.addEventListener('pointerdown', event => {
       const trigger = event.target.closest?.('[data-citation-key]');
       touchActivation = trigger && ['touch', 'pen'].includes(event.pointerType)
-        ? { trigger, again: touchPreview === trigger && anchor === trigger && card?.isConnected, at: root.performance.now() } : null;
+        ? { trigger, at: root.performance.now() } : null;
     });
     element.addEventListener('pointercancel', () => { touchActivation = null; });
     element.addEventListener('pointerover', event => {
-      if (['touch', 'pen'].includes(event.pointerType)) return;
+      if (modal || ['touch', 'pen'].includes(event.pointerType)) return;
       const trigger = event.target.closest?.('[data-citation-key]');
       if (trigger) showCard(trigger, element.chatPresentation);
     });
     element.addEventListener('pointerout', event => {
-      if (touchPreview === anchor) return;
+      if (modal) return;
       if (event.target.closest?.('[data-citation-key]') && !card?.contains(event.relatedTarget)) {
         closing = setTimeout(() => { if (anchor !== element.ownerDocument.activeElement && !card?.contains(element.ownerDocument.activeElement)) closeCard(); }, 180);
       }
     });
     element.addEventListener('focusin', event => {
       const trigger = event.target.closest?.('[data-citation-key]');
-      if (trigger) showCard(trigger, element.chatPresentation);
+      if (trigger && !modal && touchActivation?.trigger !== trigger) showCard(trigger, element.chatPresentation, narrow());
     });
     element.addEventListener('focusout', event => {
-      if ((event.relatedTarget || touchPreview !== anchor) && !card?.contains(event.relatedTarget) && !event.relatedTarget?.closest?.('[data-citation-key]')) closeCard();
+      if (!modal && !card?.contains(event.relatedTarget) && !event.relatedTarget?.closest?.('[data-citation-key]')) closeCard();
     });
     element.addEventListener('keydown', event => {
       const trigger = event.target.closest?.('[data-citation-key]');
@@ -272,18 +339,10 @@
         const activation = touchActivation; touchActivation = null;
         const touch = ['touch', 'pen'].includes(event.pointerType) || (!event.pointerType && event.detail !== 0
           && activation?.trigger === trigger && root.performance.now() - activation.at < 1000);
-        if (trigger.tagName === 'A' && targets.length === 1 && trigger.href === targets[0]
-          && (!touch || activation?.again)) {
-          closeCard(); return; // Preserve native new-tab, modifier-click and keyboard navigation.
+        if (trigger.tagName === 'A' && targets.length === 1 && trigger.href === targets[0] && !touch && !narrow()) {
+          closeCard(); return;
         }
-        event.preventDefault(); showCard(trigger, element.chatPresentation);
-        if (touch && card) {
-          touchPreview = trigger; clearTimeout(closing);
-          let hint = card.querySelector('.chat-citation-touch-hint');
-          if (!hint) { hint = element.ownerDocument.createElement('p'); hint.className = 'chat-citation-touch-hint'; card.append(hint); }
-          hint.textContent = targets.length === 1 ? '再次点按角标，或点标题打开原网页' : '点选标题，打开对应的原网页';
-          positionCard(trigger);
-        }
+        event.preventDefault(); showCard(trigger, element.chatPresentation, touch || narrow());
         if (event.detail === 0 && !touch) card?.querySelector('button, a')?.focus(); return;
       }
       const control = event.target.closest?.('[data-chat-action]');
@@ -301,6 +360,23 @@
         showToolFeedback(control, true);
       } catch { showToolFeedback(control, false); }
     });
+  }
+  function previewLoader(fetchImpl, base) {
+    return async (reference, signal) => {
+      if (!reference.conversationId || !reference.taskId || !reference.sourceId) return null;
+      const query = new URLSearchParams(reference);
+      const response = await fetchImpl(`${base}?${query}`, { signal });
+      if (!response.ok || (await response.json()).status !== 'ready' || signal.aborted) return null;
+      const image = await fetchImpl(`${base}/image?${query}`, { signal });
+      const type = (image.headers.get('content-type') || '').split(';')[0];
+      if (!image.ok || !['image/png', 'image/jpeg', 'image/webp'].includes(type)) { await image.body?.cancel(); return null; }
+      const reader = image.body.getReader(), chunks = []; let size = 0;
+      try {
+        while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length;
+          if (size > 512 * 1024) { await reader.cancel(); return null; } chunks.push(value); }
+      } finally { reader.releaseLock(); }
+      return { blob: new root.Blob(chunks, { type }) };
+    };
   }
   function renderSuggestions(container, values, input, disabled = false) {
     const questions = [...new Set((Array.isArray(values) ? values : []).filter(value => typeof value === 'string' && value.trim() && value.length <= 2000))].slice(0, 3);
@@ -346,11 +422,18 @@
     }
   }
   if (root.document) {
-    root.document.addEventListener('pointerdown', event => { if (card && !card.contains(event.target) && !event.target.closest?.('[data-citation-key]')) closeCard(); });
-    root.document.addEventListener('keydown', event => { if (event.key === 'Escape' && card) { event.preventDefault(); closeCard(true); } });
-    root.document.addEventListener('scroll', event => {
-      if (anchor && (!anchor.isConnected || (touchPreview === anchor && event.target !== card && !card?.contains(event.target)))) closeCard();
-    }, true);
+    root.document.addEventListener('pointerdown', event => { if (card && !modal && !card.contains(event.target) && !event.target.closest?.('[data-citation-key]')) closeCard(); });
+    root.document.addEventListener('keydown', event => {
+      if (!card) return;
+      if (event.key === 'Escape') { event.preventDefault(); closeCard(true); return; }
+      if (modal && event.key === 'Tab') {
+        const focusable = [...card.querySelectorAll('button:not([disabled]), a[href]')], first = focusable[0], last = focusable.at(-1);
+        if (!card.contains(root.document.activeElement) || (event.shiftKey && root.document.activeElement === first)) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && root.document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
+    root.document.addEventListener('focusin', event => { if (modal && card && !card.contains(event.target)) card.querySelector('.chat-card-close')?.focus(); });
+    root.document.addEventListener('scroll', () => { if (anchor && !anchor.isConnected) closeCard(); }, true);
     root.addEventListener('resize', () => { if (anchor?.isConnected && card) positionCard(anchor); });
   }
   function stableHtml(element) {
@@ -358,5 +441,5 @@
       .replace(/ aria-expanded="true"/gu, ' aria-expanded="false"');
   }
   root.ChatPresentation = { stableHtml, citation, protectMath, decorate, bind, closeCard, renderSuggestions, renderProcess,
-    webUrl, tableRows, csv, tsv, spreadsheetCell, copyTable };
+    webUrl, previewLoader, tableRows, csv, tsv, spreadsheetCell, copyTable };
 })(globalThis);
