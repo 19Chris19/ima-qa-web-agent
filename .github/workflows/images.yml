@@ -119,7 +119,7 @@ jobs:
         run: |
           export IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
           export REVISION="$(git rev-parse HEAD)"
-          node -e 'require("fs").writeFileSync("release-manifest.json", JSON.stringify({schemaVersion:1,version:process.env.VERSION,revision:process.env.REVISION,image:process.env.IMAGE,digest:process.env.DIGEST,platforms:["linux/amd64","linux/arm64"],acceptance:"synthetic startup; no real IMA question",visibility:"verify public anonymous pull before Release"},null,2)+"\n")'
+          node -e 'require("fs").writeFileSync("release-manifest.json", JSON.stringify({schemaVersion:1,taskRecordFormat:"jsonl_v2",version:process.env.VERSION,revision:process.env.REVISION,image:process.env.IMAGE,digest:process.env.DIGEST,platforms:["linux/amd64","linux/arm64"],acceptance:"synthetic startup; no real IMA question",visibility:"verify public anonymous pull before Release"},null,2)+"\n")'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-manifest
