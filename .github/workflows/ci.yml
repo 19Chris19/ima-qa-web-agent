@@ -29,10 +29,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install agent client dependencies
+        run: npm ci --prefix packages/ima-qa-client --ignore-scripts
+
       - name: Run tests
         run: npm test
         env:
           PROVIDER_ADMIN_CONTRACT_ROOT: ${{ github.workspace }}
 
       - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Verify standalone agent package
+        working-directory: packages/ima-qa-client
         run: npm pack --dry-run

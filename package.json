@@ -16,6 +16,7 @@
     "docs",
     "eval",
     "examples",
+    "packages/ima-qa-client",
     "public",
     "scripts",
     "src",
