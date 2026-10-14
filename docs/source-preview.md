@@ -46,6 +46,14 @@ bytes, render short-lived blob URLs and revoke them on close. Gateways must
 explicitly allow the two read-only paths and JPEG/PNG/WebP MIME types, rather than
 expose a general URL proxy. Do not append previews to answer SSE or history.
 
+Both frontends impose a separate **2-second total display deadline**, starting
+with the first cover request after desktop hover intent (300ms) or explicit touch
+activation. It includes metadata, image transfer and image decoding, and is shared
+by all sources in that open panel. Expiry aborts optional work, retains source text
+and links, and discards late results even if a loader ignores cancellation. Scroll,
+repeated taps and late citation metadata do not restart the deadline or retry an
+attempted source. An explicit close and reopening starts a new user-requested view.
+
 Acceptance requires 30 paired synthetic SSE trials, p95 first-delta/inter-event
 regression <=20ms, extra peak RSS <=64MiB, strict flood budgets, and timeout/worker
 failure/SSRF/ownership tests. Real QA and production enablement require separate
