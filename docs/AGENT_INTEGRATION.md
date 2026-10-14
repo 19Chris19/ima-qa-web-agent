@@ -51,6 +51,8 @@ Skill 中文显示名为 **ima 知识库助手**，命令引用名为 `$ima-qa`�
 
 重复 setup 会更新同一入口。已有同名 MCP、未知归属目录、修改过的 Skill/客户端会被保护并报冲突。安装回执、备份和 staging 都放在 Skill 发现目录外；失败尝试恢复旧 Skill/MCP。强制退出可能保留 lock，确认原进程退出后才清理错误给出的锁路径。
 
+安装回执写入后，新 Skill/MCP 即已提交。此后备份清理失败会返回 `backup_cleanup_failed` 警告，保留已完成的新安装和一致的回执；不会恢复旧资源。再次 setup 或 uninstall 仍可正常执行。
+
 `setup` 输出的 installed/mcpRegistered 只说明安装与注册；还要查看 provider.ready。`doctor` 只读验证两类 token，但不能证明二者映射同一应用，真实问答时 Provider 会强制检查。
 
 ## Codex 配置示例

@@ -37,7 +37,8 @@ function matches(entry, registration) {
     !Object.keys(t?.env || {}).length && !t?.cwd;
 }
 function add(run, reg) { run(['mcp', 'add', 'ima-qa', '--', reg.command, ...reg.args]); }
-export async function setup(options = {}, { runCodex = codex, source = packageRoot } = {}) {
+export async function setup(options = {}, { runCodex = codex, source = packageRoot,
+  cleanupBackup = path => rm(path, { recursive: true, force: true }) } = {}) {
   if (Number(process.versions.node.split('.')[0]) < 22) throw fault('node_22_required');
   if (options.agent && options.agent !== 'codex') throw fault('unsupported_agent');
   const root = resolve(options.installDir || defaultInstallDir());
@@ -111,9 +112,14 @@ export async function setup(options = {}, { runCodex = codex, source = packageRo
       const receipt = { schemaVersion: 1, version: manifest.version, installPath, clientHash, skillTarget,
         skillHash: await fingerprint(skillTarget), configFile, profile, registration };
       await atomic(receiptFile, receipt);
-      await rm(backup, { recursive: true, force: true });
+      // The receipt commits the new Skill and registration. A cleanup failure
+      // after this point must not restore old resources behind the new receipt.
+      let warning;
+      try { await cleanupBackup(backup); } catch { warning = 'backup_cleanup_failed'; }
       return { installed: true, version: manifest.version, skill: 'ima 知识库助手', skillPath: skillTarget,
-        cli: join(installPath, 'bin/ima-qa.mjs'), configFile, mcpRegistered: true, readiness: 'Run doctor with configured credentials; restart Codex if skill discovery has not refreshed.' };
+        cli: join(installPath, 'bin/ima-qa.mjs'), configFile, mcpRegistered: true,
+        ...(warning ? { warning } : {}),
+        readiness: 'Run doctor with configured credentials; restart Codex if skill discovery has not refreshed.' };
     } catch (error) {
       if (replaced) await rm(skillTarget, { recursive: true, force: true });
       try { await rename(backup, skillTarget); } catch (restore) { if (restore.code !== 'ENOENT') throw fault('skill_rollback_failed'); }
