@@ -1,6 +1,7 @@
 const { POLICIES } = require('./bot-compat');
 
 function providerAExecutionCapacity({ pool, webReadiness, airPolicyCapacity }) {
+  if (pool?.persistenceReady?.() === false) return 0;
   if (airPolicyCapacity) {
     const website = webReadiness?.snapshot();
     const classicAccounts = new Set(website?.mode === 'classic_knowledge'

@@ -301,7 +301,12 @@ class IMAWebAgentClient {
       : this.refreshTokenExpiresAt);
     this.lastRefreshAt = now;
     this.lastRefreshError = '';
-    this.persistRuntimeEnv(generation);
+    if (this.managedPersistence && this.onCredentialCommit) {
+      this.pendingCredentialPersistence = true;
+      await this.onCredentialCommit(this.getConfigSnapshot(), generation);
+      this._assertCredentialGeneration(generation, options.signal);
+      this.pendingCredentialPersistence = false;
+    } else this.persistRuntimeEnv(generation);
   }
 
   _fetch(url, options) {
@@ -427,6 +432,7 @@ class IMAWebAgentClient {
   }
 
   persistRuntimeEnv(generation = this.credentialGeneration) {
+    if (this.managedPersistence) return false;
     if (this.credentialWritesSuspended || generation !== this.credentialGeneration) return false;
     if (!this.runtimeEnvPath) {
       return false;

@@ -169,6 +169,12 @@ function createApp({
       const includeDetails = ['auth', 'full'].includes(config.security?.healthDetails);
       health.webAgentPool = imaWebAgentClient?.stats?.({ includeDetails }) || undefined;
       health.accountDirectory = accountDirectory?.getHealthSnapshot?.({ includeDetails }) || undefined;
+      if (accountDirectory?.persistenceReady !== undefined) health.persistence = {
+        ready: accountDirectory.persistenceReady,
+        statisticsReady: accountDirectory.statisticsReady,
+        pendingWrites: accountDirectory.queue.length,
+        writing: Boolean(accountDirectory.inflight),
+      };
       if (includeDetails) {
         health.auth = imaWebAgentClient?.getAuthStatus?.();
       }

@@ -299,3 +299,5 @@ npm run test:concurrency -- \
 
 [MIT](./LICENSE)
 联网引用的轻量封面缓存、手机底部来源面板及部署开关见 [来源预览说明](docs/source-preview.md)。封面抓取默认关闭，不使用浏览器截图。
+
+账号保存采用常驻 worker，关键修改确认后生效，使用统计每秒合并保存；候选修复与故障处理见[账号持久化说明](docs/ACCOUNT_PERSISTENCE.md)。合并代码不自动更新运行服务。
