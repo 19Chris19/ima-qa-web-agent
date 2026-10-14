@@ -159,7 +159,23 @@
 
   const bound = new WeakSet();
   let card, anchor, closing, touchActivation, restoringFocus = false, backdrop, modal = false;
-  let coverTimer, previewController, generation = 0, cleanup = [], loadingPreview = false;
+  const coverTimeoutMs = 2000;
+  let coverTimer, previewController, coverState, generation = 0, cleanup = [];
+  // A loader (or image decoder) can ignore abort. Settle locally on cancellation
+  // and consume its eventual result without letting it update the current card.
+  function untilAborted(promise, signal) {
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = value => {
+        if (settled) return;
+        settled = true; signal.removeEventListener('abort', abort); resolve(value);
+      };
+      const abort = () => finish(null);
+      signal.addEventListener('abort', abort, { once: true });
+      Promise.resolve(promise).then(finish, () => finish(null));
+      if (signal.aborted) abort();
+    });
+  }
   function narrow() { return root.matchMedia?.('(max-width: 640px)').matches === true; }
   function closeCard(restore = false) {
     clearTimeout(closing); clearTimeout(coverTimer); generation++;
@@ -216,39 +232,58 @@
     handle.addEventListener('pointercancel', () => { start = null; distance = 0; if (card) card.style.transform = ''; });
     handle.addEventListener('click', event => { if (event.detail === 0) closeCard(true); });
   }
-  async function loadCovers(options, rows, ticket) {
-    if (loadingPreview || ticket !== generation || !card || typeof options.loadPreview !== 'function') return;
-    loadingPreview = true;
+  async function loadCovers(options, rows, ticket, state) {
+    if (previewController || ticket !== generation || !card || state.expired || typeof options.loadPreview !== 'function') return;
+    if (state.deadline && root.performance.now() >= state.deadline) { state.expired = true; return; }
     previewController = new root.AbortController();
     const controller = previewController;
+    let deadlineTimer;
+    const current = () => ticket === generation && !controller.signal.aborted && !state.expired
+      && root.performance.now() < state.deadline;
     try {
       for (const row of rows) {
         const { source, open } = row;
         if (ticket !== generation || controller.signal.aborted) break;
         const rect = open.getBoundingClientRect(), bounds = card.getBoundingClientRect();
-        if (row.attempted || rect.bottom < bounds.top || rect.top > bounds.bottom || !/^[a-f0-9]{64}$/u.test(source.sourceId || '')) continue;
-        row.attempted = true;
-        const result = await options.loadPreview({ conversationId: options.conversationId, taskId: options.taskId,
-          citationKey: anchor.dataset.citationKey, sourceId: source.sourceId }, controller.signal);
+        if (state.attempted.has(source.sourceId) || rect.bottom < bounds.top || rect.top > bounds.bottom
+          || !/^[a-f0-9]{64}$/u.test(source.sourceId || '')) continue;
+        state.attempted.add(source.sourceId);
+        if (!state.deadline) state.deadline = root.performance.now() + coverTimeoutMs;
+        if (!current()) { state.expired = true; break; }
+        if (!deadlineTimer) deadlineTimer = root.setTimeout(() => {
+          state.expired = true; controller.abort();
+        }, Math.max(0, state.deadline - root.performance.now()));
+        const result = await untilAborted(options.loadPreview({ conversationId: options.conversationId, taskId: options.taskId,
+          citationKey: anchor.dataset.citationKey, sourceId: source.sourceId }, controller.signal), controller.signal);
+        if (!current()) break;
         if (!result?.blob) continue;
         const url = root.URL.createObjectURL(result.blob);
-        if (ticket !== generation || controller.signal.aborted || !open.isConnected) { root.URL.revokeObjectURL(url); break; }
-        cleanup.push(() => root.URL.revokeObjectURL(url));
         const frame = open.ownerDocument.createElement('div'); frame.className = 'chat-source-cover';
-        const image = open.ownerDocument.createElement('img'); image.src = url; image.alt = '网页封面'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer';
+        const image = open.ownerDocument.createElement('img'); image.alt = '网页封面'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer';
+        let release = true;
+        try {
+          const loaded = typeof image.decode === 'function' ? null : new Promise(resolve => {
+            image.addEventListener('load', () => resolve(true), { once: true });
+            image.addEventListener('error', () => resolve(false), { once: true });
+          });
+          image.src = url;
+          const ready = await untilAborted(loaded || image.decode().then(() => true, () => false), controller.signal);
+          if (!ready || !current() || !open.isConnected) continue;
+          cleanup.push(() => root.URL.revokeObjectURL(url)); release = false;
+        } finally { if (release) root.URL.revokeObjectURL(url); }
         image.addEventListener('error', () => frame.remove(), { once: true });
         frame.append(image); open.prepend(frame); positionCard(anchor);
       }
     } catch { /* Optional media never changes answer or source text. */ }
-    finally { loadingPreview = false; if (previewController === controller) previewController = null; }
+    finally { root.clearTimeout(deadlineTimer); if (previewController === controller) previewController = null; }
   }
-  function showCard(trigger, options, sheet = false) {
+  function showCard(trigger, options, sheet = false, state = { deadline: 0, expired: false, attempted: new Set() }) {
     if (restoringFocus) return;
     const entry = options.citationMap?.[trigger.dataset.citationKey];
     const sources = entry?.type === 'web' ? (entry.sources || []).filter(source => webUrl(source.url)) : [];
     if (!sources.length) return;
     if (anchor === trigger && card?.isConnected && modal === sheet) { clearTimeout(closing); return; }
-    closeCard(); anchor = trigger; modal = sheet;
+    closeCard(); anchor = trigger; modal = sheet; coverState = state;
     const document = trigger.ownerDocument, ticket = generation;
     card = document.createElement('div'); card.className = `chat-citation-card${sheet ? ' chat-citation-sheet' : ''}`; card.id = 'chat-citation-card';
     card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', `网页引用 ${trigger.textContent}`);
@@ -282,10 +317,10 @@
     card.addEventListener('focusout', event => { if (!modal && event.relatedTarget !== anchor && !card?.contains(event.relatedTarget)) closeCard(); });
     card.addEventListener('pointerenter', () => clearTimeout(closing));
     card.addEventListener('pointerleave', () => { if (!modal) closing = setTimeout(() => { if (!card?.contains(document.activeElement)) closeCard(); }, 180); });
-    coverTimer = setTimeout(() => loadCovers(options, rows, ticket), sheet ? 0 : 300);
+    coverTimer = setTimeout(() => loadCovers(options, rows, ticket, state), sheet ? 0 : 300);
     // Scroll is a new explicit view of another card, not a background retry loop.
     content.addEventListener('scroll', () => {
-      clearTimeout(coverTimer); coverTimer = setTimeout(() => loadCovers(options, rows.filter(row => !row.open.querySelector('img')), ticket), 300);
+      clearTimeout(coverTimer); coverTimer = setTimeout(() => loadCovers(options, rows.filter(row => !row.open.querySelector('img')), ticket, state), 300);
     }, { passive: true });
   }
   function bind(element, options = {}) {
@@ -293,9 +328,26 @@
     if (anchor && element.contains(anchor) && card) {
       const key = anchor.dataset.citationKey;
       if (JSON.stringify(element.chatPresentation?.citationMap?.[key]) !== JSON.stringify(options.citationMap?.[key])) {
-        const trigger = anchor, focused = card.contains(element.ownerDocument.activeElement), wasModal = modal;
-        closeCard(); showCard(trigger, options, wasModal);
-        if (focused) card?.querySelector('button, a')?.focus();
+        const sources = entry => entry?.type === 'web' ? (entry.sources || []).filter(source => webUrl(source.url)) : [];
+        const previous = sources(element.chatPresentation?.citationMap?.[key]), next = sources(options.citationMap?.[key]);
+        const sameTargets = previous.length === next.length && previous.every((source, index) =>
+          webUrl(source.url) === webUrl(next[index].url) && source.sourceId === next[index].sourceId);
+        if (sameTargets) {
+          // Late text metadata must neither retry a cover nor remove one already
+          // decoded within the deadline. Keep the original request and nodes.
+          [...card.querySelectorAll('.chat-source-open')].forEach((open, index) => {
+            const source = next[index];
+            open.setAttribute('aria-label', `${source.title || '网页来源'}（新标签页打开）`);
+            open.querySelector('.chat-source-title').textContent = source.title || '网页来源';
+            const excerpt = open.querySelector('.chat-source-excerpt');
+            excerpt.textContent = source.snippet || '该网页未提供内容摘录'; excerpt.classList.toggle('is-empty', !source.snippet);
+          });
+          positionCard(anchor);
+        } else {
+          const trigger = anchor, focused = card.contains(element.ownerDocument.activeElement), wasModal = modal, state = coverState;
+          closeCard(); showCard(trigger, options, wasModal, state);
+          if (focused) card?.querySelector('button, a')?.focus();
+        }
       }
     }
     element.chatPresentation = options;
@@ -371,10 +423,14 @@
       const type = (image.headers.get('content-type') || '').split(';')[0];
       if (!image.ok || !['image/png', 'image/jpeg', 'image/webp'].includes(type)) { await image.body?.cancel(); return null; }
       const reader = image.body.getReader(), chunks = []; let size = 0;
+      const cancel = () => { void reader.cancel().catch(() => {}); };
+      signal.addEventListener('abort', cancel, { once: true });
       try {
+        if (signal.aborted) { cancel(); return null; }
         while (true) { const { done, value } = await reader.read(); if (done) break; size += value.length;
-          if (size > 512 * 1024) { await reader.cancel(); return null; } chunks.push(value); }
-      } finally { reader.releaseLock(); }
+          if (signal.aborted || size > 512 * 1024) { await reader.cancel(); return null; } chunks.push(value); }
+      } finally { signal.removeEventListener('abort', cancel); reader.releaseLock(); }
+      if (signal.aborted) return null;
       return { blob: new root.Blob(chunks, { type }) };
     };
   }

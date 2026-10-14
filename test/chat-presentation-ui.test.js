@@ -13,6 +13,7 @@ function page(t) {
     require.resolve('dompurify/dist/purify.min.js'), path.join(__dirname, '../public/chat-presentation.js'),
     path.join(__dirname, '../public/answer-renderer.js')]) window.eval(fs.readFileSync(file, 'utf8'));
   window.Blob = Blob;
+  window.HTMLImageElement.prototype.decode = async () => {};
   let clipboard;
   window.ClipboardItem = class { constructor(data) { this.data = data; } };
   Object.defineProperty(window.navigator, 'clipboard', { value: { write: async value => { clipboard = value; },
@@ -243,5 +244,5 @@ test('optional cover is delayed, authenticated through callback, revoked on clos
   p.render('Web[7](@index-ref?id=42)', { citationMap: map, loadPreview: () => new Promise(resolve => { finish = resolve; }) });
   p.answer.querySelector('[data-citation-key]').dispatchEvent(new p.window.MouseEvent('pointerover', { bubbles: true })); await new Promise(resolve => setTimeout(resolve, 330));
   p.ui.closeCard(); finish({ blob: new Blob(['late']) }); await Promise.resolve(); await Promise.resolve();
-  assert.equal(p.window.document.querySelector('.chat-source-cover'), null); assert.equal(revoked.length, 2);
+  assert.equal(p.window.document.querySelector('.chat-source-cover'), null); assert.equal(revoked.length, 1);
 });
