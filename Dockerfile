@@ -6,7 +6,7 @@ LABEL org.opencontainers.image.source="https://github.com/19Chris19/ima-qa-web-a
       org.opencontainers.image.revision=$SOURCE_REVISION \
       org.opencontainers.image.version=$RELEASE_VERSION
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production IMA_QA_RELEASE_REVISION=$SOURCE_REVISION
 WORKDIR /app
 
 COPY package.json package-lock.json ./

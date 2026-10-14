@@ -120,8 +120,13 @@ local-demo mode is not independently disabled. It exposes no service capacity or
 internal token. Frontends must use this endpoint, not the internal capacity route.
 
 The store uses a process-lifetime exclusive local-filesystem writer lease, 0700
-directory and 0600 files. Atomic replacement fsyncs file and directory before
-acknowledgement or publication. Do not run multiple Provider processes against
+directory and 0600 files. Task records use a compact, checksummed JSON checkpoint
+plus an incremental `.jsonl` transaction log. Each published batch is fsynced;
+checkpoint replacements also fsync the parent directory. Only appended events and
+changed headers are written, and exact repeated long strings (such as reference
+excerpts) are stored once per task. Event bodies, citation keys and SSE IDs remain
+unchanged. See [JSONL recovery and operations](TASK_JOURNAL_JSONL.md).
+Do not run multiple Provider processes against
 the same conversation/task directory or place it on a network filesystem. After
 an unclean exit, lease expiry can take 30 seconds; restart after that interval if
 the capability is unavailable. Never delete the ledger to fix admission errors.
@@ -146,8 +151,11 @@ task journal and history store is replayed before restart admission. Credentials
 account IDs and upstream session IDs are never exposed in public task metadata.
 
 Resource defaults: 500 unpruned task records, 10,000 retained receipts, 128 MiB
-ledger budget, 2 MiB/task and 10,000 events/upstream events (small reserved terminal
-space). Admission stops at a bound; receipts are never evicted to admit new work.
+physical ledger budget, 2 MiB/task and 10,000 persisted events (small reserved
+terminal space). Expanded replay is separately bounded at 16 MiB/task and 128 MiB
+overall; upstream semantic activity has a separate 16 MiB/100,000-event bound.
+Admission stops at a bound; receipts are never evicted to admit new work. These
+byte budgets are serialized sizes, not process RSS limits.
 Capacity planning must account for retained receipts. Task records, temp files,
 lock state and conversation history are private runtime data, never Git inputs.
 

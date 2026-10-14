@@ -9,7 +9,7 @@ const { createApplicationIdentity, applicationOwnerKey, normalizeApplicationMapp
 const { getConfig } = require('../src/config');
 const { createApp, getConversationOwnerKey } = require('../src/app');
 const { ConversationStore } = require('../src/conversation-store');
-const { DurableQATaskStore, RETENTION_MS } = require('../src/durable-qa-store');
+const { DurableQATaskStore, RETENTION_MS, readTaskRecord } = require('../src/durable-qa-store');
 const { DurableQATasks } = require('../src/durable-qa-tasks');
 const { createAskQueue } = require('../src/ask-queue');
 const { registerDurableQARoutes } = require('../src/durable-qa-routes');
@@ -144,7 +144,7 @@ test('legacy identity migration never replays dispatched or terminal tasks', asy
   assert.equal(manager.store.owned(running.id, owner, 'ordinary').status, 'indeterminate');
   assert.equal(manager.store.owned(terminal.id, owner, 'ordinary').status, 'cancelled');
   assert.equal(manager.store.find(owner, 'ordinary', 'running', taskInput).id, running.id);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(ledger, `${running.id}.json`))).applicationKey, 'ordinary');
+  assert.equal(readTaskRecord(path.join(ledger, `${running.id}.json`)).applicationKey, 'ordinary');
   assert.equal(calls, 0);
 });
 

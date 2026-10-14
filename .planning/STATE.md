@@ -1,5 +1,25 @@
 # Agent integration handoff, 2026-10-14
 
+Current candidate supersedes the initial checkpoint below. PR #23 now integrates
+stable Provider v0.6.0 (c329104) without changing production code. It adds a local
+private-config bridge, server-bound credential pairing/readiness, compact task
+views, a sixth MCP export tool, process/suggestion preservation, first-use QR
+guidance and the IMA-specific workflow reference. The MCP SDK is pinned at 1.32.1.
+
+Local installation registered ima-qa and a single Chinese Skill. Actual Codex
+skills/list discovery and SDK STDIO handshake passed. Two authorized real IMA
+tasks completed in one conversation (about 35s / 23s), with web evidence, exact
+citations, complete private exports and a content draft. Retry reused the same
+task; reconnect restored four history messages. Final full suite: 921 pass,
+6 optional skip, 0 fail. Full details: docs/AGENT_WORKFLOW_ACCEPTANCE_20261014.md.
+
+No fresh QR, new pool, production code change/restart, public switch, Air robot
+operation or client Release. Cold setup/QR, other-platform and model-trigger
+evaluation remain open. Existing generation-store synchronous child waits caused
+control API timeouts during acceptance; not repaired by this candidate.
+
+## Initial client checkpoint (historical)
+
 Change: FEAT-20261014-AGENT-INTEGRATION. Base ab675374; client implementation
 884cfca. Branch codex/FEAT-20261014-AGENT-INTEGRATION.
 

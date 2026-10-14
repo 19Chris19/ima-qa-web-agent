@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ImaClient, project, markdown } from '../src/client.mjs';
+import { ImaClient, project, markdown, summary } from '../src/client.mjs';
 import { digest } from '../src/config.mjs';
 import { page } from '../src/mcp.mjs';
 
@@ -18,6 +18,9 @@ async function fixture(t) {
       ...(status === 'succeeded' ? [{ event: 'done', data: { answer_basis: 'knowledge', complete: true } }] : [])] } });
   const fetchImpl = async (url, options) => {
     assert.equal(options.headers['x-ima-client-id'], 'client');
+    if (url.endsWith('/api/capabilities')) return Response.json({ applicationId: 'app', features: { durable_qa_tasks_v1: true } });
+    if (url.endsWith('/internal/provider-a/capacity')) return Response.json({ applicationId: 'app', available: 1, policies: { knowledge_agent: { max_concurrent: 1 } },
+      features: { durable_qa_tasks_v1: true, knowledge_agent_keyed_sse_v1: true } });
     if (url.endsWith('/api/conversations')) {
       assert.equal(options.headers.authorization, 'Bearer ordinary'); conversations++;
       return Response.json({ conversation: { conversationId: 'conv-1' } });
@@ -33,7 +36,7 @@ async function fixture(t) {
     }
     return Response.json(data());
   };
-  const config = { baseUrl: 'http://localhost', apiToken: 'ordinary', internalServiceToken: 'internal', clientId: 'client', stateDir: dir, knowledgeScopeRef: 'a'.repeat(64) };
+  const config = { baseUrl: 'http://localhost', applicationId: 'app', apiToken: 'ordinary', internalServiceToken: 'internal', clientId: 'client', stateDir: dir, knowledgeScopeRef: 'a'.repeat(64) };
   return { config, fetchImpl, stats: () => ({ posts, conversations, deletes, bodies }), setStatus: s => { status = s; } };
 }
 test('lost submission response replays identical persisted input across client restart; full evidence archived', async t => {
@@ -67,4 +70,48 @@ test('expired or missing terminal events cannot be reported complete', () => {
   const task = { id: 'x', status: 'succeeded', eventsExpired: true };
   assert.equal(project({ task, snapshot: { events: [] } }).complete, false);
   assert.equal(project({ task: { ...task, eventsExpired: false }, snapshot: { events: [] } }).complete, false);
+});
+
+test('status proves server-bound pairing, rejects mismatch before writes, distinguishes busy from absent qualified capacity', async t => {
+  const f = await fixture(t);
+  let ordinaryId = 'app', available = 0, max = 1;
+  const client = new ImaClient(f.config, { fetchImpl: async url => Response.json(url.includes('/api/capabilities')
+    ? { applicationId: ordinaryId, features: { durable_qa_tasks_v1: true } }
+    : { applicationId: 'app', available, policies: { knowledge_agent: { max_concurrent: max } }, features: { durable_qa_tasks_v1: true, knowledge_agent_keyed_sse_v1: true } }) });
+  assert.equal((await client.status()).ready, true);
+  assert.equal((await client.status()).canSubmitNow, false);
+  ordinaryId = 'another';
+  assert.equal((await client.status()).identityPairing, 'mismatch');
+  await assert.rejects(client.ask({ question: 'Q', requestKey: 'key' }), { code: 'application_pairing_unverified' });
+  assert.equal(f.stats().posts, 0); assert.equal(f.stats().conversations, 0);
+  ordinaryId = 'app'; max = 0;
+  assert.equal((await client.status()).reason, 'no_eligible_capacity');
+});
+
+test('web intent is forwarded, accurate late citations, process and text-only suggestions survive archive and export', async t => {
+  const f = await fixture(t);
+  const client = new ImaClient(f.config, { fetchImpl: f.fetchImpl });
+  await assert.rejects(client.ask({ question: 'Q', requestKey: 'key', sourceIntent: 'web' }));
+  const full = await client.ask({ question: 'Q', requestKey: 'key', sourceIntent: 'web' });
+  assert.equal(JSON.parse(f.stats().bodies[0]).source_intent, 'web_requested');
+  assert.equal(JSON.parse(f.stats().bodies[0]).retrieval_policy, 'knowledge_agent');
+  const value = project({ task: { id: 't', conversationId: 'c', status: 'succeeded', sourceIntent: 'web' }, snapshot: { events: [
+    { event: 'sources', data: { citationMap: { 'index:55': { type: 'web', displayNumbers: ['1'], sources: [{ url: 'https://example.org/a', title: 'A' }] }, 'context:kb': { type: 'knowledge' } } } },
+    { event: 'process', data: { phase: 'web', status: 'running' } },
+    { event: 'sources', data: { citationMap: { 'index:55': { type: 'web', displayNumbers: ['7'], sources: [{ url: 'https://example.org/b', title: 'B' }, { url: 'https://example.org/a', snippet: 'late' }] } } } },
+    { event: 'suggestions', data: { suggestions: ['follow up', { tool: 'do-not-run' }, 'follow up'] } },
+    { event: 'done', data: { complete: true, process: [{ phase: 'web', status: 'completed' }] } },
+  ] } });
+  assert.deepEqual(value.citationMap['index:55'].displayNumbers, ['1', '7']);
+  assert.equal(value.citationMap['index:55'].sources.length, 2);
+  assert.equal(value.citationMap['index:55'].sources[0].title, 'A');
+  assert.equal(value.citationMap['index:55'].sources[0].snippet, 'late');
+  assert.deepEqual(value.suggestions, ['follow up']); assert.equal(value.process[0].status, 'completed');
+  assert.equal(value.webEvidence, true); assert.equal(value.complete, true);
+  assert.equal(summary({ ...full, status: 'running' }).answer.length, 0);
+  assert.equal(summary(full).answerTruncated, true);
+  assert.ok(JSON.stringify(summary(full)).length < JSON.stringify(full).length / 5);
+  const exported = await client.export(full.taskId, { format: 'json' });
+  assert.equal(JSON.parse(await readFile(exported.output)).answer, full.answer);
+  assert.equal((await client.export(full.taskId, { format: 'json' })).output, exported.output);
 });

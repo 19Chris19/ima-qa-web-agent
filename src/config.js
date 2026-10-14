@@ -366,6 +366,7 @@ function getConfig(env = process.env) {
 
   return {
     airBot: require('./air/config').getAirConfig(env),
+    release: require('./release-metadata').releaseMetadata(env),
     qaProvider,
     port: parsePort(readEnv(env, 'PORT')),
     limits: {
@@ -433,6 +434,12 @@ function getConfig(env = process.env) {
         DEFAULT_RATE_LIMIT_MAX,
         { min: 0 },
       ),
+    },
+    sourcePreview: {
+      enabled: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_ENABLED')),
+      ipv4Only: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_IPV4_ONLY')),
+      directory: path.resolve(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_CACHE_PATH') || path.join(path.dirname(
+        readEnv(env, 'IMA_QA_CONVERSATION_STORE_PATH') || DEFAULT_CONVERSATION_STORE_PATH), 'source-preview-cache')),
     },
     conversations: {
       storePath:

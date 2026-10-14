@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, rm, lstat } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
@@ -26,6 +26,8 @@ export async function lock(path, action) {
 }
 export async function loadConfig(path = defaultConfig(), profile = 'default') {
   const file = resolve(path);
+  const stat = await lstat(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || (process.platform !== 'win32' && (stat.mode & 0o077))) throw fault('private_client_config_required');
   const root = await json(file);
   const selected = root.profiles?.[profile];
   if (!selected) throw fault('profile_not_found');

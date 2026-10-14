@@ -21,18 +21,19 @@ test('installer registers one Chinese skill, repeats, rolls back, protects edits
     if (args[1] === 'remove') { registry = []; return ''; }
     throw Error('unexpected command');
   };
-  const first = await setup(options, { runCodex });
+  const discoveryRoots = [options.skillsDir];
+  const first = await setup(options, { runCodex, discoveryRoots });
   assert.equal(first.skill, 'ima 知识库助手'); assert.equal(registry.length, 1);
   assert.deepEqual(await readdir(options.skillsDir), ['ima-qa']);
   const original = await readFile(join(first.skillPath, 'SKILL.md'), 'utf8');
-  await setup(options, { runCodex }); assert.equal(registry.length, 1);
+  await setup(options, { runCodex, discoveryRoots }); assert.equal(registry.length, 1);
   // Fail after a successful registration, not in the initial preflight.
   let lists = 0;
-  await assert.rejects(setup(options, { runCodex: args => { if (args[1] === 'list' && ++lists === 2) throw Error('verify failed'); return runCodex(args); } }));
+  await assert.rejects(setup(options, { discoveryRoots, runCodex: args => { if (args[1] === 'list' && ++lists === 2) throw Error('verify failed'); return runCodex(args); } }));
   assert.equal(await readFile(join(first.skillPath, 'SKILL.md'), 'utf8'), original);
   assert.equal(registry.length, 1);
   await writeFile(join(first.skillPath, 'SKILL.md'), original + '\nlocal edit');
-  await assert.rejects(setup(options, { runCodex }), { code: 'modified_skill_conflict' });
+  await assert.rejects(setup(options, { runCodex, discoveryRoots }), { code: 'modified_skill_conflict' });
   await assert.rejects(uninstall(options, { runCodex }), { code: 'modified_skill_conflict' });
   await writeFile(join(first.skillPath, 'SKILL.md'), original);
   assert.equal((await uninstall(options, { runCodex })).removed, true);
@@ -53,7 +54,8 @@ test('post-commit backup cleanup failure preserves the new receipt, Skill and MC
     if (args[1] === 'remove') { registry = []; return ''; }
     throw Error('unexpected command');
   };
-  await setup(options, { runCodex });
+  const discoveryRoots = [options.skillsDir];
+  await setup(options, { runCodex, discoveryRoots });
   const receiptPath = join(options.installDir, 'installation.json');
   const before = JSON.parse(await readFile(receiptPath, 'utf8'));
   const source = join(dir, 'updated-client');
@@ -62,7 +64,7 @@ test('post-commit backup cleanup failure preserves the new receipt, Skill and MC
   await atomic(join(source, 'package.json'), { ...manifest, version: '0.1.1' });
   await writeFile(join(source, 'skills/ima-qa/SKILL.md'), (await readFile(join(source, 'skills/ima-qa/SKILL.md'), 'utf8')) + '\nUpgrade fixture.\n');
   let cleanups = 0;
-  const upgraded = await setup(options, { runCodex, source, cleanupBackup: async () => {
+  const upgraded = await setup(options, { runCodex, discoveryRoots, source, cleanupBackup: async () => {
     cleanups++; throw Object.assign(new Error('synthetic cleanup failure'), { code: 'EACCES' });
   } });
   assert.equal(cleanups, 1);
@@ -78,6 +80,6 @@ test('post-commit backup cleanup failure preserves the new receipt, Skill and MC
   assert.deepEqual(registry[0].transport.args, current.registration.args);
   assert.deepEqual(await readdir(options.skillsDir), ['ima-qa']);
   assert.ok((await readdir(options.installDir)).some(name => name.startsWith('skill-backup-')));
-  assert.equal((await setup(options, { runCodex, source })).installed, true);
+  assert.equal((await setup(options, { runCodex, discoveryRoots, source })).installed, true);
   assert.equal((await uninstall(options, { runCodex })).removed, true);
 });

@@ -38,6 +38,7 @@ function matches(entry, registration) {
 }
 function add(run, reg) { run(['mcp', 'add', 'ima-qa', '--', reg.command, ...reg.args]); }
 export async function setup(options = {}, { runCodex = codex, source = packageRoot,
+  discoveryRoots,
   cleanupBackup = path => rm(path, { recursive: true, force: true }) } = {}) {
   if (Number(process.versions.node.split('.')[0]) < 22) throw fault('node_22_required');
   if (options.agent && options.agent !== 'codex') throw fault('unsupported_agent');
@@ -60,7 +61,7 @@ export async function setup(options = {}, { runCodex = codex, source = packageRo
       if (!old || currentHash !== old.skillHash) throw fault('modified_skill_conflict');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     // Scan by frontmatter name too: an earlier installation may use a different directory.
-    for (const directory of new Set([dirname(skillTarget), join(homedir(), '.agents/skills'),
+    for (const directory of new Set(discoveryRoots || [dirname(skillTarget), join(homedir(), '.agents/skills'),
       join(homedir(), '.codex/skills'), join(process.cwd(), '.agents/skills')])) {
       let names;
       try { names = await readdir(directory); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }

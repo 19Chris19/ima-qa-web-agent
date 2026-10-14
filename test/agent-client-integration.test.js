@@ -19,7 +19,7 @@ test('agent client against real Provider routes: paired application identity, co
       { id: 'agent', apiTokens: ['synthetic-api'], internalServiceTokens: ['synthetic-internal'] },
       { id: 'other', apiTokens: ['synthetic-other'], internalServiceTokens: ['synthetic-other-internal'] },
     ] }, concurrency: { maxConcurrentAsk: 1, queueLimit: 10 }, limits: { maxQuestionLength: 2000 }, rateLimit: { windowMs: 0, max: 0 } },
-    conversationStore, webReadiness: { mode: 'knowledge_agent', snapshot: () => ({ mode: 'knowledge_agent' }) },
+    conversationStore, webReadiness: { mode: 'knowledge_agent', snapshot: () => ({ mode: 'knowledge_agent', knowledgeAgentCapacity: 1, capacity: 1, schedulable: 1 }) },
     imaWebAgentClient: { async *streamAsk(args) {
       calls++; args.onDispatch?.();
       yield { type: 'delta', text: 'synthetic answer '.repeat(1000) };

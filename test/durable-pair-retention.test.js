@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { DurableQATaskStore, RETENTION_MS } = require('../src/durable-qa-store');
+const { DurableQATaskStore, RETENTION_MS, readTaskRecord } = require('../src/durable-qa-store');
 const { DurableQATasks } = require('../src/durable-qa-tasks');
 const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
 const { botRoutingOptions } = require('../src/bot-pair-routing');
@@ -111,7 +111,7 @@ test('legacy unpruned records migrate before pruning without changing trusted ap
     route_ref: 'synthetic-route', route_generation: 1, feature_generation: 2 };
   for (const [i, task] of [first, second].entries()) {
     const file = path.join(f.directory, `${task.id}.json`);
-    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const saved = readTaskRecord(file);
     delete saved.pairReceipt;
     saved.applicationKey = 'application:synthetic-bot-app';
     saved.ownerKey = `synthetic-visitor-${i}`;
@@ -136,6 +136,7 @@ test('more than 4096 expired complete pairs plus unfinished pair fit the default
   const saved = structuredClone(f.store.tasks.get(template.id));
   f.store.close();
   fs.unlinkSync(path.join(f.directory, `${template.id}.json`));
+  fs.unlinkSync(path.join(f.directory, `${template.id}.jsonl`));
   // Serialized synthetic receipts avoid thousands of fsyncs while exercising the real loader.
   for (let pair = 0; pair < 4097; pair++) {
     for (const leg of ['knowledge', 'web']) {

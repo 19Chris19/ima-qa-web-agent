@@ -6,9 +6,9 @@ import { loadConfig, defaultConfig, fault } from '../src/config.mjs';
 import { ImaClient, markdown } from '../src/client.mjs';
 
 const strings = ['config', 'profile', 'conversation', 'request-key', 'wait', 'source-intent', 'format', 'output', 'agent',
-  'install-dir', 'skills-dir', 'base-url', 'scope-ref', 'application-id', 'knowledge-base-name', 'version'];
+  'install-dir', 'skills-dir', 'base-url', 'scope-ref', 'application-id', 'knowledge-base-name', 'version', 'provider-env'];
 function help() {
-  return { commands: ['setup --agent codex [--config FILE]', 'doctor --json',
+  return { commands: ['connect-local --provider-env PRIVATE_FILE --base-url http://127.0.0.1:PORT [--config FILE]', 'setup --agent codex [--config FILE]', 'doctor --json',
     'ask QUESTION --request-key UNIQUE_KEY [--conversation ID] [--wait 25] --json',
     'task ID [--wait 25] --json', 'conversation ID --json', 'cancel ID --json',
     'export ID --format markdown|json --output FILE [--force]', 'mcp', 'update --version agent-vX.Y.Z', 'uninstall --agent codex'],
@@ -20,6 +20,7 @@ async function main() {
   const [command, arg] = positionals;
   if (!command || values.help) return help();
   const options = Object.fromEntries(Object.entries(values).map(([k, v]) => [k.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
+  if (command === 'connect-local') return (await import('../src/connect.mjs')).connectLocal(options);
   if (command === 'setup') {
     const { setup } = await import('../src/install.mjs');
     const result = await setup(options);

@@ -13,6 +13,7 @@ function page(t) {
     require.resolve('dompurify/dist/purify.min.js'), path.join(__dirname, '../public/chat-presentation.js'),
     path.join(__dirname, '../public/answer-renderer.js')]) window.eval(fs.readFileSync(file, 'utf8'));
   window.Blob = Blob;
+  window.HTMLImageElement.prototype.decode = async () => {};
   let clipboard;
   window.ClipboardItem = class { constructor(data) { this.data = data; } };
   Object.defineProperty(window.navigator, 'clipboard', { value: { write: async value => { clipboard = value; },
@@ -196,41 +197,52 @@ test('a unique web marker preserves native activation, while multiple destinatio
 });
 
 
-test('touch/pen first tap pins a preview, second tap navigates; outside tap closes without losing draft', async t => {
+test('touch/pen opens a modal source sheet; repeated taps never navigate and backdrop restores focus/draft', async t => {
   const p = page(t);
   p.input.value = 'Keep this draft';
   p.render('Web[7](@index-ref?id=42)', { citationMap: mapping });
   const marker = p.answer.querySelector('[data-citation-key]');
-  const pointer = (type, pointerType) => { const event = new p.window.MouseEvent(type, { bubbles: true, cancelable: true });
-    Object.defineProperty(event, 'pointerType', { value: pointerType }); marker.dispatchEvent(event); };
+  const pointer = (type, pointerType, node = marker, y = 0) => { const event = new p.window.MouseEvent(type, { bubbles: true, cancelable: true, clientY: y });
+    Object.defineProperty(event, 'pointerType', { value: pointerType }); node.dispatchEvent(event); };
   for (const pointerType of ['touch', 'pen']) {
-    pointer('pointerover', pointerType);
-    assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+    pointer('pointerover', pointerType); assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
     pointer('pointerdown', pointerType);
-    const first = new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 });
-    assert.equal(marker.dispatchEvent(first), false);
-    pointer('pointerout', pointerType);
-    await new Promise(resolve => setTimeout(resolve, 220));
-    const card = p.window.document.querySelector('.chat-citation-card');
-    assert.ok(card);
-    assert.match(card.textContent, /再次点按角标/);
-    assert.equal(card.querySelector('.chat-source-title a').href, marker.href);
+    assert.equal(marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })), false);
+    const card = p.window.document.querySelector('.chat-citation-sheet'); assert.ok(card);
+    assert.equal(card.getAttribute('aria-modal'), 'true'); assert.equal(p.window.document.body.style.position, 'fixed');
+    assert.equal(card.querySelector('.chat-source-open').href, marker.href);
     assert.equal(p.input.value, 'Keep this draft');
     pointer('pointerdown', pointerType);
-    let componentPrevented;
-    p.answer.addEventListener('click', event => { componentPrevented = event.defaultPrevented; event.preventDefault(); }, { once: true });
-    marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-    assert.equal(componentPrevented, false);
+    assert.equal(marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })), false);
+    assert.equal(p.window.document.querySelector('.chat-citation-sheet'), card);
+    card.querySelector('.chat-citation-sources').dispatchEvent(new p.window.Event('scroll', { bubbles: true }));
+    assert.equal(p.window.document.querySelector('.chat-citation-sheet'), card);
+    const last = card.querySelector('a'); last.focus();
+    p.window.document.dispatchEvent(new p.window.KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    assert.equal(p.window.document.activeElement, card.querySelector('button'));
+    p.window.document.querySelector('.chat-citation-backdrop').click();
     assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
+    assert.equal(p.window.document.body.style.position, ''); assert.equal(p.window.document.activeElement, marker);
   }
-  pointer('pointerdown', 'touch');
-  marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-  p.input.dispatchEvent(new p.window.MouseEvent('pointerdown', { bubbles: true }));
-  assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
-  assert.equal(p.input.value, 'Keep this draft');
-  pointer('pointerdown', 'touch');
-  marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
-  p.window.document.dispatchEvent(new p.window.Event('scroll'));
-  assert.equal(p.window.document.querySelector('.chat-citation-card'), null);
-  assert.equal(p.input.value, 'Keep this draft');
+  pointer('pointerdown', 'touch'); marker.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  const handle = p.window.document.querySelector('.chat-sheet-handle');
+  pointer('pointerdown', 'touch', handle, 10); pointer('pointermove', 'touch', handle, 90); pointer('pointerup', 'touch', handle, 90);
+  assert.equal(p.window.document.querySelector('.chat-citation-sheet'), null); assert.equal(p.input.value, 'Keep this draft');
+});
+
+test('optional cover is delayed, authenticated through callback, revoked on close; late results never attach to another citation', async t => {
+  const p = page(t); let calls = 0, revoked = [], finish;
+  p.window.URL.createObjectURL = () => 'blob:synthetic'; p.window.URL.revokeObjectURL = url => revoked.push(url);
+  const map = { 'index:42': { type: 'web', sources: [{ ...mapping['index:42'].sources[0], sourceId: 'a'.repeat(64) }] } };
+  const loadPreview = async (reference, signal) => { calls++; assert.equal(reference.citationKey, 'index:42'); assert.equal(reference.taskId, 'task');
+    return { blob: new Blob(['image'], { type: 'image/png' }) }; };
+  p.render('Web[7](@index-ref?id=42)', { citationMap: map, conversationId: 'conv', taskId: 'task', loadPreview });
+  p.answer.querySelector('[data-citation-key]').focus(); assert.equal(calls, 0);
+  await new Promise(resolve => setTimeout(resolve, 330)); assert.equal(calls, 1);
+  assert.equal(p.window.document.querySelector('.chat-source-cover img').src, 'blob:synthetic');
+  p.ui.closeCard(); assert.deepEqual(revoked, ['blob:synthetic']);
+  p.render('Web[7](@index-ref?id=42)', { citationMap: map, loadPreview: () => new Promise(resolve => { finish = resolve; }) });
+  p.answer.querySelector('[data-citation-key]').dispatchEvent(new p.window.MouseEvent('pointerover', { bubbles: true })); await new Promise(resolve => setTimeout(resolve, 330));
+  p.ui.closeCard(); finish({ blob: new Blob(['late']) }); await Promise.resolve(); await Promise.resolve();
+  assert.equal(p.window.document.querySelector('.chat-source-cover'), null); assert.equal(revoked.length, 1);
 });

@@ -12,6 +12,8 @@ const { createAnswerTextStream, sanitizeIMAAnswerText } = require('./answer-text
 const { IMAUpstreamProtocolError } = require('./ima-upstream-protocol');
 const { DurableQATasks } = require('./durable-qa-tasks');
 const { registerDurableQARoutes } = require('./durable-qa-routes');
+const { registerSourcePreviewRoutes } = require('./source-preview-routes');
+const { releaseMetadata } = require('./release-metadata');
 const { fault: taskFault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
 const { createApplicationIdentity, applicationOwnerKey } = require('./application-identity');
@@ -122,8 +124,9 @@ function createApp({
   app.locals.durableQATasks = durableTasks;
   app.get('/api/capabilities', ordinaryAuth, (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ schemaVersion: 1, features: {
+    res.json({ schemaVersion: 1, ...(_req.applicationKey?.startsWith('application:') ? { applicationId: _req.applicationKey.slice(12) } : {}), features: {
       durable_qa_tasks_v1: Boolean(durableTasks?.available),
+      ...(config.sourcePreview?.enabled ? { web_source_preview_v1: true } : {}),
     } });
   });
   registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
@@ -138,10 +141,21 @@ function createApp({
     },
   });
 
+  registerSourcePreviewRoutes(app, { config, tasks: durableTasks, conversations, ordinaryAuth, internalAuth, getConversationOwnerKey,
+    busy() {
+      const queue = askQueue.stats();
+      const state = webReadiness?.snapshot();
+      return queue.queuedRequests > 0 || queue.activeRequests >= queue.maxConcurrent
+        || (state && Number(state.schedulable) <= 0) || qualificationMaintenanceActive()
+        || Boolean(app.locals.accountPoolExerciseManager?.isMaintenanceActive?.());
+    },
+  });
+
   app.get('/healthz', (_req, res) => {
     const provider = config.qaProvider || 'openapi-mimo';
     const health = {
       ok: true,
+      release: config.release || releaseMetadata(),
       provider,
       model: provider === 'ima-web-agent' ? config.webAgent?.modelId : config.mimo.model,
       queue: {
@@ -183,6 +197,8 @@ function createApp({
     if (provider === 'local-rag-mimo') {
       health.localRag = localRagClient?.getStatus?.();
     }
+    if (config.sourcePreview?.enabled) health.sourcePreview = { enabled: true, workerActive: Boolean(app.locals.sourcePreview?.worker),
+      ...app.locals.sourcePreview?.metrics };
     res.json(health);
   });
 
@@ -193,7 +209,9 @@ function createApp({
     const nativeCapacity = config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent'
       ? Math.max(0, Math.min(Number(state?.knowledgeAgentCapacity) || 0, Number(state?.capacity) || 0)) : 0;
     res.setHeader('Cache-Control', 'no-store');
-    const website = { schemaVersion: 1, generation: state?.generation || 0, mode,
+    const website = { schemaVersion: 1,
+      ...(_req.applicationKey?.startsWith('application:') ? { applicationId: _req.applicationKey.slice(12) } : {}),
+      generation: state?.generation || 0, mode,
       maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
       totalSlots: state?.totalSlots ?? 0, eligibleAccounts: state?.eligibleAccounts ?? 0,
       totalAccounts: state?.totalAccounts ?? 0, schedulableAccounts: state?.schedulableAccounts ?? 0,
@@ -203,6 +221,7 @@ function createApp({
         knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
+        ...(config.sourcePreview?.enabled ? { web_source_preview_v1: true } : {}),
       },
     };
     if (!botCompatibility) return res.json(website);
