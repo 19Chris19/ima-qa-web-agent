@@ -256,7 +256,7 @@ class DurableQATasks {
               throw fault('task_store_unavailable');
             }
             manager.terminal(task.id, 'failed', safeTaskFailureReason(data.failureReason));
-          } else if (['conversation', 'process', 'sources', 'delta'].includes(event)) {
+          } else if (['conversation', 'process', 'sources', 'delta', 'suggestions'].includes(event)) {
             streamBuffer.append(event, data);
           }
         }
@@ -304,7 +304,7 @@ class DurableQATasks {
     }
   }
 
-  subscribe(task, after, res) {
+  subscribe(task, after, res, project = (_name, data) => data) {
     this.ensure();
     const subscribers = this.subscribers.get(task.id) || new Set();
     if (subscribers.size >= 8 || [...this.subscribers.values()].reduce((n, s) => n + s.size, 0) >= 256) throw fault('task_subscriber_capacity', 429);
@@ -340,7 +340,7 @@ class DurableQATasks {
       for (let index = cursor; index < current.events.length; index++) {
         const event = current.events[index];
         if (res.writableLength > 256 * 1024) { cleanup(); res.destroy(); return; }
-        res.write(`id: ${event.id}\nevent: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+        res.write(`id: ${event.id}\nevent: ${event.event}\ndata: ${JSON.stringify(project(event.event, event.data))}\n\n`);
         cursor = event.id;
       }
       if (TERMINAL.has(current.status)) end();

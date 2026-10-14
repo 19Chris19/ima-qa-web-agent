@@ -722,3 +722,38 @@ test('binding journal repairs history after a binding write fault without repeat
   recovered.close();
 });
 
+
+test('chat_v1 archives late suggestions and exact citations before its single done, survives reload and replay', async t => {
+  const citationMap = { 'index:42': { type: 'web', sources: [{ url: 'https://example.org/verified', title: 'Synthetic source', snippet: 'supplied excerpt' }] },
+    'index:5': { type: 'knowledge' } };
+  const f = await fixture(t, { async *stream() {
+    yield { type: 'sources', sources: [{ index: 1, title: 'PRIVATE KB', snippet: 'PRIVATE FILE' }], sourceKinds: ['knowledge'], citationMap };
+    yield { type: 'delta', text: 'Synthetic answer[7](@index-ref?id=42)[2](@index-ref?id=5)' };
+    yield { type: 'done' };
+    yield { type: 'suggestions', suggestions: [{ text: 'Follow up', tool: 'private' }, 'Second', 'Third'] };
+  } });
+  const { task } = await (await f.submit('chat-presentation')).json();
+  await until(() => f.app.locals.durableQATasks.store.tasks.get(task.id)?.status === 'succeeded');
+  const raw = await (await f.request(`/api/tasks/${task.id}`)).json();
+  const view = await (await f.request(`/api/tasks/${task.id}?presentation=chat_v1`)).json();
+  assert.match(JSON.stringify(raw), /PRIVATE KB/);
+  assert.doesNotMatch(JSON.stringify(view), /PRIVATE/);
+  const events = view.snapshot.events;
+  const done = events.filter(event => event.event === 'done');
+  assert.equal(done.length, 1);
+  assert.ok(events.find(event => event.event === 'suggestions').id < done[0].id);
+  assert.equal(done[0].data.citationMap['index:42'].sources[0].url, 'https://example.org/verified');
+  const replay = await (await f.request(`/api/tasks/${task.id}/events?after=0&presentation=chat_v1`)).text();
+  assert.equal((replay.match(/event: done/g) || []).length, 1);
+  assert.doesNotMatch(replay, /PRIVATE/);
+  const duplicate = await (await f.submit('chat-presentation')).json();
+  assert.equal(duplicate.task.id, task.id);
+  assert.equal(f.calls.length, 1);
+  const restored = new ConversationStore({ storePath: f.conversationStore.storePath });
+  const assistant = restored.getDetail(f.conversationId, owner).messages.at(-1);
+  assert.deepEqual(assistant.suggestions, ['Follow up', 'Second', 'Third']);
+  assert.deepEqual(assistant.citationMap['index:42'].displayNumbers, ['7']);
+  const history = await (await f.request(`/api/conversations/${f.conversationId}?presentation=chat_v1`)).json();
+  assert.doesNotMatch(JSON.stringify(history), /PRIVATE/);
+  assert.equal(history.messages.at(-1).suggestions.length, 3);
+});

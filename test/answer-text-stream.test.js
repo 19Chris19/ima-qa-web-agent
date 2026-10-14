@@ -18,3 +18,11 @@ test('keeps incomplete or embedded references as original answer text', () => {
   assert.equal(stream.finish(), '（@context-ref?id=12');
   assert.equal(sanitizeIMAAnswerText('例子（@context-ref?id=12）继续'), '例子（@context-ref?id=12）继续');
 });
+
+
+test('chat presentation preserves complete citation targets split across network chunks, default bot sanitizer is unchanged', () => {
+  const stream = createAnswerTextStream({ preserveCitations: true });
+  const chunks = ['Answer[7]', '(@context-', 'ref?id=42)', '  '];
+  assert.equal(chunks.map(chunk => stream.push(chunk)).join('') + stream.finish(), 'Answer[7](@context-ref?id=42)  ');
+  assert.equal(sanitizeIMAAnswerText('Answer (@context-ref?id=42)'), 'Answer');
+});

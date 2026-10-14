@@ -1,3 +1,4 @@
+const chat = require('./chat-presentation');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const cors = require('cors');
@@ -225,7 +226,9 @@ function createApp({
   app.get('/api/conversations/:conversationId', ordinaryAuth, (req, res) => {
     try {
       const ownerKey = getConversationOwnerKey(req, res);
-      res.json({ success: true, ...conversations.getDetail(req.params.conversationId, ownerKey) });
+      const detail = { success: true, ...conversations.getDetail(req.params.conversationId, ownerKey) };
+      if (req.query.presentation !== undefined && req.query.presentation !== 'chat_v1') return res.status(400).json({ error: 'invalid_presentation' });
+      res.json(req.query.presentation === 'chat_v1' ? chat.projectHistory(detail) : detail);
     } catch (error) {
       res.status(error.statusCode || 404).json({
         success: false,
@@ -865,6 +868,17 @@ async function handleStreamingWebAgentAsk(context) {
   try {
     const upstream = conversationStore.getUpstream(conversationId, ownerKey);
     const sources = [];
+    let citationMap = {};
+    let suggestions = [];
+    const process = [];
+    const stages = new Set();
+    const emitStage = (phase, status) => {
+      if (context.botContract) return;
+      const step = chat.processStep({ phase, status });
+      const index = process.findIndex(item => item.stepId === step.stepId);
+      if (index < 0) process.push(step); else process[index] = step;
+      writeSse(res, 'process', { ...step, requestId });
+    };
     let searchSummary = '';
     let answer = '';
     let accountId = upstream.accountId || '';
@@ -872,7 +886,7 @@ async function handleStreamingWebAgentAsk(context) {
     let sessionAnswerProfile = upstream.sessionAnswerProfile || '';
     const sourceKinds = [];
     let terminals = 0;
-    const answerTextStream = createAnswerTextStream();
+    const answerTextStream = createAnswerTextStream({ preserveCitations: !context.botContract });
     for await (const event of imaWebAgentClient.streamAsk({
       ...botRoutingOptions(context.botContract, context.applicationKey, context.ownerKey),
       ...(context.botContract ? { originalQuestion: question } : {}),
@@ -917,14 +931,26 @@ async function handleStreamingWebAgentAsk(context) {
         sources.push(...(event.sources || []));
         sourceKinds.push(...normalizedSourceKinds(event));
         searchSummary = event.searchSummary || searchSummary;
-        writeSse(res, 'sources', { sources, searchSummary, requestId });
+        citationMap = chat.mergeCitations(citationMap, event.citationMap);
+        writeSse(res, 'sources', { sources, searchSummary, ...(!context.botContract ? { citationMap } : {}), requestId });
+        for (const kind of new Set(normalizedSourceKinds(event))) {
+          if (['knowledge', 'web'].includes(kind) && !stages.has(kind)) { stages.add(kind); emitStage(kind, 'completed'); }
+        }
       }
 
       if (event.type === 'process') {
-        writeSse(res, 'process', { ...event, requestId });
+        const step = chat.processStep(event);
+        if (step) emitStage(step.phase, step.status);
+        else writeSse(res, 'process', { ...event, requestId });
+      }
+
+      if (event.type === 'suggestions' && !context.botContract) {
+        suggestions = chat.suggestions(event.suggestions);
+        writeSse(res, 'suggestions', { suggestions, requestId });
       }
 
       if (event.type === 'delta') {
+        if (!stages.has('answer')) { stages.add('answer'); emitStage('answer', 'running'); }
         const safeText = answerTextStream.push(event.text);
         if (safeText) {
           answer += safeText;
@@ -945,6 +971,8 @@ async function handleStreamingWebAgentAsk(context) {
     }
 
     if (context.durableTask && answer === '') throw new IMAUpstreamProtocolError('upstream_empty_answer');
+    if (stages.has('answer')) emitStage('answer', 'completed');
+    citationMap = chat.withDisplayNumbers(citationMap, answer);
     const answerForHistory = answer || noReliableContentAnswer();
     const evidence = answerEvidence(context, sourceKinds, sources.length, answer);
     conversationStore.setUpstream(conversationId, { accountId, sessionId,
@@ -956,10 +984,11 @@ async function handleStreamingWebAgentAsk(context) {
       sources,
       searchSummary,
       evidence,
+      citationMap, suggestions, process,
       ownerKey,
     });
     await req.internalIdempotency?.complete(conversationId, answerForHistory);
-    writeSse(res, 'done', { searchSummary, conversationId, requestId, ...evidence });
+    writeSse(res, 'done', { searchSummary, conversationId, requestId, ...evidence, ...(!context.botContract ? { citationMap, suggestions, process } : {}) });
     observeExecution(context, 'complete', 'success');
 
     return res.end();
@@ -1337,6 +1366,7 @@ function appendConversationTurn(conversationStore, {
   sources = [],
   searchSummary = '',
   evidence = {},
+  citationMap, suggestions, process,
   ownerKey,
 }) {
   conversationStore.appendTurn(
@@ -1345,6 +1375,7 @@ function appendConversationTurn(conversationStore, {
     answer,
     {
       sources,
+      ...chat.metadata({ citationMap, suggestions, process }),
       searchSummary: searchSummary || (sources.length ? `找到 ${sources.length} 篇知识库资料` : ''),
       ...evidence,
     },

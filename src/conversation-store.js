@@ -1,3 +1,4 @@
+const chat = require('./chat-presentation');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -180,6 +181,7 @@ class ConversationStore {
       sources: normalizePublicSources(metadata.sources, answer),
       searchSummary: normalizeSearchSummary(metadata.searchSummary),
       evidence: normalizeEvidence(metadata),
+      ...chat.metadata(metadata),
     });
     if (!conversation.title) {
       conversation.title = conversationTitle(normalizedQuestion);
@@ -202,7 +204,8 @@ class ConversationStore {
       conversation.completedTasks[taskId] = now;
       conversation.turns.push({ taskId, question, answer, createdAt: now,
         sources: normalizePublicSources(metadata.sources, answer),
-        searchSummary: normalizeSearchSummary(metadata.searchSummary), evidence: normalizeEvidence(metadata) });
+        searchSummary: normalizeSearchSummary(metadata.searchSummary), evidence: normalizeEvidence(metadata),
+        ...chat.metadata(metadata) });
       conversation.turns = conversation.turns.slice(-this.maxTurns);
       conversation.upstream = normalizeUpstream(upstream, conversation.upstream);
       if (!conversation.title) conversation.title = conversationTitle(question);
@@ -252,6 +255,7 @@ class ConversationStore {
           ...(turn.sources?.length ? { sources: turn.sources } : {}),
           ...(turn.searchSummary ? { searchSummary: turn.searchSummary } : {}),
           ...turn.evidence,
+          ...chat.metadata(turn),
         },
       ]),
     };
@@ -385,6 +389,7 @@ function normalizeConversation(value) {
             sources: normalizePublicSources(turn?.sources),
             searchSummary: normalizeSearchSummary(turn?.searchSummary),
             evidence: normalizeEvidence(turn?.evidence),
+            ...chat.metadata(turn),
           }))
           .filter((turn) => turn.question && turn.answer)
       : [],
