@@ -234,7 +234,7 @@ class DurableQATasks {
         manager.ensure();
         if (TERMINAL.has(manager.store.tasks.get(task.id).status)) return true;
         buffer += String(chunk);
-        if (buffer.length > 2 * 1024 * 1024) throw fault('task_capacity', 429);
+        if (buffer.length > 2 * 1024 * 1024) throw manager.store.capacity(task.id, 'response_frame');
         let end;
         while ((end = buffer.indexOf('\n\n')) >= 0) {
           const frame = buffer.slice(0, end);

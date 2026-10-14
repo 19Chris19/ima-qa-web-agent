@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const { once } = require('node:events');
 const { createApp } = require('../src/app');
 const { ConversationStore } = require('../src/conversation-store');
-const { DurableQATaskStore } = require('../src/durable-qa-store');
+const { DurableQATaskStore, readTaskRecord } = require('../src/durable-qa-store');
 const { DurableQATasks } = require('../src/durable-qa-tasks');
 const { createAskQueue } = require('../src/ask-queue');
 
@@ -323,7 +323,7 @@ test('history fault preserves completion journal and recovery completes exactly 
   const { task } = await (await f.submit()).json();
   await until(() => !f.app.locals.durableQATasks.available);
   const file = path.join(f.app.locals.durableQATasks.store.directory, `${task.id}.json`);
-  assert.ok(JSON.parse(fs.readFileSync(file)).completion);
+  assert.ok(readTaskRecord(file).completion);
   assert.equal(f.conversationStore.getHistory(f.conversationId, owner).length, 0);
   f.conversationStore._write = write;
   f.app.locals.durableQATasks.close();
@@ -389,7 +389,7 @@ test('event write failure is not published and restart does not repeat dispatche
   const { task } = await (await f.submit()).json();
   await until(() => !f.app.locals.durableQATasks.available);
   const directory = `${f.conversationStore.storePath}.tasks`;
-  const persisted = JSON.parse(fs.readFileSync(path.join(directory, `${task.id}.json`)));
+  const persisted = readTaskRecord(path.join(directory, `${task.id}.json`));
   assert.equal(JSON.stringify(persisted.events).includes('must-not-publish'), false);
   f.app.locals.durableQATasks.close();
   const recovered = new DurableQATasks({ directory, conversations: f.conversationStore, queue: createAskQueue({}), execute: () => assert.fail('must not retry') });
@@ -638,7 +638,7 @@ test('raw activity checkpoints trace within one second without normalized events
   assert.equal(current.trace.rawUpstreamBytes, 25);
   release();
   await until(() => manager.store.tasks.get(task.id).status === 'succeeded');
-  const persisted = JSON.parse(fs.readFileSync(path.join(manager.store.directory, `${task.id}.json`), 'utf8'));
+  const persisted = readTaskRecord(path.join(manager.store.directory, `${task.id}.json`));
   assert.equal(persisted.trace.lastUpstreamActivityAt, 123456790);
 });
 
@@ -711,7 +711,7 @@ test('binding journal repairs history after a binding write fault without repeat
   const { task } = await (await f.submit()).json();
   await until(() => !f.app.locals.durableQATasks.available);
   const directory = f.app.locals.durableQATasks.store.directory;
-  assert.equal(JSON.parse(fs.readFileSync(path.join(directory, `${task.id}.json`))).bindingPending, true);
+  assert.equal(readTaskRecord(path.join(directory, `${task.id}.json`)).bindingPending, true);
   f.app.locals.durableQATasks.close();
   f.conversationStore.bindTaskUpstream = original;
   const conversations = new ConversationStore({ storePath: f.conversationStore.storePath });

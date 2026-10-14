@@ -755,7 +755,7 @@ for (const mode of ['classic_knowledge', 'knowledge_agent']) {
     const { task } = await response.json();
     await until(() => !f.app.locals.durableQATasks.available);
     const directory = f.app.locals.durableQATasks.store.directory;
-    const saved = JSON.parse(fs.readFileSync(path.join(directory, `${task.id}.json`)));
+    const saved = require('../src/durable-qa-store').readTaskRecord(path.join(directory, `${task.id}.json`));
     assert.equal(saved.completion.upstream.sessionAnswerProfile, 'classic_knowledge');
     assert.equal(saved.completion.answer, raw);
     f.app.locals.durableQATasks.close();

@@ -3,7 +3,7 @@
 const { TERMINAL, fault } = require('./durable-qa-store');
 
 // Batch only unpublished text and diagnostic counters. Every published event still
-// passes through the store's atomic rename + file/directory fsync boundary.
+// passes through the store's fsync commit boundary before publication.
 class DurableQAStreamBuffer {
   constructor({ store, id, publish, onError, deltaMs = 50, traceMs = 1000, maxDeltaBytes = 8192 }) {
     this.store = store;
@@ -44,9 +44,9 @@ class DurableQAStreamBuffer {
     const current = this.store.tasks.get(this.id);
     if (current.trace.dispatchedAt === null) throw fault('task_dispatch_marker_missing');
     const bytes = Buffer.byteLength(JSON.stringify(event));
-    if ((current.trace.upstreamBytes || 0) + (this.trace.upstreamBytes || 0) + bytes > this.store.maxTaskBytes ||
-        (current.trace.upstreamEvents || 0) + (this.trace.upstreamEvents || 0) + 1 > this.store.maxEvents) {
-      throw fault('task_capacity', 429);
+    if ((current.trace.upstreamBytes || 0) + (this.trace.upstreamBytes || 0) + bytes > this.store.maxUpstreamBytes ||
+        (current.trace.upstreamEvents || 0) + (this.trace.upstreamEvents || 0) + 1 > this.store.maxUpstreamEvents) {
+      throw this.store.capacity(this.id, 'upstream_stream');
     }
     const now = this.store.now();
     this.trace.firstUpstreamEventAt ??= now;
