@@ -102,6 +102,13 @@ test('default disabled has no worker; cold URLs are single-flight with global ro
   await new Promise(resolve => setTimeout(resolve, 100)); assert.equal(preview.worker, null);
   await preview.close();
 });
+test('late cache IO cannot queue or overlap a new atomic index write', async t => {
+  const dir = await directory(t), cache = new PreviewCache(dir); await cache.init();
+  const outcomes = await Promise.all([cache.put(key('first'), { bytes: image, type: 'image/png' }), cache.put(key('second'), { bytes: image, type: 'image/png' })]);
+  assert.equal(outcomes.filter(row => row.status === 'ready').length, 1);
+  assert.equal(cache.entries.size, 1);
+  assert.equal(JSON.parse(await readFile(path.join(dir, 'index.json'), 'utf8')).length, 1);
+});
 test('timeout and client cancellation shed work without stopping QA or making failure cache entries', async t => {
   const dir = await directory(t), preview = new SourcePreview({ enabled: true, directory: dir,
     workerFile: path.join(__dirname, '../test-support/source-preview-worker.cjs') }); t.after(() => preview.close());

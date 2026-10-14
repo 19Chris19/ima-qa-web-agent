@@ -54,17 +54,23 @@ class PreviewCache {
   }
   async put(key, image, now = Date.now()) {
     await this.init();
-    const bytes = image?.bytes?.length || 0;
-    if (bytes > LIMITS.image || (bytes && imageType(image.bytes) !== image.type)) throw failure('invalid_image');
-    // Remove the old file before replacement; disk usage never exceeds the cap.
-    const old = this.entries.get(key); this.entries.delete(key);
-    if (old?.bytes) await fs.unlink(path.join(this.directory, `${key}.img`)).catch(() => {});
-    await this.prune(bytes, 1, now);
-    if (bytes) await fs.writeFile(path.join(this.directory, `${key}.img`), image.bytes, { mode: 0o600, flag: 'wx' });
-    const row = { key, bytes, used: now, expires: now + (bytes ? this.limits.ttl : this.limits.failureTtl),
-      ...(bytes ? { type: image.type, digest: hash(image.bytes) } : {}) };
-    this.entries.set(key, row);
-    await this.save(); return { ...row, status: bytes ? 'ready' : 'text_only' };
+    // A timed-out job can still be finishing filesystem IO. Shed overlapping
+    // writes rather than queue them or race atomic index replacements.
+    if (this.writing) return { status: 'text_only' };
+    this.writing = true;
+    try {
+      const bytes = image?.bytes?.length || 0;
+      if (bytes > LIMITS.image || (bytes && imageType(image.bytes) !== image.type)) throw failure('invalid_image');
+      // Remove the old file before replacement; disk usage never exceeds the cap.
+      const old = this.entries.get(key); this.entries.delete(key);
+      if (old?.bytes) await fs.unlink(path.join(this.directory, `${key}.img`)).catch(() => {});
+      await this.prune(bytes, 1, now);
+      if (bytes) await fs.writeFile(path.join(this.directory, `${key}.img`), image.bytes, { mode: 0o600, flag: 'wx' });
+      const row = { key, bytes, used: now, expires: now + (bytes ? this.limits.ttl : this.limits.failureTtl),
+        ...(bytes ? { type: image.type, digest: hash(image.bytes) } : {}) };
+      this.entries.set(key, row);
+      await this.save(); return { ...row, status: bytes ? 'ready' : 'text_only' };
+    } finally { this.writing = false; }
   }
   async prune(extraBytes = 0, extraEntries = 0, now = Date.now()) {
     let bytes = [...this.entries.values()].reduce((sum, row) => sum + row.bytes + 256, 0);
