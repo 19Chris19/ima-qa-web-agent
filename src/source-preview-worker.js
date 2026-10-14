@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const { constants } = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { fetchCover, LIMITS, imageType, failure } = require('./source-preview-network');
+const { fetchCover, resolveAddresses, LIMITS, imageType, failure } = require('./source-preview-network');
 const hash = value => createHash('sha256').update(value).digest('hex');
 const BUDGET = Object.freeze({ bytes: 128 * 1024 * 1024, entries: 2000, ttl: 7 * 86400000, failureTtl: 3600000 });
 class PreviewCache {
@@ -87,7 +87,8 @@ class PreviewCache {
     await fs.rename(name, path.join(this.directory, 'index.json'));
   }
 }
-function startWorker({ port = parentPort, directory = workerData.directory, fetchImpl = fetchCover } = {}) {
+function startWorker({ port = parentPort, directory = workerData.directory,
+  ipv4Only = workerData?.ipv4Only === true, fetchImpl = fetchCover } = {}) {
   const cache = new PreviewCache(directory), permits = new Map(), jobs = new Map(); let nextPermit = 0;
   port.on('message', async message => {
     if (message.op === 'permit-result') { permits.get(message.permitId)?.(message.allowed); permits.delete(message.permitId); return; }
@@ -108,7 +109,8 @@ function startWorker({ port = parentPort, directory = workerData.directory, fetc
         if (controller.signal.aborted) abort();
       });
       let result;
-      try { result = await cache.put(key, await fetchImpl(url, { signal: controller.signal, permit })); }
+      try { result = await cache.put(key, await fetchImpl(url, { signal: controller.signal, permit,
+        ...(ipv4Only ? { lookup: (host, options) => resolveAddresses(host, { ...options, ipv4Only: true }) } : {}) })); }
       catch (error) {
         result = (['budget', 'cancelled', 'AbortError'].includes(error.code) || controller.signal.aborted) && controller.signal.reason?.code !== 'timeout'
           ? { status: 'text_only' } : await cache.put(key, null);

@@ -7,9 +7,10 @@ const { publicUrl, LIMITS } = require('./source-preview-network');
 const textOnly = reason => ({ status: 'text_only', reason });
 class SourcePreview {
   constructor({ enabled = false, directory, busy = () => false, now = Date.now,
-    workerFile = path.join(__dirname, 'source-preview-worker.js'), idleMs = 60000 } = {}) {
+    workerFile = path.join(__dirname, 'source-preview-worker.js'), idleMs = 60000, ipv4Only = false } = {}) {
     this.enabled = enabled; this.directory = directory; this.busy = busy; this.now = now;
     this.workerFile = workerFile; this.idleMs = idleMs;
+    this.ipv4Only = ipv4Only === true;
     this.pending = new Map(); this.nextId = 0; this.active = null; this.worker = null; this.idle = null;
     this.urls = []; this.requests = []; this.imageReaders = 0;
     this.metrics = { jobs: 0, http: 0, hits: 0, shed: 0, errors: 0, maxRpcPending: 0, fetchBacklog: 0 };
@@ -18,7 +19,7 @@ class SourcePreview {
     if (this.closed || this.pending.size >= 32) { this.metrics.shed++; return Promise.reject(new Error('preview_unavailable')); }
     clearTimeout(this.idle);
     if (!this.worker) {
-      const worker = this.worker = new Worker(this.workerFile, { workerData: { directory: this.directory }, env: {}, execArgv: [],
+      const worker = this.worker = new Worker(this.workerFile, { workerData: { directory: this.directory, ipv4Only: this.ipv4Only }, env: {}, execArgv: [],
         resourceLimits: { maxOldGenerationSizeMb: 16, maxYoungGenerationSizeMb: 4, stackSizeMb: 2 } });
       worker.unref();
       worker.on('message', message => {

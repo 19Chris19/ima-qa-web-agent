@@ -45,13 +45,16 @@ function publicUrl(value) {
     || (net.isIP(host) && !publicIp(host))) throw failure('unsafe_url');
   return url;
 }
-async function resolveAddresses(host, { signal } = {}) {
-  const resolver = new dns.Resolver({ timeout: 1000, tries: 1 });
+async function resolveAddresses(host, { signal, ipv4Only = false,
+  createResolver = () => new dns.Resolver({ timeout: 1000, tries: 1 }) } = {}) {
+  const resolver = createResolver();
   const cancel = () => resolver.cancel();
   signal?.addEventListener('abort', cancel, { once: true });
   try {
     signal?.throwIfAborted();
-    const results = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)]);
+    const requests = [resolver.resolve4(host)];
+    if (!ipv4Only) requests.push(resolver.resolve6(host));
+    const results = await Promise.allSettled(requests);
     signal?.throwIfAborted();
     if (results.some(r => r.status === 'rejected' && !['ENODATA', 'ENOTFOUND'].includes(r.reason.code))) throw failure('dns_unavailable');
     return results.flatMap((r, i) => r.status === 'fulfilled' ? r.value.map(address => ({ address, family: i ? 6 : 4 })) : []);
@@ -192,4 +195,4 @@ async function fetchCover(url, { signal, permit, ...transport } = {}) {
   if (!image) throw failure('no_image');
   return requestPublic(image, { signal, permit, image: true, ...transport });
 }
-module.exports = { LIMITS, publicIp, publicUrl, pinnedAddress, imageType, readBody, requestPublic, coverFromHead, fetchCover, failure };
+module.exports = { LIMITS, publicIp, publicUrl, resolveAddresses, pinnedAddress, imageType, readBody, requestPublic, coverFromHead, fetchCover, failure };

@@ -14,6 +14,8 @@ performance and UI acceptance, with Node 22:
 ```dotenv
 IMA_QA_SOURCE_PREVIEW_ENABLED=true
 IMA_QA_SOURCE_PREVIEW_CACHE_PATH=/absolute/private/runtime/source-preview-cache
+# Optional for networks returning unusable IPv6 transition DNS records:
+IMA_QA_SOURCE_PREVIEW_IPV4_ONLY=false
 ```
 
 The cache defaults beside the conversation store, outside source control, with a
@@ -30,6 +32,12 @@ public HTTP, bounded head parsing and asynchronous cache writes, and exits after
 60 seconds idle. It never launches Chromium, executes page code, decodes images or
 calls IMA. Private, local, reserved and tailnet addresses, credentials, unsafe
 redirects and unsupported image formats are rejected.
+
+The optional IPv4-only mode affects this anonymous worker only. It requests A
+records without AAAA lookups; every returned IPv4 address, redirect/image target
+and actual socket still passes the same public-address checks. It does not
+change system DNS, permit a private proxy, weaken mixed-address rejection, or
+alter IMA/account traffic.
 
 Global limits across all consumers: 1 fetch job, 0 waiting jobs; 6 new URLs and 12
 HTTP attempts per rolling minute including redirects/images; 3 seconds total;
