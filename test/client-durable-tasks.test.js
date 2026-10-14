@@ -417,6 +417,8 @@ test('refresh discovers active task from ordinary owner list and reconstructs it
   }, events: [{ id: 1, event: 'delta', data: { text: 'partial ' } }] }] });
   await waitFor(() => p.streams.size === 1);
   assert.ok(p.calls.some(call => call.url.endsWith('/events?after=1&presentation=chat_v1')));
+  // Transport subscription can precede requestAnimationFrame painting on a busy runner.
+  await waitFor(() => p.d.querySelector('.message:last-child .answer-markdown')?.textContent.includes('partial'));
   assert.match(p.d.querySelector('.message:last-child .answer-markdown').textContent, /partial/);
   p.histories[cid] = [{ role: 'assistant', content: 'partial complete' }];
   p.emit('synthetic-task-1', 'delta', { text: 'complete' }); p.complete();

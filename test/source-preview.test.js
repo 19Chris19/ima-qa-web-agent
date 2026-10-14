@@ -127,6 +127,16 @@ test('source resolution checks task scope/application and owner, uses exact keys
   assert.equal(projected.citationMap['index:42'].sources[0].sourceId, query.sourceId);
   assert.equal(chat.metadata(turn).citationMap['index:42'].sources[0].sourceId, undefined, 'raw metadata unchanged');
 });
+test('worker startup failure falls back, can recover on a later request and never inherits service environment', async t => {
+  const dir = await directory(t), workerFile = path.join(dir, 'isolated.cjs');
+  const preview = new SourcePreview({ enabled: true, directory: dir, workerFile: path.join(dir, 'missing.cjs') });
+  t.after(() => preview.close());
+  assert.equal((await preview.preview('https://example.org/a')).status, 'text_only'); assert.ok(preview.metrics.errors >= 1);
+  await writeFile(workerFile, "const {parentPort}=require('node:worker_threads');parentPort.on('message',m=>parentPort.postMessage({id:m.id,result:{envKeys:Object.keys(process.env)}}));");
+  preview.workerFile = workerFile;
+  assert.deepEqual((await preview.workerRpc('lookup', { key: key('a') })).envKeys, []);
+  await preview.close();
+});
 test('preview HTTP routes authorize before cache reads and serve only bounded image responses', async t => {
   const express = require('express'), app = express(); let reads = 0;
   const url = 'https://example.org/a';
