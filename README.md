@@ -1,4 +1,4 @@
-> 当前稳定配对为 Provider v0.6.0 / 知天下 v0.4.0；核对对应 Release 附件及实际运行版本，生产通过专用分支发布。见 [配套发布](docs/PAIRED_RELEASES.md)。
+> 当前稳定配对为 Provider v0.6.1 / 知天下 v0.4.1；核对对应 Release 附件及实际运行版本，生产通过专用分支发布。见 [配套发布](docs/PAIRED_RELEASES.md)。
 
 <p align="center">
   <img src="./assets/readme/hero.svg" width="100%" alt="IMA QA Web Agent：把已授权 IMA 共享知识库接成可嵌入、可管理的多会话问答服务" />
@@ -24,10 +24,10 @@
 
 这份发布包只包含 **Provider A: IMA Web Agent**。部署它不需要 IMA OpenAPI、MIMO Key、本地语料或本地索引；启动时若配置成其他 Provider，会明确拒绝运行，避免交付时误走另一条链路。
 
-> 本次稳定版本为 **v0.6.0**，承接已发布 v0.5.0-rc.1 的持久问答任务能力；安装前核对 [Releases](https://github.com/19Chris19/ima-qa-web-agent/releases/latest) 的实际发布状态与附件镜像清单。
+> 本次稳定版本为 **v0.6.1**，承接已发布 v0.5.0-rc.1 的持久问答任务能力；安装前核对 [Releases](https://github.com/19Chris19/ima-qa-web-agent/releases/latest) 的实际发布状态与附件镜像清单。
 > 参见[任务接口与恢复边界](./docs/DURABLE_QA_TASKS.md)：断开观看不取消任务，
 > 内置问答页要求 `durable_qa_tasks_v1`，旧接口继续兼容。
-> Node 与 Docker 使用同一固定版本；知天下 v0.4.0 配套本版本，不自动替换已有安装。
+> Node 与 Docker 使用同一固定版本；知天下 v0.4.1 配套本版本，不自动替换已有安装。
 > 发布、Air 割接与真实问答证据分别记录；本次 M1 Max 候选通过真实联网长回答与历史恢复检查，见[配套验收](./docs/PAIRED_ACCEPTANCE_20261014.md)。
 > 最新发布与运行状态、健康检查抖动及剩余门槛见[2026-10-10 验收记录](./docs/RELEASE_ACCEPTANCE_20261010.md)。
 
@@ -37,7 +37,7 @@
 
 ## 它看起来怎样
 
-> v0.6.0 为本次稳定版本，v0.5.0-rc.1 保留为历史灰度版；合并、发布与各安装的实际升级是独立动作。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
+> v0.6.1 为本次稳定版本，v0.5.0-rc.1 保留为历史灰度版；合并、发布与各安装的实际升级是独立动作。后台保留展开式账号列表，直接显示知识库问答状态、登录状态和实际维护时间，维护操作无需打开详情抽屉；详见[管理体验](./docs/ADMIN_EXPERIENCE.md)、[维护合同](./docs/ACCOUNT_MAINTENANCE.md)及[重新登录身份处理](./docs/ACCOUNT_ENROLLMENT.md)。下方截图为此前版本的合成演示，不是本版本逐像素验收证据。
 
 本版本还包含[通用问答交互](./docs/QA_EXPERIENCE.md)与[离线账号迁移工具](./docs/ACCOUNT_TRANSFER.md)。工具成功仅代表新增账号以停用状态导入，不代表来源调度已经退出或账号问答资格通过；发布和割接前必须逐项检查[候选验收记录](./docs/MANAGEMENT_CANDIDATE_ACCEPTANCE.md)。
 
@@ -93,7 +93,7 @@ IMA QA Web Agent 适合这样的场景：你已经有一个 IMA 网页共享知�
 
 **新安装只推荐 [Agent 统一引导](./docs/AGENT_DEPLOYMENT.md)。**准备官方知识库分享链接、Docker/Compose、Git 和可扫码的维护电脑即可，不要求手工寻找数字 ID。工具负责服务配置、匹配版本的维护浏览器及扫码通路；人完成扫码、手机确认和必要的知识库加入。
 
-新安装选择最新已发布稳定 Release；本版本为 v0.6.0，固定 tag、源码与附件镜像摘要。v0.5.0-rc.1 保留为历史预发布，不修改旧 tag。若 v0.6.0 尚未发布，不把 main 当作已发布版本。已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
+新安装选择最新已发布稳定 Release；本版本为 v0.6.1，固定 tag、源码与附件镜像摘要。v0.5.0-rc.1 保留为历史预发布，不修改旧 tag。若 v0.6.1 尚未发布，不把 main 当作已发布版本。已验证平台见对应 Release 及[安装验收记录](./docs/ONBOARDING_ACCEPTANCE.md)。
 
 标准部署输入是固定 Git tag 的检出，或该 tag 的完整源码归档，必须包含 `package-lock.json`；候选演练同样固定到已审查提交。npm tarball 不推荐作为独立部署目录：它不包含该锁文件，不能直接用于引导脚本的 `npm ci` 或源码 Docker 构建。不要临时生成锁文件代替发布版本的依赖锁定。
 

@@ -1,5 +1,7 @@
 # Paired release and production gate
 
+Current reliability patch pair: Provider **v0.6.1** / website **v0.4.1**. Real IMA acceptance for this patch remains a separate authorized operation.
+
 Release order: Provider candidate, website candidate pinned to that Provider, then the stable pair. A merged PR is not a production deployment. GitHub main remains the integration branch; the website Vercel project tracks `codex/production-stable` for Production. Main and PR deployments remain previews. Move the production branch only to an accepted, immutable stable Release commit after the Provider and BFF have been deployed and verified.
 
 Record both package versions, full source revisions, release image digests and runtime asset hashes in one private deployment manifest. Health reports packaged versions and validated source revisions; an arbitrary environment label is not a version. Image manifests are attached only after native amd64/arm64 startup checks. Container checks are synthetic and do not certify IMA account eligibility.
