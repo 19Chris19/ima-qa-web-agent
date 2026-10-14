@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { setTimeout: pause } = require('node:timers/promises');
-const { DurableQATaskStore } = require('../src/durable-qa-store');
+const { DurableQATaskStore, readTaskRecord } = require('../src/durable-qa-store');
 const { DurableQAStreamBuffer } = require('../src/durable-qa-stream-buffer');
 const { DurableQATasks } = require('../src/durable-qa-tasks');
 const { ConversationStore } = require('../src/conversation-store');
@@ -23,7 +23,7 @@ function fixture(t, options = {}) {
   const buffer = new DurableQAStreamBuffer({ store, id: task.id, ...options.bufferOptions,
     publish: current => {
       // A subscriber must never observe an event ID or text ahead of disk.
-      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory, `${task.id}.json`), 'utf8')), current);
+      assert.deepEqual(readTaskRecord(path.join(directory, `${task.id}.json`)), current);
       seen.push(current);
     }, onError: error => errors.push(error) });
   t.after(() => { buffer.close(); store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
@@ -101,7 +101,7 @@ test('metadata alone checkpoints without inventing events or requiring subscribe
 });
 
 test('original upstream limits apply before a batched checkpoint can hide excess events', t => {
-  const f = fixture(t, { storeOptions: { maxEvents: 3 } });
+  const f = fixture(t, { storeOptions: { maxUpstreamEvents: 3 } });
   for (let i = 0; i < 3; i++) f.buffer.upstream({ type: 'process' });
   assert.throws(() => f.buffer.upstream({ type: 'process' }), /task_capacity/);
   f.buffer.flush();
@@ -235,7 +235,7 @@ test('a timer capacity failure persists its reason before a synchronous abort ha
   const manager = new DurableQATasks({ directory: path.join(directory, 'tasks'), conversations,
     queue: createAskQueue({}), async execute({ task, res, signal, onDispatch }) {
       onDispatch(); res.write('event: delta\ndata: {"text":"prefix"}\n\n');
-      manager.store.maxTaskBytes = manager.store.bytes.get(task.id) + 100;
+      manager.store.maxTaskReplayBytes = manager.store.measureReplay(manager.store.tasks.get(task.id)) + 100;
       res.write(`event: delta\ndata: ${JSON.stringify({ text: 'x'.repeat(200) })}\n\n`);
       await new Promise(resolve => signal.addEventListener('abort', () => {
         aborted = true;
@@ -251,5 +251,6 @@ test('a timer capacity failure persists its reason before a synchronous abort ha
   const saved = manager.store.tasks.get(task.id);
   assert.equal(saved.status, 'failed');
   assert.equal(saved.trace.terminalReason, 'task_capacity');
+  assert.equal(saved.trace.capacityKind, 'task_replay_bytes');
   assert.equal(saved.events.filter(e => e.event === 'error').length, 1);
 });
