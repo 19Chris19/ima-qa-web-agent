@@ -16,6 +16,21 @@ const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQ
 const key = x => createHash('sha256').update(x).digest('hex');
 async function directory(t) { const dir = await mkdtemp(path.join(tmpdir(), 'source-preview-test-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir; }
 
+test('opt-in IPv4 DNS avoids AAAA but keeps private-address and cancellation protection', async () => {
+  const calls = [];
+  const createResolver = () => ({ resolve4: async host => { calls.push(['A', host]); return ['8.8.8.8']; },
+    resolve6: async host => { calls.push(['AAAA', host]); return ['2002:0808:0808::1']; }, cancel() { calls.push(['cancel']); } });
+  const only = await network.resolveAddresses('synthetic.example', { ipv4Only: true, createResolver });
+  assert.deepEqual(only, [{ address: '8.8.8.8', family: 4 }]); assert.deepEqual(calls, [['A', 'synthetic.example']]);
+  await assert.rejects(network.pinnedAddress(new URL('https://synthetic.example'),
+    host => network.resolveAddresses(host, { createResolver })), /unsafe_address/);
+  const privateResolver = () => ({ resolve4: async () => ['8.8.8.8', '127.0.0.1'], cancel() {} });
+  await assert.rejects(network.pinnedAddress(new URL('https://synthetic.example'),
+    host => network.resolveAddresses(host, { ipv4Only: true, createResolver: privateResolver })), /unsafe_address/);
+  const stopped = new AbortController(); stopped.abort();
+  await assert.rejects(network.resolveAddresses('synthetic.example', { ipv4Only: true, createResolver, signal: stopped.signal }));
+});
+
 test('rejects local, tailnet, reserved, mapped and transition addresses; pins DNS before HTTP', async () => {
   for (const ip of ['127.0.0.1', '10.0.0.2', '100.100.100.100', '192.168.1.1', '169.254.169.254', '198.18.0.1', '203.0.113.5', '224.0.0.1', '::1', '::ffff:0808:0808', 'fd7a:115c:a1e0::1', '2001:db8::1', '2002:0808:0808::1']) assert.equal(network.publicIp(ip), false, ip);
   for (const ip of ['8.8.8.8', '1.1.1.1', '2606:4700:4700::1111']) assert.equal(network.publicIp(ip), true, ip);

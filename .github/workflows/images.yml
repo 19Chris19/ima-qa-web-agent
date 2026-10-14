@@ -106,6 +106,8 @@ jobs:
   manifest:
     needs: [publish, smoke]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -122,3 +124,16 @@ jobs:
         with:
           name: release-manifest
           path: release-manifest.json
+      - name: Attach verified manifest to the matching Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx release-manifest.json; then
+            mkdir -p /tmp/existing-release-manifest
+            gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern release-manifest.json --dir /tmp/existing-release-manifest
+            cmp release-manifest.json /tmp/existing-release-manifest/release-manifest.json
+          else
+            gh release upload "$VERSION" release-manifest.json --repo "$GITHUB_REPOSITORY"
+          fi
