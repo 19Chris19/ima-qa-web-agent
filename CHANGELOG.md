@@ -1,5 +1,9 @@
 # 更新日志
 
+## [0.6.1] - 2026-10-15
+
+- Isolate critical account commits in a persistent asynchronous worker, coalesce statistics once per second, and preserve fail-closed credential/CAS recovery. Paired with website v0.4.1; real IMA acceptance remains separate.
+
 本文件记录公开 Provider A 发布包的用户可见变化。账号登录态、共享知识库原文、会话历史和运行日志不会进入 GitHub。
 
 ## [Unreleased]
