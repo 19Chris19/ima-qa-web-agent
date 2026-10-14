@@ -2,8 +2,42 @@
 
 Change-ID: FEAT-20261009-PROVIDER-TASK-UI (extends UI-20261006-PROVIDER-QA)
 
-Status: durable-task frontend candidate based on dc96655, awaiting parent integration.
+Current update: 2026-10-13 frontend work based on a1f82e9. The earlier candidate
+evidence below remains dated historical evidence, not acceptance of this update.
 No production service, credential, backend, admin, vendor or renderer-core changes.
+
+## Streaming and submission update (2026-10-13)
+
+- Main and embed share a per-view animation-frame updater. Every event is reduced
+  in order into exact received Markdown, sources and latest process text; only
+  DOM painting and scroll following are coalesced. Completion, failure,
+  cancellation and observation failure flush pending received text immediately.
+  Navigation/pagehide disposes the old updater without cancelling the task.
+  A browser back/forward-cache return restores the saved task with GET before
+  enabling a new send, instead of reusing its disposed view.
+  Hidden-tab frame suspension does not delay terminal painting or event intake.
+- Submission keeps its immediate local question bubble and assistant placeholder.
+  These indicate a local submission, not server acceptance. Before a task receipt,
+  the native IMA control shows a spinner and a preparing/submitting/confirming
+  label; the composer notice is a live status. A task receipt/status supplies
+  queue/waiting feedback, received text supplies generating, and transport loss
+  supplies reconnecting. Process text does not imply an invented upstream stage.
+  The status pill also has status semantics; reduced-motion disables the spinner
+  while retaining its text. Non-IMA legacy cancellation keeps its existing stop
+  control throughout an in-flight request.
+- A definite pre-task failure or rejected task submission restores the original
+  question, including leading/trailing whitespace and line breaks, only if the
+  user has not edited the input since submitting. A newer draft, including an
+  explicitly cleared draft, is never overwritten. This temporary recovery state
+  is memory-only; questions and answers are not newly stored in localStorage.
+- Network/timeout/HTTP 408/5xx ambiguity retains the original request identity,
+  uses GET recovery and keeps new sends blocked. It does not restore the old
+  question as a new send or repeat POST. Existing snapshot/cursor, expiry/history,
+  explicit cancellation and navigation fences remain in place.
+- This frontend change does not deploy a service or publish a Release/image.
+  Synthetic test/browser evidence accompanies its PR; real IMA latency, OS
+  clipboard permissions, screen readers and physical mobile Safari remain
+  separate acceptance work.
 
 ## Behavior
 

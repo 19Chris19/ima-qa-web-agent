@@ -17,6 +17,31 @@
     return node;
   }
 
+  // Reduce every event immediately; paint the latest accumulated value once per frame.
+  function frameUpdater(render) {
+    let frame = null, dirty = false, disposed = false;
+    function flush() {
+      if (frame !== null) root.cancelAnimationFrame(frame);
+      frame = null;
+      if (!dirty || disposed) return;
+      dirty = false;
+      render();
+    }
+    return {
+      schedule() {
+        if (disposed) return;
+        dirty = true;
+        if (frame === null) frame = root.requestAnimationFrame(flush);
+      },
+      flush,
+      dispose() {
+        disposed = true; dirty = false;
+        if (frame !== null) root.cancelAnimationFrame(frame);
+        frame = null;
+      },
+    };
+  }
+
   function composer(form, input) {
     // Measure compact width separately so stacked layout cannot oscillate.
     const mirror = doc.createElement('textarea');
@@ -234,5 +259,5 @@
     }).observe(log, { subtree: true, childList: true, characterData: true });
   }
 
-  root.ProviderQaExperience = { button, composer, answerText, answerCopy, selectionCopy };
+  root.ProviderQaExperience = { button, composer, frameUpdater, answerText, answerCopy, selectionCopy };
 })(globalThis);
