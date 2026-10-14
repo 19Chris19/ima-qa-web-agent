@@ -296,3 +296,7 @@ npm run test:concurrency -- \
 ## 许可
 
 [MIT](./LICENSE)
+
+## Agent 接入（CLI / MCP / Codex Skill）
+
+使用 [Agent 接入指南](docs/AGENT_INTEGRATION.md) 配置独立客户端。`setup --agent codex` 自动注册 MCP 并安装一个中文显示名的 **ima 知识库助手** Skill；内部问答、研究、导出与升级模块随主 Skill 更新。

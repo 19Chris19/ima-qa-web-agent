@@ -1,0 +1,30 @@
+name: Agent client draft release
+on:
+  push:
+    tags: ['agent-v*']
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/ima-qa-client/npm-shrinkwrap.json
+      - name: Verify fixed release version
+        run: node -e 'if (process.env.GITHUB_REF_NAME !== "agent-v" + require("./packages/ima-qa-client/package.json").version) process.exit(1)'
+      - run: npm ci --prefix packages/ima-qa-client --ignore-scripts
+      - run: npm test --prefix packages/ima-qa-client
+      - name: Pack client and checksum
+        working-directory: packages/ima-qa-client
+        run: |
+          npm pack --ignore-scripts
+          mv ima-qa-client-*.tgz ima-qa-client.tgz
+          sha256sum ima-qa-client.tgz > SHA256SUMS
+      - name: Create draft release for maintainer review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "IMA Agent client $GITHUB_REF_NAME" --generate-notes packages/ima-qa-client/ima-qa-client.tgz packages/ima-qa-client/SHA256SUMS
