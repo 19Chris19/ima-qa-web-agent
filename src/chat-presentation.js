@@ -3,6 +3,8 @@
 // An optional public view. Raw operational records remain available to existing
 // internal consumers; never derive a citation from a source's array position.
 const PHASES = Object.freeze({ knowledge: '资料检索', web: '联网搜索', answer: '回答生成' });
+const { createHash } = require('node:crypto');
+const sourceId = url => createHash('sha256').update(webUrl(url)).digest('hex');
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const text = (value, max) => typeof value === 'string'
   ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, ' ').trim().slice(0, max) : '';
@@ -107,7 +109,7 @@ function withDisplayNumbers(map, answer) {
 }
 
 function projectData(name, data = {}) {
-  if (name === 'sources') return { citationMap: citationMap(data.citationMap),
+  if (name === 'sources') return { citationMap: presentationCitations(data.citationMap),
     sourceCount: Number.isSafeInteger(data.sources?.length) ? data.sources.length : Number(data.sourceCount) || 0 };
   if (name === 'process') return processStep(data) || {};
   if (name === 'suggestions') return { suggestions: suggestions(data.suggestions) };
@@ -120,7 +122,7 @@ function projectData(name, data = {}) {
       if (Object.hasOwn(rest, key)) result[key] = rest[key];
     }
     if (object(rest.timing)) result.timing = { elapsed_ms: Number(rest.timing.elapsed_ms) || 0, queue_wait_ms: Number(rest.timing.queue_wait_ms) || 0 };
-    return { ...result, ...metadata(rest) };
+    return { ...result, ...presentationMetadata(rest) };
   }
   return data;
 }
@@ -134,9 +136,19 @@ function projectHistory(value) {
   return { ...value, messages: (value.messages || []).map(message => {
     if (message.role !== 'assistant') return message;
     const { sources, searchSummary, ...rest } = message;
-    return { ...rest, ...metadata(message), sourceCount: sources?.length || message.sourceCount || 0 };
+    return { ...rest, ...presentationMetadata(message), sourceCount: sources?.length || message.sourceCount || 0 };
   }) };
+}
+function presentationCitations(value) {
+  const map = citationMap(value);
+  for (const entry of Object.values(map)) if (entry.type === 'web') {
+    entry.sources = entry.sources.map(source => ({ ...source, sourceId: sourceId(source.url) }));
+  }
+  return map;
+}
+function presentationMetadata(value) {
+  return { ...metadata(value), ...(Object.hasOwn(value, 'citationMap') ? { citationMap: presentationCitations(value.citationMap) } : {}) };
 }
 
 module.exports = { PHASES, webUrl, citationMap, mergeCitations, suggestions, processStep, metadata,
-  withDisplayNumbers, projectData, projectSnapshot, projectHistory };
+  withDisplayNumbers, projectData, projectSnapshot, projectHistory, sourceId, presentationCitations };

@@ -12,6 +12,7 @@ const { createAnswerTextStream, sanitizeIMAAnswerText } = require('./answer-text
 const { IMAUpstreamProtocolError } = require('./ima-upstream-protocol');
 const { DurableQATasks } = require('./durable-qa-tasks');
 const { registerDurableQARoutes } = require('./durable-qa-routes');
+const { registerSourcePreviewRoutes } = require('./source-preview-routes');
 const { fault: taskFault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
 const { createApplicationIdentity, applicationOwnerKey } = require('./application-identity');
@@ -124,6 +125,7 @@ function createApp({
     res.setHeader('Cache-Control', 'no-store');
     res.json({ schemaVersion: 1, features: {
       durable_qa_tasks_v1: Boolean(durableTasks?.available),
+      ...(config.sourcePreview?.enabled ? { web_source_preview_v1: true } : {}),
     } });
   });
   registerDurableQARoutes(app, { tasks: durableTasks, config, conversations, webReadiness,
@@ -135,6 +137,16 @@ function createApp({
       if (scope === 'ordinary' && app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()) throw taskFault('maintenance_exercise', 503);
       const limit = rateLimiter.consume(getClientIp(req));
       if (!limit.ok) { res.setHeader('Retry-After', String(limit.retryAfterSeconds)); throw taskFault('rate_limited', 429); }
+    },
+  });
+
+  registerSourcePreviewRoutes(app, { config, tasks: durableTasks, conversations, ordinaryAuth, internalAuth, getConversationOwnerKey,
+    busy() {
+      const queue = askQueue.stats();
+      const state = webReadiness?.snapshot();
+      return queue.queuedRequests > 0 || queue.activeRequests >= queue.maxConcurrent
+        || (state && Number(state.schedulable) <= 0) || qualificationMaintenanceActive()
+        || Boolean(app.locals.accountPoolExerciseManager?.isMaintenanceActive?.());
     },
   });
 
@@ -183,6 +195,8 @@ function createApp({
     if (provider === 'local-rag-mimo') {
       health.localRag = localRagClient?.getStatus?.();
     }
+    if (config.sourcePreview?.enabled) health.sourcePreview = { enabled: true, workerActive: Boolean(app.locals.sourcePreview?.worker),
+      ...app.locals.sourcePreview?.metrics };
     res.json(health);
   });
 
@@ -203,6 +217,7 @@ function createApp({
         knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
+        ...(config.sourcePreview?.enabled ? { web_source_preview_v1: true } : {}),
       },
     };
     if (!botCompatibility) return res.json(website);

@@ -434,6 +434,11 @@ function getConfig(env = process.env) {
         { min: 0 },
       ),
     },
+    sourcePreview: {
+      enabled: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_ENABLED')),
+      directory: path.resolve(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_CACHE_PATH') || path.join(path.dirname(
+        readEnv(env, 'IMA_QA_CONVERSATION_STORE_PATH') || DEFAULT_CONVERSATION_STORE_PATH), 'source-preview-cache')),
+    },
     conversations: {
       storePath:
         readEnv(env, 'IMA_QA_CONVERSATION_STORE_PATH') || DEFAULT_CONVERSATION_STORE_PATH,

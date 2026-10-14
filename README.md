@@ -296,3 +296,4 @@ npm run test:concurrency -- \
 ## 许可
 
 [MIT](./LICENSE)
+联网引用的轻量封面缓存、手机底部来源面板及部署开关见 [来源预览说明](docs/source-preview.md)。封面抓取默认关闭，不使用浏览器截图。
