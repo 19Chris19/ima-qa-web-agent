@@ -1,0 +1,28 @@
+{
+  "description": "Redacted metadata from two read-only task inspections. The original IMA payloads, answer text and each key's first source-event position were not retained in this fixture. Tests enumerate possible first appearances; this is not a complete stream replay.",
+  "rounds": [
+    {
+      "name": "first-question",
+      "sourcesEventIds": [4, 37, 65, 87],
+      "doneEventId": 109,
+      "firstEntry": { "type": "unknown", "displayNumbers": [] },
+      "doneCitationMap": {
+        "context:0": { "type": "unknown", "displayNumbers": ["22"] },
+        "context:1": { "type": "unknown", "displayNumbers": ["3"] },
+        "context:2": { "type": "unknown", "displayNumbers": ["42"] }
+      }
+    },
+    {
+      "name": "follow-up",
+      "sourcesEventIds": [4, 27, 46, 82, 108],
+      "doneEventId": 118,
+      "firstEntry": { "type": "unknown", "displayNumbers": [] },
+      "doneCitationMap": {
+        "context:0": { "type": "unknown", "displayNumbers": ["1"] },
+        "context:1": { "type": "unknown", "displayNumbers": ["18"] },
+        "context:2": { "type": "unknown", "displayNumbers": ["76"] },
+        "context:3": { "type": "unknown", "displayNumbers": ["4"] }
+      }
+    }
+  ]
+}

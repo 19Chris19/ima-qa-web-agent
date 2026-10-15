@@ -50,7 +50,13 @@ function mergeCitations(previous, incoming) {
     if (old && old.type !== entry.type && old.type !== 'unknown' && entry.type !== 'unknown') {
       result[key] = { type: 'unknown', conflicted: true }; continue;
     }
-    if (entry.type === 'unknown' && old) continue;
+    if (entry.type === 'unknown' && old) {
+      // Unknown provenance must not replace proved sources, but a later done
+      // event can still supply explicit display numbers for the same key.
+      result[key] = { ...old,
+        displayNumbers: [...new Set([...(old.displayNumbers || []), ...(entry.displayNumbers || [])])] };
+      continue;
+    }
     const pages = new Map((old?.sources || []).map(x => [x.url, x]));
     for (const source of entry.sources || []) {
       if (!source?.url) continue;
