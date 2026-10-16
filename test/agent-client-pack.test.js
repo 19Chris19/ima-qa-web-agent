@@ -20,3 +20,16 @@ test('Provider tarball retains standalone client sources without bundling nested
     assert.ok(files.includes(`packages/ima-qa-client/${file}`), file);
   }
 });
+
+test('standalone client tarball includes on-demand evidence tools and the routed verification Skill', () => {
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const [pack] = JSON.parse(execFileSync(npm, ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+    cwd: path.resolve(__dirname, '../packages/ima-qa-client'), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }));
+  assert.equal(pack.name, 'ima-qa-client');
+  const files = pack.files.map(file => file.path.replace(/\\/gu, '/'));
+  for (const file of ['src/evidence.mjs', 'src/mcp.mjs', 'skills/ima-qa/SKILL.md', 'skills/ima-qa/references/source-verification.md'])
+    assert.ok(files.includes(file), file);
+  assert.equal(files.some(file => /(^|\/)node_modules\//u.test(file)), false);
+});
