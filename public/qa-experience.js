@@ -161,7 +161,7 @@
     if (!view.answer?.trim() || view.bubble.querySelector('.answer-tools')) return;
     const tools = doc.createElement('div');
     tools.className = 'answer-tools';
-    const copy = button(partial ? '复制已收到的部分回答' : '复制回答', 'copy', 'answer-copy');
+    const copy = button(partial ? '复制已收到的部分回答' : '复制回答', 'copy', 'answer-copy answer-action');
     const status = doc.createElement('span');
     status.className = 'copy-status';
     status.setAttribute('role', 'status');

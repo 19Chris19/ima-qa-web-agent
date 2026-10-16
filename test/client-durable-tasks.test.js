@@ -135,7 +135,7 @@ const deferred = () => {
   return { promise, release };
 };
 
-for (const mode of ['index', 'embed']) test(`${mode}: confirmed failure retries once, preserves draft and original record, and keeps web intent`, async t => {
+for (const mode of ['index', 'embed']) for (const entrance of ['icon', 'message menu']) test(`${mode} ${entrance}: confirmed failure retries once, preserves draft and original record, and keeps web intent`, async t => {
   const check = deferred(); let hold = false;
   const p = await page(t, { mode, intercept: async url => {
     if (hold && url === '/api/tasks/synthetic-task-1') { hold = false; await check.promise; }
@@ -147,7 +147,12 @@ for (const mode of ['index', 'embed']) test(`${mode}: confirmed failure retries 
   const original = JSON.stringify(p.records[0]);
   const input = p.d.querySelector('#questionInput'); input.value = 'unsent draft'; input.dispatchEvent(new p.w.Event('input'));
   const retry = p.d.querySelector('.answer-retry'); hold = true;
-  retry.click(); retry.click(); assert.equal(retry.disabled, true); assert.equal(p.records.length, 1);
+  if (entrance === 'message menu') {
+    p.d.querySelector('.message.user .message-actions-trigger').click();
+    assert.equal(p.d.querySelector('.message-action-item[data-action="retry"] span').textContent, '重试');
+    p.d.querySelector('.message-action-item[data-action="retry"]').click();
+  } else retry.click();
+  retry.click(); assert.equal(retry.disabled, true); assert.equal(p.records.length, 1);
   check.release(); await waitFor(() => p.records.length === 2);
   const posts = p.calls.filter(call => call.url === '/api/tasks' && call.method === 'POST');
   assert.equal(posts.length, 2);
@@ -170,7 +175,9 @@ test('retry verification failure and indeterminate recovery never dispatch a new
   rejectRead = false; p.records[0].task.status = 'indeterminate';
   p.d.querySelector('.answer-retry').click();
   await waitFor(() => p.d.querySelector('.answer-retry')?.textContent === '检查原任务');
-  p.d.querySelector('.answer-retry').click();
+  p.d.querySelector('.message.user .message-actions-trigger').click();
+  assert.equal(p.d.querySelector('.message-action-item[data-action="retry"] span').textContent, '检查原任务');
+  p.d.querySelector('.message-action-item[data-action="retry"]').click();
   await waitFor(() => p.d.querySelector('.answer-retry')?.textContent === '检查原任务');
   assert.equal(p.records.length, 1); assert.equal(p.d.querySelector('#sendButton').disabled, true);
 });
@@ -334,7 +341,8 @@ for (const status of ['failed', 'cancelled', 'indeterminate']) {
     p.complete('synthetic-task-1', status);
     await waitFor(() => p.d.querySelector('.answer-copy'));
     assert.equal(p.frames.size, 0);
-    assert.match(p.d.querySelector('.answer-failure').textContent, /未完成/);
+    assert.match(p.d.querySelector('.answer-failure').textContent, status === 'cancelled' ? /已停止/ : status === 'indeterminate' ? /尚无法确认/ : /未完成/);
+    assert.equal(p.d.querySelector('.answer-failure').dataset.outcome, status);
     p.d.querySelector('.answer-copy').click(); await tick();
     assert.deepEqual(p.copied, ['**Synthetic exact partial**\n']);
   });

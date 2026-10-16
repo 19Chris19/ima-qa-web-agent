@@ -305,7 +305,7 @@
     followStreamingAnswer = true;
     if (!options.preserveDraft) input.value = '';
     setTaskPhase(view, legacyProvider || conversationId ? 'submitting' : 'preparing');
-    appendMessage('user', question);
+    view.userMessage = appendMessage('user', question);
     view.message = appendMessage('assistant', '', { pending: true });
     if (legacyProvider) {
       try {
@@ -394,7 +394,7 @@
   function attachTask(view, task) {
     view.task = task;
     if (view.restored && task.status !== 'succeeded' && !task.eventsExpired && !view.userRendered && typeof task.question === 'string') {
-      appendMessage('user', task.question);
+      view.userMessage = appendMessage('user', task.question);
       view.userRendered = true;
     }
     view.reference = { ...view.reference, id: task.id, conversationId: task.conversationId };
@@ -566,16 +566,16 @@
       renderAnswer(message.text, message.answer, { citationMap: message.citationMap, taskId: view.task?.id, sourceIndexes: sourceIndexes(message.sources), partial: status !== 'succeeded' });
       renderSources(message.bubble, message.sources, { searchSummary: message.searchSummary, answer: message.answer });
       if (status !== 'succeeded') {
-        const failure = document.createElement('p');
-        failure.className = 'answer-failure';
-        failure.textContent = status === 'indeterminate' ? '本次回答未完成，结果尚未确认。请先检查原任务，避免重复发送。'
-          : status === 'cancelled' ? '已停止，以上回答未完成，已收到的内容已保留。' : '本次回答未完成，已收到的内容已保留。可以重试。';
-        message.bubble.append(failure);
+        window.ChatControls.failure(message.bubble, { status, hasAnswer: Boolean(message.answer.trim()), className: 'answer-failure' });
       }
       experience.answerCopy(message, status !== 'succeeded');
-      attachAnswerRetry(message, view.task, status, view.question || view.task?.question);
+      attachAnswerRetry(message, view.task, status, view.question || view.task?.question, view.userMessage);
       window.ChatPresentation?.renderProcess(message.bubble, message.process, true);
       if (status === 'succeeded') window.ChatPresentation?.renderSuggestions(message.bubble, message.suggestions, input, true);
+      if (view.submissionRejected && !message.answer.trim()) {
+        // A rejected submission is still a draft, not an accepted conversation turn.
+        message.article.remove(); view.userMessage?.article.remove();
+      }
     }
     setStatus(status === 'succeeded' ? '' : 'error', {
       succeeded: 'ready', cancelled: '已停止', failed: '未完成', indeterminate: '结果未知',
@@ -593,7 +593,7 @@
     void refreshConversationList();
   }
 
-  function attachAnswerRetry(message, task, status, question) {
+  function attachAnswerRetry(message, task, status, question, userMessage) {
     if (!task?.id || !question || message.bubble.querySelector('.answer-retry')) return;
     let tools = message.bubble.querySelector('.answer-tools');
     if (!tools) { tools = document.createElement('div'); tools.className = 'answer-tools'; message.bubble.append(tools); }
@@ -618,6 +618,7 @@
       onError: () => '暂时无法核对原任务，没有重新发送。请稍后再试。',
     });
     retryControls.add(control);
+    userMessage?.actions?.setAction(control, status === 'indeterminate' ? 'recover' : 'retry');
   }
 
   async function stopTask() {
@@ -655,10 +656,11 @@
       renderWelcome();
       return;
     }
-    let pairedQuestion = '';
+    let pairedQuestion = '', pairedUser = null;
     for (const message of messages) {
       if (message.role === 'user') pairedQuestion = message.content || '';
       const view = appendMessage(message.role, message.content || '');
+      if (message.role === 'user') pairedUser = view;
       view.answer = message.content || '';
       view.sources = message.sources || [];
       if (message.role === 'assistant' && (message.sources?.length || message.citationMap || window.ChatPresentation)) {
@@ -672,7 +674,8 @@
       }
       if (message.role === 'assistant') {
         experience.answerCopy(view, message.complete === false || message.interrupted === true);
-        if (message.taskId && pairedQuestion) attachAnswerRetry(view, { id: message.taskId, conversationId }, 'succeeded', pairedQuestion);
+        if (message.taskId && pairedQuestion) attachAnswerRetry(view, { id: message.taskId, conversationId }, message.complete === false || message.interrupted === true ? 'failed' : 'succeeded', pairedQuestion, pairedUser);
+        pairedQuestion = ''; pairedUser = null;
       }
     }
     scrollToBottom();
@@ -729,7 +732,8 @@
     }
     chatLog.appendChild(article);
     scrollToBottom();
-    return { article, bubble, text: paragraph, answer: content, sources: [] };
+    const actions = role === 'user' ? window.ChatControls.messageActions({ message: article, target: bubble, getText: () => content }) : null;
+    return { article, bubble, text: paragraph, answer: content, sources: [], actions };
   }
 
   function renderAnswer(target, markdown, options = {}) {
