@@ -1,0 +1,28 @@
+/* Invisible controls keep their position for a reversible, interruption-safe
+   transition. They cannot receive focus or pointer input while hidden. */
+.chat-latest-control {
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateY(6px) scale(.96);
+  transition: opacity 120ms ease-out, transform 120ms cubic-bezier(.2, 0, 0, 1), visibility 0s 120ms;
+}
+.chat-latest-control[data-visible="true"] {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0) scale(1);
+  transition: opacity 180ms ease-out, transform 180ms cubic-bezier(.2, 0, 0, 1), visibility 0s;
+}
+.chat-latest-control:active { transform: scale(.96); }
+.answer-retry {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 44px; padding: 0 10px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer;
+}
+.answer-retry svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.answer-retry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.answer-retry:disabled { cursor: default; opacity: .55; }
+.retry-status { font-size: 12px; line-height: 1.5; }
+.answer-retry[aria-busy="true"] svg { opacity: .5; }
+@media (hover: hover) and (pointer: fine) {
+  .answer-retry:not(:disabled):hover { background: #7b8fa214; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-latest-control, .chat-latest-control[data-visible="true"], .chat-latest-control:active { transform: none; transition: none; }
+}

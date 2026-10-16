@@ -42,7 +42,7 @@ async function page(t, { mode = 'index', history = null, clipboardFails = false 
     }
     throw Error(`Unexpected synthetic URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await tick();
@@ -182,11 +182,12 @@ test('manual reading suspends follow even near bottom until explicit latest', as
   p.emit('delta', { text: 'new content' }); await tick();
   assert.equal(log.scrollTop, 450);
   const latest = p.d.querySelector('.return-latest');
-  assert.equal(latest.hidden, false);
+  assert.equal(latest.getAttribute('aria-hidden'), 'false');
   assert.equal(latest.getAttribute('aria-label'), '返回最新回答');
   latest.click();
   assert.equal(log.scrollTop, 1400);
-  assert.equal(latest.hidden, true);
+  assert.equal(latest.getAttribute('aria-hidden'), 'true');
+  assert.equal(latest.tabIndex, -1);
   p.emit('done', {}); p.finish(); await tick();
 });
 

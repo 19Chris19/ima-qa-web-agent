@@ -57,11 +57,11 @@
       return Array.isArray(data.tasks) ? data.tasks : [];
     }
 
-    async function submit(question, conversationId, key) {
+    async function submit(question, conversationId, key, sourceIntent) {
       const data = await json('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
-        body: JSON.stringify({ question, conversationId }),
+        body: JSON.stringify({ question, conversationId, ...(sourceIntent === 'web' ? { sourceIntent } : {}) }),
       });
       if (!data.task?.id) throw new Error('提交结果未知，请恢复任务');
       return data.task;
@@ -176,6 +176,7 @@
 
     return {
       identity, list, submit, follow, legacyAsk,
+      read: id => json(`/api/tasks/${encodeURIComponent(id)}`),
       capabilities: () => json('/api/capabilities'),
       cancel: id => json(`/api/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     };

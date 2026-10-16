@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startMobileUiFixture } from '../test-support/mobile-ui-fixture.mjs';
 import { runMobileUiChecks } from '../test-support/mobile-ui-checks.mjs';
+import { startRecoveryUiFixture } from '../test-support/recovery-ui-fixture.mjs';
+import { runRecoveryUiChecks } from '../test-support/recovery-ui-checks.mjs';
 
 const profile = await mkdtemp(join(tmpdir(), 'qa-mobile-ui-chrome-'));
 const fixture = await startMobileUiFixture();
@@ -52,14 +54,20 @@ try {
   const page = { cdp, evaluate, goto: async url => {
     await cdp('Page.navigate', { url });
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (await evaluate(() => window.mobileFixtureReady === true)) return;
+      if (await evaluate(expected => location.href === expected && (window.mobileFixtureReady === true || window.recoveryFixtureReady === true), url)) return;
       await delay(25);
     }
     throw Error('Local mobile UI fixture did not initialize');
   } };
   const isWebsite = (await readFile(new URL('../package.json', import.meta.url), 'utf8')).includes('explorer-ai-qa-demo');
   const result = await runMobileUiChecks(page, fixture.url, isWebsite ? ['/'] : ['/', '/embed.html']);
-  console.log(JSON.stringify({ status: 'passed', nativeTouch: true, layouts: result, realProviderCalls: 0 }, null, 2));
+  const recovery = [];
+  for (const pathname of (isWebsite ? ['/'] : ['/', '/embed.html'])) {
+    const recoveryFixture = await startRecoveryUiFixture();
+    try { recovery.push(await runRecoveryUiChecks(page, recoveryFixture.url, pathname)); }
+    finally { await recoveryFixture.close(); }
+  }
+  console.log(JSON.stringify({ status: 'passed', nativeTouch: true, layouts: result, recovery, realProviderCalls: 0 }, null, 2));
 } finally {
   for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.reject(Error('Browser test ended')); }
   socket?.close(); chrome.kill();
