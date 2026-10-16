@@ -1,6 +1,6 @@
 # Paired release and production gate
 
-Current recovery interaction patch pair: Provider **v0.6.3** / website **v0.4.3**. Failed turns can be retried explicitly; unknown submissions recover the original request. Floating composer and native Chromium touch regressions are covered. Physical iOS/Android keyboard and post-update real IMA acceptance remain separate; this release does not submit real questions.
+Current message action patch pair: Provider **v0.6.4** / website **v0.4.4**. Copy and retry share a compact icon toolbar. Sent-question actions reuse the same single-flight retry and original-task recovery. Website management stays separate from the public Q&A page. Synthetic and native Chromium touch regressions are covered; physical iOS/Android keyboard and post-update real IMA acceptance remain separate.
 
 Release order: Provider candidate, website candidate pinned to that Provider, then the stable pair. A merged PR is not a production deployment. GitHub main remains the integration branch; the website Vercel project tracks `codex/production-stable` for Production. Main and PR deployments remain previews. Move the production branch only to an accepted, immutable stable Release commit after the Provider and BFF have been deployed and verified.
 

@@ -10,13 +10,13 @@ test('README explains the stable service before operational detail', () => {
   const text = read('README.md');
   assert.match(text, /^# IMA QA Web Agent$/m);
   assert.ok(text.length < 15000);
-  for (const value of ['v0.6.3', 'v0.4.3', 'durable_qa_tasks_v1', '合成演示', '不自动重问', 'Windows', 'Linux',
+  for (const value of ['v0.6.4', 'v0.4.4', 'durable_qa_tasks_v1', '合成演示', '不自动重问', 'Windows', 'Linux',
     'sh onboard.sh doctor', 'docs/AGENT_DEPLOYMENT.md']) {
     assert.ok(text.includes(value), value);
   }
   assert.ok(text.indexOf('screenshots/qa-desktop.png') < text.indexOf('## 开始部署'));
-  assert.doesNotMatch(text, /若 v0\.6\.3 尚未发布|本分支.*v0\.5\.0-rc\.1|超过 5 个账号前/);
-  assert.ok(read('docs/AGENT_DEPLOYMENT.md').includes('v0.6.3'));
+  assert.doesNotMatch(text, /若 v0\.6\.4 尚未发布|本分支.*v0\.5\.0-rc\.1|超过 5 个账号前/);
+  assert.ok(read('docs/AGENT_DEPLOYMENT.md').includes('v0.6.4'));
 });
 
 test('README image and local document targets exist and SVG stays GitHub-safe', () => {
