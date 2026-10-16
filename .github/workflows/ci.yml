@@ -36,3 +36,5 @@ jobs:
 
       - name: Verify package contents
         run: npm pack --dry-run
+      - name: Native touch targets and mobile composer (Chromium)
+        run: npm run test:mobile-ui
