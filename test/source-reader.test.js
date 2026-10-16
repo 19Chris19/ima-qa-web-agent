@@ -79,7 +79,7 @@ test('notes read the exact returned note ID; files use the exact authorized URL 
 });
 
 test('downloads pin public addresses, reject tailnet/private redirects and do not forward cookies/auth headers', async () => {
-  for (const url of ['file:///tmp/private', 'http://127.1/doc', 'https://user:pass@example.org/doc', 'https://site.local/doc', 'https://example.org:8443/doc', 'https://ima.qq.com/doc']) {
+  for (const url of ['file:///tmp/private', 'http://127.1/doc', 'http://example.org/doc?signature=private', 'https://user:pass@example.org/doc', 'https://site.local/doc', 'https://example.org:8443/doc', 'https://ima.qq.com/doc']) {
     await assert.rejects(network.download(url, {}, { transport: transport(() => assert.fail('must not connect')) }));
   }
   const targets = ['127.0.0.1', '10.0.0.1', '100.100.100.100', '::1', 'fd7a:115c:a1e0::1'];
@@ -121,6 +121,7 @@ test('bounded extractors use text only, reject unsupported/binary formats and la
   const partial = bounded('a'.repeat(128001), 'note'); assert.equal(partial.contentComplete, false); assert.equal(partial.extractionTruncated, true);
   for (const [bytes, type] of [[Buffer.from('binary'), 'application/zip'], [Buffer.from('%PDF-1.7'), 'application/pdf'], [Buffer.from([255, 0]), 'text/plain']])
     await assert.rejects(extract(bytes, type));
+  await assert.rejects(extract(require('../scripts/test-fixtures/source-reader-pdf.cjs')(), 'text/plain'), { code: 'source_format_unsupported' });
   const pdf = transport(() => stream(200, require('../scripts/test-fixtures/source-reader-pdf.cjs')(), { 'content-type': 'application/pdf' }));
   await assert.rejects(network.download('https://synthetic.example/file.pdf', {}, { transport: pdf }), { code: 'source_format_unsupported' });
 });

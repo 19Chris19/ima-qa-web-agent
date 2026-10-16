@@ -30,6 +30,7 @@ function htmlText(html) {
 async function extract(bytes, type, { pdfEnabled = false } = {}) {
   bytes = Buffer.from(bytes);
   if (bytes.length > network.LIMIT) throw network.fail('source_too_large');
+  if (type !== 'application/pdf' && bytes.subarray(0, 5).toString() === '%PDF-') throw network.fail('source_format_unsupported');
   if (type === 'application/pdf') {
     if (!pdfEnabled) throw network.fail('source_format_unsupported');
     if (bytes.subarray(0, 5).toString() !== '%PDF-') throw network.fail('source_content_invalid');

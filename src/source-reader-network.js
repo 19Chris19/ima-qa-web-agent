@@ -12,6 +12,8 @@ function downloadUrl(value) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
     || !host || /(^|\.)(localhost|local|internal|home|lan)$/u.test(host)
     || (url.port && url.port !== (url.protocol === 'https:' ? '443' : '80')) || /(^|\.)ima\.qq\.com$/u.test(host)) throw fail('source_unsafe_target');
+  // Signed download addresses are allowed only over HTTPS, never in cleartext.
+  if (url.protocol === 'http:' && url.search) throw fail('source_unsafe_target');
   url.hash = ''; return url;
 }
 function downloadHeaders(headers = {}) {

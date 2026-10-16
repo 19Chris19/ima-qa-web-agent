@@ -109,6 +109,7 @@ function createApp({
           sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
           botContract: task.input.botContract, botCompatibility, recentContextConsumer, observation: observer,
           applicationKey: task.applicationKey || task.scope,
+          recordKnowledgeEvidence: task.scope === 'internal' && knowledge.allowed(config, task.applicationKey),
           mode: task.input.botContract ? conversations.require(task.input.conversationId, task.ownerKey).mode :
             task.input.retrieval_policy || conversations.require(task.input.conversationId, task.ownerKey).mode || webReadiness?.mode,
           transportTimeouts: {
@@ -912,7 +913,7 @@ async function handleStreamingWebAgentAsk(context) {
     let citationMap = {};
     let knowledgeEvidence = knowledge.empty(knowledge.hash(String(config.webAgent?.sharedKnowledgeBaseId || '')));
     const collectKnowledge = incoming => {
-      if (context.botContract || !knowledge.hasData(incoming)) return;
+      if (!context.recordKnowledgeEvidence || context.botContract || !knowledge.hasData(incoming)) return;
       const next = knowledge.merge(knowledgeEvidence, incoming);
       const change = knowledge.delta(knowledgeEvidence, next);
       knowledgeEvidence = next;

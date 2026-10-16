@@ -150,3 +150,17 @@ test('private provenance and its public source frame cross one persistence bound
   assert.equal(commits, 1); assert.deepEqual(task.events.map(event => event.event), ['knowledge_evidence', 'sources']);
   buffer.close();
 });
+
+test('ordinary website traffic and non-opted-in internal tasks do not record private material identities', async t => {
+  const f = await fixture(t);
+  const response = await f.request('/api/tasks', { method: 'POST', headers: { 'Idempotency-Key': 'ordinary-no-private-evidence' },
+    body: JSON.stringify({ conversationId: f.conversationId, question: 'Synthetic ordinary question' }) }, 'synthetic-a');
+  const { task } = await response.json();
+  for (let n = 0; n < 100 && f.app.locals.durableQATasks.store.tasks.get(task.id).status !== 'succeeded'; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(f.app.locals.durableQATasks.store.tasks.get(task.id).events.some(event => event.event === knowledge.EVENT), false);
+  f.config.sourceEvidence.applications = [];
+  const taskId = await f.submit();
+  assert.equal(f.app.locals.durableQATasks.store.tasks.get(taskId).events.some(event => event.event === knowledge.EVENT), false);
+  assert.equal(f.conversations.require(f.conversationId, f.app.locals.durableQATasks.store.tasks.get(taskId).ownerKey)
+    .turns.some(turn => knowledge.hasData(turn.knowledgeEvidence)), false);
+});
