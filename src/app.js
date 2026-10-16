@@ -1,4 +1,5 @@
 const chat = require('./chat-presentation');
+const knowledge = require('./knowledge-evidence');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const cors = require('cors');
@@ -98,7 +99,7 @@ function createApp({
         conversations, queue: askQueue, accountPool: imaWebAgentClient,
         mode: webReadiness?.mode || config.webAgent?.mode,
         routingOptions: task => botRoutingOptions(task.input.botContract, task.applicationKey || task.scope, task.ownerKey),
-        execute: ({ task, signal, res, accountLease, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity }) => dispatchAsk({
+        execute: ({ task, signal, res, accountLease, conversationStore: taskConversations, onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity, onKnowledgeEvidence }) => dispatchAsk({
           config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
           history: conversations.getHistory(task.input.conversationId, task.ownerKey),
           question: task.input.question,
@@ -112,7 +113,7 @@ function createApp({
             headersMs: config.concurrency?.taskConnectTimeoutMs || 60000,
             idleMs: config.concurrency?.taskIdleTimeoutMs || 600000,
           },
-          onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity, accountLease, durableTask: true,
+          onDispatch, onUpstreamEvent, onUpstreamBinding, onUpstreamActivity, onKnowledgeEvidence, accountLease, durableTask: true,
           isTimedOut: () => false, conversationId: task.input.conversationId,
           conversationStore: taskConversations, ownerKey: task.ownerKey,
         }),
@@ -227,6 +228,7 @@ function createApp({
         knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
+        ...(knowledge.allowed(config, _req.applicationKey) ? { knowledge_material_map_v1: true } : {}),
         ...(config.sourcePreview?.enabled ? { web_source_preview_v1: true } : {}),
       },
     };
@@ -870,6 +872,7 @@ async function handleJsonWebAgentAsk(context) {
 
 async function handleStreamingWebAgentAsk(context) {
   const {
+    config,
     req,
     res,
     requestId,
@@ -894,6 +897,14 @@ async function handleStreamingWebAgentAsk(context) {
     const upstream = conversationStore.getUpstream(conversationId, ownerKey);
     const sources = [];
     let citationMap = {};
+    let knowledgeEvidence = knowledge.empty(knowledge.hash(String(config.webAgent?.sharedKnowledgeBaseId || '')));
+    const collectKnowledge = incoming => {
+      if (context.botContract || !knowledge.hasData(incoming)) return;
+      const next = knowledge.merge(knowledgeEvidence, incoming);
+      const change = knowledge.delta(knowledgeEvidence, next);
+      knowledgeEvidence = next;
+      if (knowledge.hasData(change)) context.onKnowledgeEvidence?.(change);
+    };
     let suggestions = [];
     const process = [];
     const stages = new Set();
@@ -953,6 +964,7 @@ async function handleStreamingWebAgentAsk(context) {
       }
 
       if (event.type === 'sources') {
+        collectKnowledge(event.knowledgeEvidence);
         sources.push(...(event.sources || []));
         sourceKinds.push(...normalizedSourceKinds(event));
         searchSummary = event.searchSummary || searchSummary;
@@ -998,6 +1010,7 @@ async function handleStreamingWebAgentAsk(context) {
     if (context.durableTask && answer === '') throw new IMAUpstreamProtocolError('upstream_empty_answer');
     if (stages.has('answer')) emitStage('answer', 'completed');
     citationMap = chat.withDisplayNumbers(citationMap, answer);
+    collectKnowledge(knowledge.withDisplayNumbers(knowledgeEvidence, answer));
     const answerForHistory = answer || noReliableContentAnswer();
     const evidence = answerEvidence(context, sourceKinds, sources.length, answer);
     conversationStore.setUpstream(conversationId, { accountId, sessionId,
@@ -1009,7 +1022,7 @@ async function handleStreamingWebAgentAsk(context) {
       sources,
       searchSummary,
       evidence,
-      citationMap, suggestions, process,
+      citationMap, suggestions, process, knowledgeEvidence,
       ownerKey,
     });
     await req.internalIdempotency?.complete(conversationId, answerForHistory);
@@ -1391,7 +1404,7 @@ function appendConversationTurn(conversationStore, {
   sources = [],
   searchSummary = '',
   evidence = {},
-  citationMap, suggestions, process,
+  citationMap, suggestions, process, knowledgeEvidence,
   ownerKey,
 }) {
   conversationStore.appendTurn(
@@ -1401,6 +1414,7 @@ function appendConversationTurn(conversationStore, {
     {
       sources,
       ...chat.metadata({ citationMap, suggestions, process }),
+      ...(knowledge.hasData(knowledgeEvidence) ? { knowledgeEvidence: knowledge.normalize(knowledgeEvidence) } : {}),
       searchSummary: searchSummary || (sources.length ? `找到 ${sources.length} 篇知识库资料` : ''),
       ...evidence,
     },

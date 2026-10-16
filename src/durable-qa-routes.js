@@ -2,6 +2,7 @@
 
 const express = require('express');
 const chat = require('./chat-presentation');
+const knowledge = require('./knowledge-evidence');
 const { fault } = require('./durable-qa-store');
 
 function registerDurableQARoutes(app, { tasks, config, conversations, webReadiness,
@@ -15,8 +16,10 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
     router.use(auth, (req, res, next) => {
       res.setHeader('Cache-Control', 'no-store');
       if (!tasks?.available) return res.status(503).json({ error: 'task_store_unavailable', failureReason: 'task_store_unavailable' });
-      if (req.query.presentation !== undefined && req.query.presentation !== 'chat_v1')
+      if (req.query.presentation !== undefined && !['chat_v1', 'agent_evidence_v1'].includes(req.query.presentation))
         return res.status(400).json({ error: 'invalid_presentation' });
+      if (req.query.presentation === 'agent_evidence_v1' && (scope !== 'internal' || !knowledge.allowed(config, req.applicationKey)))
+        return res.status(403).json({ error: 'source_evidence_forbidden' });
       req.taskOwner = getConversationOwnerKey(req, res);
       next();
     });
@@ -66,7 +69,12 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       const task = tasks.store.owned(req.params.id, req.taskOwner, scope, req.applicationKey || scope);
       const result = { task: tasks.store.publicTask(task), snapshot: { events: task.events,
         ...(task.eventsExpired ? { eventsExpired: true, history: { conversationId: task.input.conversationId, taskId: task.id } } : {}) } };
-      res.json(req.query.presentation === 'chat_v1' ? chat.projectSnapshot(result) : result);
+      const visible = knowledge.publicSnapshot(result);
+      if (req.query.presentation === 'agent_evidence_v1') {
+        const evidence = task.eventsExpired ? conversations.getKnowledgeEvidence(task.input.conversationId, task.id, req.taskOwner)
+          : knowledge.fromEvents(task.events, knowledge.hash(String(config.webAgent?.sharedKnowledgeBaseId || '')));
+        res.json(knowledge.agentSnapshot(visible, evidence));
+      } else res.json(req.query.presentation === 'chat_v1' ? chat.projectSnapshot(visible) : visible);
     }));
     router.delete('/:id', route((req, res) => {
       res.json({ task: tasks.cancel(req.params.id, req.taskOwner, scope, req.applicationKey || scope) });
@@ -78,7 +86,9 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       const after = Number(cursor);
       if (after > (task.lastEventId ?? task.events.length)) throw fault('cursor_ahead', 409);
       if (task.eventsExpired) throw fault('task_events_expired', 410);
-      tasks.subscribe(task, after, res, req.query.presentation === 'chat_v1' ? chat.projectData : undefined);
+      const project = req.query.presentation === 'agent_evidence_v1' ? (_name, data) => data :
+        (name, data) => name === knowledge.EVENT ? null : req.query.presentation === 'chat_v1' ? chat.projectData(name, data) : knowledge.publicData(name, data);
+      tasks.subscribe(task, after, res, project);
     }));
     app.use(base, router);
   }

@@ -3,6 +3,7 @@
 const { DurableQATaskStore, TERMINAL, fault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
 const { DurableQAStreamBuffer } = require('./durable-qa-stream-buffer');
+const knowledge = require('./knowledge-evidence');
 
 class DurableQATasks {
   constructor({ directory, conversations, queue, execute, accountPool = null, mode, routingOptions = () => ({}), storeOptions = {}, heartbeatMs = 15000, rotationMs = 240000 }) {
@@ -152,6 +153,7 @@ class DurableQATasks {
       const response = this.response(task, () => turn);
       const streamBuffer = this.streamBuffers.get(task.id);
       await this.execute({ task, signal: controller.signal, res: response, conversationStore,
+        onKnowledgeEvidence: value => { check(); streamBuffer.append(knowledge.EVENT, { knowledgeEvidence: value }); },
         accountLease,
         onUpstreamBinding: bindUpstream,
         onDispatch: () => {
@@ -340,7 +342,8 @@ class DurableQATasks {
       for (let index = cursor; index < current.events.length; index++) {
         const event = current.events[index];
         if (res.writableLength > 256 * 1024) { cleanup(); res.destroy(); return; }
-        res.write(`id: ${event.id}\nevent: ${event.event}\ndata: ${JSON.stringify(project(event.event, event.data))}\n\n`);
+        const projected = project(event.event, event.data);
+        if (projected !== null) res.write(`id: ${event.id}\nevent: ${event.event}\ndata: ${JSON.stringify(projected)}\n\n`);
         cursor = event.id;
       }
       if (TERMINAL.has(current.status)) end();

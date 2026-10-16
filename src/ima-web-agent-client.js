@@ -366,6 +366,7 @@ class IMAWebAgentClient {
       }
 
       yield* parseIMAWebAgentStream(response, mode === 'knowledge_agent' ? {
+        knowledgeScopeRef: crypto.createHash('sha256').update(this.knowledgeBaseId).digest('hex'),
         sourceClassifier: (item, context = {}) => classifyIMAKnowledgeAgentSource(item, {
           expectedKnowledgeScopeRef: crypto.createHash('sha256').update(this.knowledgeBaseId).digest('hex'),
           sourceEventName: typeof context === 'string' ? context : context.sourceEventName || context.eventName || '',

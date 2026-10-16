@@ -109,6 +109,7 @@ function withDisplayNumbers(map, answer) {
 }
 
 function projectData(name, data = {}) {
+  if (name === 'knowledge_evidence') return null;
   if (name === 'sources') return { citationMap: presentationCitations(data.citationMap),
     sourceCount: Number.isSafeInteger(data.sources?.length) ? data.sources.length : Number(data.sourceCount) || 0 };
   if (name === 'process') return processStep(data) || {};
@@ -129,13 +130,14 @@ function projectData(name, data = {}) {
 
 function projectSnapshot(value) {
   return { ...value, snapshot: value.snapshot ? { ...value.snapshot,
-    events: (value.snapshot.events || []).map(event => ({ ...event, data: projectData(event.event, event.data) })) } : value.snapshot };
+    events: (value.snapshot.events || []).filter(event => event.event !== 'knowledge_evidence')
+      .map(event => ({ ...event, data: projectData(event.event, event.data) })) } : value.snapshot };
 }
 
 function projectHistory(value) {
   return { ...value, messages: (value.messages || []).map(message => {
     if (message.role !== 'assistant') return message;
-    const { sources, searchSummary, ...rest } = message;
+    const { sources, searchSummary, knowledgeEvidence, ...rest } = message;
     return { ...rest, ...presentationMetadata(message), sourceCount: sources?.length || message.sourceCount || 0 };
   }) };
 }
