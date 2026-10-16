@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">Provider A 工作方式</title>
+  <desc id="desc">网站或机器人提交任务，Provider 管理账号与会话并调用 IMA；断线重连只读取同一任务。已派发任务进程重启后不能承诺继续生成。</desc>
+  <rect width="1200" height="430" fill="#f6f9f8"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,PingFang SC,Microsoft YaHei,sans-serif">
+    <text x="40" y="55" font-size="28" font-weight="700" fill="#172725">执行属于任务，连接只负责观看。</text>
+    <rect x="40" y="100" width="260" height="150" rx="8" fill="#ffffff" stroke="#cadbd5"/>
+    <text x="65" y="148" font-size="27" font-weight="700" fill="#172725">你的网站 / 机器人</text>
+    <text x="65" y="191" font-size="22" fill="#4c605d">提交一次 · 查看进度</text>
+    <text x="65" y="225" font-size="22" fill="#4c605d">明确停止 · 恢复观看</text>
+    <path d="M315 175H380m-12-9 12 9-12 9" fill="none" stroke="#087f70" stroke-width="3"/>
+    <rect x="395" y="100" width="405" height="150" rx="8" fill="#e4f4ee" stroke="#087f70"/>
+    <text x="420" y="148" font-size="29" font-weight="700" fill="#172725">Provider A</text>
+    <text x="420" y="191" font-size="23" fill="#263d38">账号池 · 会话绑定 · 调度</text>
+    <text x="420" y="225" font-size="23" fill="#263d38">任务日志 · 事件序号 · 历史</text>
+    <path d="M815 175H880m-12-9 12 9-12 9" fill="none" stroke="#087f70" stroke-width="3"/>
+    <rect x="895" y="100" width="265" height="150" rx="8" fill="#ffffff" stroke="#cadbd5"/>
+    <text x="920" y="148" font-size="29" font-weight="700" fill="#172725">腾讯 IMA</text>
+    <text x="920" y="191" font-size="22" fill="#4c605d">已授权共享知识库</text>
+    <text x="920" y="225" font-size="22" fill="#4c605d">上游检索与生成</text>
+    <path d="M600 260V299H170V260m-9 12 9-12 9 12" fill="none" stroke="#087f70" stroke-width="3"/>
+    <text x="40" y="350" font-size="24" fill="#172725">断开观看 ≠ 取消任务；重连按游标补发，不重新向 IMA 提问。</text>
+    <text x="40" y="393" font-size="21" fill="#4c605d">进程重启后的已派发任务可能结果不确定；不伪造完成，不自动重问。</text>
+  </g>
+</svg>

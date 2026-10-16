@@ -1,0 +1,153 @@
+{
+  "responses": {
+    "/healthz": {
+      "ok": true,
+      "provider": "ima-web-agent",
+      "model": "knowledge-agent"
+    },
+    "/api/capabilities": {
+      "success": true,
+      "features": {
+        "durable_qa_tasks_v1": true
+      }
+    },
+    "/api/conversations": {
+      "success": true,
+      "conversations": [
+        {
+          "id": "synthetic-readme",
+          "conversationId": "synthetic-readme",
+          "title": "如何安排一次 3DGS 入门练习？",
+          "createdAt": "2026-10-15T02:00:00.000Z",
+          "updatedAt": "2026-10-15T02:00:00.000Z",
+          "mode": "knowledge_agent",
+          "turns": 1
+        }
+      ]
+    },
+    "/api/conversations/synthetic-readme": {
+      "success": true,
+      "conversation": {
+        "id": "synthetic-readme",
+        "conversationId": "synthetic-readme",
+        "title": "如何安排一次 3DGS 入门练习？",
+        "createdAt": "2026-10-15T02:00:00.000Z",
+        "updatedAt": "2026-10-15T02:00:00.000Z",
+        "mode": "knowledge_agent",
+        "turns": 1
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "如何安排一次 3DGS 入门练习？",
+          "createdAt": "2026-10-15T02:00:00.000Z"
+        },
+        {
+          "role": "assistant",
+          "content": "以下内容为**界面合成演示**，不是 IMA 实际回答。\n\n## 先把一次练习拆成三个阶段\n\n保留每一步的记录，方便回看与比较。[1](@index-ref?id=42)\n\n| 阶段 | 可以先做的事 | 留下什么记录 |\n| --- | --- | --- |\n| 采集 | 检查照片是否清晰 | 原始照片与拍摄说明 |\n| 整理 | 分开原始素材与处理结果 | 文件结构与处理步骤 |\n| 练习 | 使用一组固定测试素材 | 配置、日志和观察结果 |\n\n## 怎样继续提问\n\n1. 说明现在进行到哪一步。\n2. 描述观察到的现象，而不只说“效果不好”。\n3. 保留相关配置，逐项比较变化。\n\n> 这是一份用于排版验收的虚构示例，不是训练参数或效果保证。",
+          "complete": true,
+          "createdAt": "2026-10-15T02:00:00.000Z",
+          "sources": [],
+          "sourceCount": 1,
+          "citationMap": {
+            "index:42": {
+              "type": "web",
+              "sources": [
+                {
+                  "url": "https://example.org/3dgs-guide",
+                  "title": "合成来源示例 · 练习记录",
+                  "snippet": "仅用于展示引用与摘要排版，不代表真实检索来源。"
+                }
+              ]
+            }
+          },
+          "suggestions": [
+            "如何整理一组测试照片？",
+            "练习记录应该包含哪些内容？"
+          ],
+          "timing": {
+            "elapsed_ms": 12400,
+            "queue_wait_ms": 0
+          }
+        }
+      ]
+    },
+    "/api/tasks": {
+      "success": true,
+      "tasks": []
+    },
+    "/api/admin/bootstrap": {
+      "enrollment": {
+        "supportsAdminPageQr": true
+      }
+    },
+    "/api/admin/accounts": {
+      "accounts": [
+        {
+          "id": "synthetic-account-a",
+          "name": "合成账号 A",
+          "status": "available",
+          "identityVerified": true,
+          "activeRequests": 0,
+          "management": {
+            "knowledge": {
+              "state": "ready",
+              "qualified": true,
+              "verifiedAt": "2026-10-15T02:00:00.000Z"
+            },
+            "web": {
+              "state": "unknown"
+            },
+            "session": {
+              "state": "ready"
+            },
+            "schedulable": true,
+            "maintenance": {
+              "state": "scheduled",
+              "lastCheckAt": "2026-10-15T02:00:00.000Z",
+              "nextCheckAt": "2026-10-15T03:00:00Z",
+              "tokenExpiresAt": "2026-10-15T04:00:00Z",
+              "lastSuccessfulRefreshAt": "2026-10-15T02:00:00.000Z"
+            }
+          }
+        },
+        {
+          "id": "synthetic-account-b",
+          "name": "合成账号 B",
+          "status": "disabled",
+          "identityVerified": true,
+          "activeRequests": 0,
+          "management": {
+            "knowledge": {
+              "state": "pending",
+              "qualified": false
+            },
+            "web": {
+              "state": "unknown"
+            },
+            "session": {
+              "state": "ready"
+            },
+            "schedulable": false,
+            "maintenance": {
+              "state": "unobserved"
+            }
+          },
+          "enrollmentQualificationRequired": true
+        }
+      ],
+      "summary": {
+        "totalAccounts": 2
+      },
+      "queue": {
+        "maxConcurrent": 1
+      },
+      "readiness": {
+        "mode": "knowledge_agent",
+        "schedulable": 1,
+        "pending": 1,
+        "capacity": 1
+      }
+    }
+  }
+}

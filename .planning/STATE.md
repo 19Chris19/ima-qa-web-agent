@@ -1,5 +1,15 @@
 # Durable QA candidate handoff
 
+## README refresh audit, 2026-10-15
+
+Audit-HEAD: 880d816a431595cae8c1e3aa5cbc97ae2a7f4161
+Branch: codex/DOCS-20261015-PROVIDER-README. Docs/assets/tests only, local preview;
+no runtime or Release change. Stable v0.6.1 paired with website v0.4.1 checked.
+Current synthetic UI proof and shorter deployment story replace historical
+homepage sequencing. Full suite 929 pass / 6 skip; added capture regression 1 pass.
+See DOCS-20261015-PROVIDER-README for source/skill/browser evidence and boundaries.
+Earlier checkpoints below remain dated history, not current deployment state.
+
 ## Stable publication preparation, 2026-10-10
 
 Final guide audit supersedes target v0.5.0 with v0.5.1: DEPLOYMENT.md and a second
