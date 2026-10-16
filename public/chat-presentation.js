@@ -28,12 +28,13 @@
     const targets = entry?.type === 'web' ? [...new Set((entry.sources || []).map(source => webUrl(source?.url)).filter(Boolean))] : [];
     const previewable = targets.length > 0;
     const content = escape(token.text);
+    const label = `<span class="chat-citation-label">${content}</span>`;
     const kind = ['web', 'knowledge'].includes(entry?.type) ? entry.type : 'unknown';
     const classes = `chat-citation chat-citation-${kind}`;
     if (!previewable) return `<sup class="${classes} chat-citation-static" aria-label="${kind === 'knowledge' ? '知识库引用' : '引用'} ${content}"><span class="chat-citation-mark">${content}</span></sup>`;
-    if (targets.length === 1) return `<sup class="${classes}"><a class="chat-citation-mark chat-citation-link" href="${escape(targets[0])}" target="_blank" rel="noopener noreferrer" data-citation-key="${escape(key)}" aria-label="打开网页引用 ${content}（新标签页）" aria-haspopup="dialog" aria-expanded="false" title="悬停预览，点击打开网页">${content}</a></sup>`;
+    if (targets.length === 1) return `<sup class="${classes}"><a class="chat-citation-mark chat-citation-link" href="${escape(targets[0])}" target="_blank" rel="noopener noreferrer" data-citation-key="${escape(key)}" aria-label="打开网页引用 ${content}（新标签页）" aria-haspopup="dialog" aria-expanded="false" title="悬停预览，点击打开网页">${label}</a></sup>`;
     // A reference may explicitly point to several pages. Never pick one by order.
-    return `<sup class="${classes}"><button type="button" class="chat-citation-mark chat-citation-button" data-citation-key="${escape(key)}" aria-label="选择网页引用 ${content}（${targets.length} 个来源）" aria-haspopup="dialog" aria-expanded="false" title="此引用包含多个网页，请在预览卡片中选择">${content}</button></sup>`;
+    return `<sup class="${classes}"><button type="button" class="chat-citation-mark chat-citation-button" data-citation-key="${escape(key)}" aria-label="选择网页引用 ${content}（${targets.length} 个来源）" aria-haspopup="dialog" aria-expanded="false" title="此引用包含多个网页，请在预览卡片中选择">${label}</button></sup>`;
   }
   function protectMath(tokens, state = { math: '' }) {
     for (const token of tokens || []) {

@@ -1,6 +1,6 @@
 # Paired release and production gate
 
-Current reliability patch pair: Provider **v0.6.1** / website **v0.4.1**. Real IMA acceptance for this patch remains a separate authorized operation.
+Current mobile interaction patch pair: Provider **v0.6.2** / website **v0.4.2**. Native Chromium touch regression is covered; physical iOS/Android safe-area and keyboard acceptance remains pending. This patch does not submit real IMA questions.
 
 Release order: Provider candidate, website candidate pinned to that Provider, then the stable pair. A merged PR is not a production deployment. GitHub main remains the integration branch; the website Vercel project tracks `codex/production-stable` for Production. Main and PR deployments remain previews. Move the production branch only to an accepted, immutable stable Release commit after the Provider and BFF have been deployed and verified.
 

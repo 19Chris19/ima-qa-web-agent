@@ -866,7 +866,7 @@ body[data-mode="embed"] .composer {
 .status-pill { max-width: 96px; height: auto; min-height: 28px; overflow-wrap: anywhere; }
 
 @media (max-width: 680px) {
-  .composer-wrap { padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .composer-wrap { padding: 8px 12px max(32px, calc(8px + env(safe-area-inset-bottom, 0px))); }
   .workspace, body[data-mode="embed"] .workspace { height: 100dvh; }
 }
 

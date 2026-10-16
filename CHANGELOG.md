@@ -1,5 +1,11 @@
 # 更新日志
 
+## [0.6.2] - 2026-10-16
+
+- 修复触屏相邻网页引用点击区重叠：每个角标在布局中保留独立 44×44px 目标，首次点按打开准确来源面板。桌面悬浮与原生链接行为保持兼容，知识库仍为绿色静态角标。
+- 自带页与嵌入页的手机输入栏底部至少留白 32px，或高于安全区 8px；保留草稿与回答末尾阅读空间。配套知天下 v0.4.2。
+- 原生 Chromium 触屏回归覆盖相邻、换行、表格和一对多来源；真实 iOS/Android 安全区、浏览器工具栏和软键盘仍待人工验收。账号池、任务日志及机器人合同不变。
+
 ## [0.6.1] - 2026-10-15
 
 - Isolate critical account commits in a persistent asynchronous worker, coalesce statistics once per second, and preserve fail-closed credential/CAS recovery. Paired with website v0.4.1; real IMA acceptance remains separate.

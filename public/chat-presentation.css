@@ -3,6 +3,7 @@
 .chat-citation-knowledge { --citation-ink: #18724f; --citation-fill: #e8f5ed; }
 .chat-citation-mark { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 1.5em; min-height: 1.5em; padding: 0 .25em; border: 1px solid transparent; border-radius: 4px; background: var(--citation-fill); color: inherit; font: inherit; line-height: 1; text-align: center; }
 .chat-citation-button, .chat-citation-link { cursor: pointer; touch-action: manipulation; }
+.chat-citation-label { pointer-events: none; }
 .chat-citation a.chat-citation-mark { color: inherit; text-decoration: none; }
 .chat-citation-button:hover, .chat-citation-button:focus-visible, .chat-citation-link:hover, .chat-citation-link:focus-visible { outline: 1px solid var(--citation-ink); outline-offset: 1px; }
 .chat-citation-card { position: fixed; z-index: 9999; width: min(370px, calc(100vw - 16px)); max-height: min(400px, calc(100vh - 16px)); overflow: auto; box-sizing: border-box; padding: 14px; color: var(--text, #25344a); background: var(--surface, #fff); border: 1px solid var(--line, #dce4ef); border-radius: 12px; box-shadow: 0 8px 32px #18304b26; font-size: 14px; line-height: 1.5; }
@@ -60,8 +61,11 @@
 .chat-citation-card .chat-citation-touch-hint { font-size: 12px; line-height: 1.5; color: var(--muted, #687890); margin: 10px 0 0; }
 @media (pointer: coarse), (any-pointer: coarse) {
   .chat-tool-icon { width: 44px; height: 44px; }
-  .chat-citation-link, .chat-citation-button { position: relative; }
-  .chat-citation-link::after, .chat-citation-button::after { content: ''; position: absolute; width: max(100%, 44px); height: 44px; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+  /* Reserve the whole touch target in inline layout. Invisible, expanded
+     pseudo-elements overlap adjacent references and select the wrong source. */
+  .chat-citation:not(.chat-citation-static) { display: inline-flex; vertical-align: middle; line-height: 1; }
+  .chat-citation-link, .chat-citation-button { min-width: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; }
+  .chat-citation-label { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 1.5em; min-height: 1.5em; padding: 0 .25em; border: 1px solid transparent; border-radius: 4px; background: var(--citation-fill); transform: translateY(-.25em); }
   .chat-citation-card section:first-of-type { padding-right: 40px; }
   .chat-source-title .chat-source-open { min-height: 44px; }
   .chat-suggestions .chat-tool { min-height: 44px; padding: 9px 12px; }
