@@ -10,18 +10,35 @@
   transition: opacity 180ms ease-out, transform 180ms cubic-bezier(.2, 0, 0, 1), visibility 0s;
 }
 .chat-latest-control:active { transform: scale(.96); }
-.answer-retry {
-  display: inline-flex; align-items: center; justify-content: center; gap: 0;
-  width: 44px; height: 44px; flex: none; padding: 0; border: 0; border-radius: 8px;
-  background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer;
+/* Copy and retry share one visual system and adjacent, nonoverlapping targets. */
+.answer-tools button.answer-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; min-width: 44px; min-height: 44px; flex: 0 0 44px;
+  box-sizing: border-box; padding: 0; border: 0; border-radius: 8px;
+  background: transparent; color: var(--muted, #64748b); box-shadow: none;
+  font: inherit; cursor: pointer; touch-action: manipulation;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
 }
-.answer-retry svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.answer-retry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.answer-retry:disabled { cursor: default; opacity: .55; }
-.retry-status { font-size: 12px; line-height: 1.5; }
-.answer-retry[aria-busy="true"] svg { opacity: .5; }
+.answer-tools button.answer-action[hidden] { display: none; }
+.answer-tools button.answer-action > svg, .answer-tools button.answer-action > svg.icon {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.answer-tools button.answer-action:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; }
+.answer-tools button.answer-action:disabled {
+  cursor: default; opacity: .5; background: transparent; color: var(--muted, #64748b); transform: none;
+}
+.answer-tools button.answer-action:not(:disabled):active { transform: none; background: var(--hover, #7b8fa214); }
+.answer-tools > .copy-status:empty, .answer-tools > .retry-status:empty { display: none; }
+.answer-tools > .copy-status:not(:empty), .answer-tools > .retry-status:not(:empty) {
+  margin-inline-start: 8px; color: var(--muted, #64748b); font-size: 12px; line-height: 1.5;
+}
 @media (hover: hover) and (pointer: fine) {
-  .answer-retry:not(:disabled):hover { background: #7b8fa214; }
+  .answer-tools button.answer-action { width: 40px; height: 40px; min-width: 40px; min-height: 40px; flex-basis: 40px; }
+  .answer-tools button.answer-action:not(:disabled):hover { background: var(--hover, #7b8fa214); color: var(--text, var(--ink, #233047)); }
+}
+@media (any-pointer: coarse) {
+  .answer-tools button.answer-action { width: 44px; height: 44px; min-width: 44px; min-height: 44px; flex-basis: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-latest-control, .chat-latest-control[data-visible="true"], .chat-latest-control:active { transform: none; transition: none; }
@@ -29,7 +46,6 @@
 
 /* Labels remain available to assistive technology; the toolbar stays icon-only. */
 .chat-control-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.retry-status:empty { display: none; }
 .answer-outcome { margin: 12px 0 2px !important; padding: 0; border: 0; background: none; color: color-mix(in srgb, var(--text, #233047) 60%, var(--muted, #64748b)); font-family: inherit; font-size: 13px; line-height: 1.6; }
 .message[data-message-actions] { position: relative; }
 .message-actions-trigger, .message-action-close {
@@ -67,5 +83,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .message-action-panel, .message-action-dialog[data-sheet="true"] .message-action-panel { animation: none; }
-  .message-actions-trigger { transition: none; }
+  .message-actions-trigger, .answer-tools button.answer-action { transition: none; }
 }

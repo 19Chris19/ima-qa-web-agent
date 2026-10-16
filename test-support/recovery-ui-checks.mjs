@@ -109,7 +109,25 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
     const after = await page.evaluate(async () => {
       const form = document.querySelector('#askForm'), log = document.querySelector('#chatLog'), wrap = document.querySelector('.composer-wrap');
       const hit = document.elementFromPoint(8, innerHeight - 4);
-      return { state: await (await fetch('/__test/state')).json(), draft: document.querySelector('textarea').value,
+      const toolbar = [...document.querySelectorAll('.answer-tools')].reverse().find(node => node.querySelector('.answer-copy:not([hidden])') && node.querySelector('.answer-retry'));
+      const copy = toolbar.querySelector('.answer-copy'), retry = toolbar.querySelector('.answer-retry');
+      const read = node => {
+        const style = getComputedStyle(node), icon = node.querySelector('svg'), shape = getComputedStyle(icon);
+        return { width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height,
+          color: style.color, background: style.backgroundColor, border: style.border, shadow: style.boxShadow,
+          radius: style.borderRadius, iconSize: icon.getBoundingClientRect().width, stroke: shape.strokeWidth };
+      };
+      const copyStyle = read(copy), retryStyle = read(retry);
+      const retryLeft = retry.getBoundingClientRect().left;
+      const actionGap = retryLeft - copy.getBoundingClientRect().right;
+      const feedback = toolbar.querySelector('.copy-status'), originalFeedback = feedback.textContent;
+      feedback.textContent = '合成复制提示';
+      const feedbackShift = retry.getBoundingClientRect().left - retryLeft;
+      const feedbackAfterIcons = feedback.getBoundingClientRect().left >= retry.getBoundingClientRect().right;
+      feedback.textContent = originalFeedback;
+      return { toolbar: { copyStyle, retryStyle, actionGap, feedbackShift, feedbackAfterIcons },
+        administrationInFrontend: document.body.classList.contains('app-page') ? !!document.querySelector('.admin-link, a[href="/admin"]') : false,
+        state: await (await fetch('/__test/state')).json(), draft: document.querySelector('textarea').value,
         originalFailureKept: !!document.querySelector('.answer-failure, .message-error'),
         gap: innerHeight - form.getBoundingClientRect().bottom,
         wrapperBackground: getComputedStyle(wrap).backgroundColor, wrapperImage: getComputedStyle(wrap).backgroundImage,
@@ -123,7 +141,14 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
     assert.equal(after.wrapperBackground, 'rgba(0, 0, 0, 0)'); assert.equal(after.wrapperImage, 'none');
     assert.ok(after.logBottom >= 843);
     assert.equal(after.gapPassesToLog, true);
-    return { pathname, touchRetry: true, longPressRelease: true, scrollCancelsHold: true, closeAndFocus: true, escapeAndBackdrop: true, sharedRetryGuard: true, draftPreserved: true, originalFailureKept: true, bottomGap: after.gap, transparentGap: true, realProviderCalls: 0 };
+    assert.equal(after.administrationInFrontend, false);
+    assert.deepEqual(after.toolbar.copyStyle, after.toolbar.retryStyle, 'copy and retry must share dimensions, color, material and icon weight');
+    assert.ok(after.toolbar.copyStyle.width >= 44 && after.toolbar.copyStyle.height >= 44);
+    assert.equal(after.toolbar.copyStyle.iconSize, 18);
+    assert.equal(after.toolbar.actionGap, 0, 'adjacent hit targets must be compact without overlapping');
+    assert.equal(after.toolbar.feedbackShift, 0, 'copy feedback must not move the retry action');
+    assert.equal(after.toolbar.feedbackAfterIcons, true);
+    return { pathname, touchRetry: true, longPressRelease: true, scrollCancelsHold: true, closeAndFocus: true, escapeAndBackdrop: true, sharedRetryGuard: true, unifiedToolbar: true, feedbackStable: true, administrationSeparated: true, draftPreserved: true, originalFailureKept: true, bottomGap: after.gap, transparentGap: true, realProviderCalls: 0 };
   } finally {
     await page.cdp('Emulation.setTouchEmulationEnabled', { enabled: false });
     await page.cdp('Emulation.clearDeviceMetricsOverride');

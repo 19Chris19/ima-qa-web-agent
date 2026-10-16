@@ -83,7 +83,7 @@
   function retry({ host, label, run, disabled = () => false, onError = () => {} }) {
     const doc = host.ownerDocument;
     const button = doc.createElement('button');
-    button.type = 'button'; button.className = 'answer-retry';
+    button.type = 'button'; button.className = 'answer-retry answer-action';
     button.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2.6 8.4M3 4v6h6"/></svg><span class="chat-control-label"></span>';
     const status = doc.createElement('span'); status.className = 'retry-status'; status.setAttribute('role', 'status');
     let pending = false, consumed = false, lastState = '';
@@ -105,7 +105,9 @@
       finally { pending = false; refresh(); }
     };
     button.addEventListener('click', invoke);
-    host.append(button, status); refresh();
+    // Feedback follows both icons, so copy feedback never separates actions.
+    const feedback = [...host.children].find(child => child.matches('.copy-status, .retry-status'));
+    host.insertBefore(button, feedback || null); host.append(status); refresh();
     return { refresh, button, invoke, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
 
