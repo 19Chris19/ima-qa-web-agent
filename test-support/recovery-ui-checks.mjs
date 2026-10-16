@@ -47,7 +47,17 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
     assert.ok(before.retry.height >= 44);
     assert.equal(before.retry.hitRetry, true, 'the failure retry must be visible and not covered by the composer');
 
-    const tap = point => page.cdp('Input.synthesizeTapGesture', { ...point, duration: 50, tapCount: 1, gestureSourceType: 'touch' });
+    const touchGesture = async (point, duration = 0) => {
+      // Linux headless synthetic tap gestures can omit compatibility clicks.
+      // Use the same native touch sequence as the citation acceptance checks.
+      // Interactive embedders may provide one timed native gesture to avoid
+      // automation round-trip delays between the press and release.
+      if (page.touchGesture) return page.touchGesture(point, duration);
+      await page.cdp('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+      if (duration) await delay(duration);
+      await page.cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    };
+    const tap = point => touchGesture(point);
     const getUserPoint = () => page.evaluate(() => {
       const messages = [...document.querySelectorAll('.message.user')]; const message = messages.at(-1);
       const rect = message.querySelector('.message-actions-target').getBoundingClientRect();
@@ -68,7 +78,7 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     });
     const holdPoint = await page.evaluate(() => { const r = [...document.querySelectorAll('.message.user .message-actions-target')].at(-1).getBoundingClientRect(); return { x: r.left + 12, y: r.top + 12 }; });
-    await page.cdp('Input.synthesizeTapGesture', { ...holdPoint, duration: 560, tapCount: 1, gestureSourceType: 'touch' });
+    await touchGesture(holdPoint, 560);
     await until(() => !!document.querySelector('.message-action-dialog[open]'));
     await page.evaluate(async () => { await Promise.allSettled(document.querySelector('.message-action-panel').getAnimations().map(animation => animation.finished)); });
     const menu = await page.evaluate(() => {
