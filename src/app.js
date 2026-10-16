@@ -14,6 +14,7 @@ const { IMAUpstreamProtocolError } = require('./ima-upstream-protocol');
 const { DurableQATasks } = require('./durable-qa-tasks');
 const { registerDurableQARoutes } = require('./durable-qa-routes');
 const { registerSourcePreviewRoutes } = require('./source-preview-routes');
+const { registerSourceEvidenceRoutes } = require('./source-evidence-routes');
 const { releaseMetadata } = require('./release-metadata');
 const { fault: taskFault } = require('./durable-qa-store');
 const { safeTaskFailureReason } = require('./durable-qa-failure');
@@ -57,6 +58,7 @@ function createApp({
   qualificationMonitor = null,
   healthCapabilities = {},
   airPolicyCapacity = null,
+  sourceReader,
 }) {
   const app = express();
   const observer = observationExporter || observation;
@@ -152,6 +154,12 @@ function createApp({
     },
   });
 
+  registerSourceEvidenceRoutes(app, { config, tasks: durableTasks, conversations, internalAuth, getConversationOwnerKey,
+    ...(sourceReader ? { reader: sourceReader } : {}),
+    busy: () => askQueue.stats().queuedRequests > 0 || qualificationMaintenanceActive()
+      || Boolean(app.locals.accountPoolExerciseManager?.isMaintenanceActive?.()),
+  });
+
   app.get('/healthz', (_req, res) => {
     const provider = config.qaProvider || 'openapi-mimo';
     const health = {
@@ -224,11 +232,16 @@ function createApp({
       totalAccounts: state?.totalAccounts ?? 0, schedulableAccounts: state?.schedulableAccounts ?? 0,
       active: queue.activeRequests, queued: queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
+      ...(knowledge.allowed(config, _req.applicationKey) ? { sourceEvidence: app.locals.sourceReader.status(
+        knowledge.hash(String(config.webAgent?.sharedKnowledgeBaseId || '')), _req.applicationKey) } : {}),
       features: {
         knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent',
         source_intent_web_requested_v1: config.qaProvider === 'ima-web-agent',
         durable_qa_tasks_v1: Boolean(durableTasks?.available),
         ...(knowledge.allowed(config, _req.applicationKey) ? { knowledge_material_map_v1: true } : {}),
+        ...(knowledge.allowed(config, _req.applicationKey) && app.locals.sourceReader.status(
+          knowledge.hash(String(config.webAgent?.sharedKnowledgeBaseId || '')), _req.applicationKey).readConfigured
+          ? { knowledge_source_read_v1: true } : {}),
         ...(config.sourcePreview?.enabled ? { web_source_preview_v1: true } : {}),
       },
     };

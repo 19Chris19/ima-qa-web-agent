@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "pdfEnabled": false,
+  "readers": [
+    {
+      "id": "ima-originals",
+      "scopeRef": "0000000000000000000000000000000000000000000000000000000000000000",
+      "applications": ["ima-agent"],
+      "clientId": "REPLACE_WITH_OPENAPI_CLIENT_ID",
+      "apiKey": "REPLACE_WITH_OPENAPI_API_KEY",
+      "idNamespace": "ima_web_media",
+      "identity": {
+        "mode": "explicit_bindings",
+        "bindings": {
+          "REPLACE_WITH_NATIVE_MATERIAL_ID": "REPLACE_WITH_OPENAPI_MATERIAL_ID"
+        }
+      }
+    }
+  ]
+}

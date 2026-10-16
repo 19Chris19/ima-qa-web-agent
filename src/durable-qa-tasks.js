@@ -153,7 +153,7 @@ class DurableQATasks {
       const response = this.response(task, () => turn);
       const streamBuffer = this.streamBuffers.get(task.id);
       await this.execute({ task, signal: controller.signal, res: response, conversationStore,
-        onKnowledgeEvidence: value => { check(); streamBuffer.append(knowledge.EVENT, { knowledgeEvidence: value }); },
+        onKnowledgeEvidence: value => { check(); streamBuffer.evidence({ knowledgeEvidence: value }); },
         accountLease,
         onUpstreamBinding: bindUpstream,
         onDispatch: () => {

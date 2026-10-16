@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-16T01:32:18.175Z",
+  "node": "v22.23.3",
+  "kind": "synthetic_sse_and_synthetic_transport",
+  "realUpstreamRequests": 0,
+  "realQuestions": 0,
+  "browserProcesses": 0,
+  "httpWarmupRounds": 5,
+  "budgetClockSynthetic": true,
+  "results": {
+    "disabled": {
+      "rounds": 30,
+      "firstChunkP95Ms": 8.2746249999999,
+      "eventIntervalP95Ms": 6.3134169999999585,
+      "healthP95Ms": 2.7646250000000236,
+      "cpuUserMs": 131.87,
+      "cpuSystemMs": 29.29,
+      "rssPeakBytes": 85540864,
+      "eventLoopP95Ms": 1.740799,
+      "fileWriteOperations": 0
+    },
+    "cold_read": {
+      "rounds": 30,
+      "firstChunkP95Ms": 6.38254199999983,
+      "eventIntervalP95Ms": 6.013709000000063,
+      "healthP95Ms": 0.8757500000001528,
+      "cpuUserMs": 138.339,
+      "cpuSystemMs": 26.189,
+      "rssPeakBytes": 108527616,
+      "eventLoopP95Ms": 1.331199,
+      "fileWriteOperations": 0
+    },
+    "cached_page": {
+      "rounds": 30,
+      "firstChunkP95Ms": 8.558542000000216,
+      "eventIntervalP95Ms": 6.390875000000051,
+      "healthP95Ms": 2.3477499999999054,
+      "cpuUserMs": 120.409,
+      "cpuSystemMs": 29.25,
+      "rssPeakBytes": 109821952,
+      "eventLoopP95Ms": 1.788927,
+      "fileWriteOperations": 0
+    },
+    "timeout": {
+      "rounds": 30,
+      "firstChunkP95Ms": 6.809374999999818,
+      "eventIntervalP95Ms": 6.008749999999964,
+      "healthP95Ms": 0.8617500000000291,
+      "cpuUserMs": 894.944,
+      "cpuSystemMs": 111.779,
+      "rssPeakBytes": 109838336,
+      "eventLoopP95Ms": 1.380351,
+      "fileWriteOperations": 0
+    }
+  },
+  "extraRssPeakBytes": 24297472,
+  "formatProbes": {
+    "text_limit": {
+      "kind": "text_limit",
+      "inputBytes": 5242879,
+      "inputBufferInParent": true,
+      "extracted": true,
+      "characters": 128000,
+      "contentComplete": false,
+      "extraRssPeakBytes": 41517056,
+      "rssUnder64MiB": true,
+      "publicEnabled": true
+    },
+    "pdf_probe": {
+      "kind": "pdf_probe",
+      "inputBytes": 592,
+      "inputBufferInParent": true,
+      "extracted": true,
+      "characters": 34,
+      "contentComplete": true,
+      "extraRssPeakBytes": 76447744,
+      "rssUnder64MiB": false,
+      "publicEnabled": false
+    }
+  },
+  "gates": {
+    "healthP95Under250Ms": true,
+    "firstChunkRegressionUnder20Ms": true,
+    "intervalRegressionUnder20Ms": true,
+    "extraRssUnder64MiB": true,
+    "overBudgetPdfDisabled": true
+  },
+  "passed": true
+}
