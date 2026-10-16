@@ -6,7 +6,13 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
   async function until(fn) {
     const deadline = performance.now() + 8000;
     while (performance.now() < deadline) { if (await page.evaluate(fn)) return; await delay(25); }
-    throw Error('Synthetic recovery page did not reach the expected state');
+    const diagnostics = await page.evaluate(() => ({
+      viewport: { width: innerWidth, height: innerHeight, scale: visualViewport?.scale },
+      dialog: !!document.querySelector('.message-action-dialog[open]'),
+      close: document.querySelector('.message-action-close')?.getBoundingClientRect().toJSON(),
+      closeHit: window.recoveryCloseHit, inputs: window.recoveryInputAudit,
+    }));
+    throw Error(`Synthetic recovery page did not reach the expected state: ${JSON.stringify(diagnostics)}`);
   }
   await page.cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await page.cdp('Emulation.setTouchEmulationEnabled', { enabled: true });
@@ -22,6 +28,15 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       await Promise.allSettled(document.getAnimations().filter(animation => animation.effect.getComputedTiming().iterations !== Infinity).map(animation => animation.finished));
       const log = document.querySelector('#chatLog'); log.scrollTop = log.scrollHeight;
+    });
+    await page.evaluate(() => {
+      // Test-only input diagnostics contain classes and coordinates, no message text.
+      window.recoveryInputAudit = [];
+      for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'click', 'contextmenu']) document.addEventListener(type, event => {
+        window.recoveryInputAudit.push({ type, at: performance.now(), x: event.clientX, y: event.clientY, pointer: event.pointerType,
+          target: event.target.closest?.('button')?.className || String(event.target.className), prevented: event.defaultPrevented, trusted: event.isTrusted });
+        window.recoveryInputAudit = window.recoveryInputAudit.slice(-16);
+      }, true);
     });
     const before = await page.evaluate(async () => ({ state: await (await fetch('/__test/state')).json(),
       draft: document.querySelector('textarea').value, retry: (() => {
@@ -59,6 +74,7 @@ export async function runRecoveryUiChecks(page, baseUrl, pathname = '/') {
     const menu = await page.evaluate(() => {
       const dialog = document.querySelector('.message-action-dialog'), panel = dialog.querySelector('.message-action-panel');
       const close = dialog.querySelector('.message-action-close').getBoundingClientRect();
+      window.recoveryCloseHit = document.elementFromPoint(close.x+close.width/2, close.y+close.height/2)?.closest('button')?.className;
       return { sheet: dialog.dataset.sheet, bottom: panel.getBoundingClientRect().bottom, top: panel.getBoundingClientRect().top,
         action: dialog.querySelector('[data-action="retry"]').textContent, close: { x: close.x + close.width/2, y: close.y + close.height/2 },
         targets: [...dialog.querySelectorAll('button')].every(b => b.getBoundingClientRect().height >= 44) };
