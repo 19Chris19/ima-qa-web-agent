@@ -115,6 +115,9 @@ test('touch hold survives its release click; moving, scrolling, selection and mu
   const dialog = p.menu(); dialog.dispatchEvent(new p.w.MouseEvent('click', { bubbles: true, cancelable: true }));
   assert.equal(p.menu(), dialog, 'the touch release must not dismiss the newly opened panel');
   dialog.click(); assert.equal(p.menu(), null, 'a later intentional backdrop tap dismisses');
+  p.pointer('pointerdown'); p.hold();
+  const next = p.menu(); next.dispatchEvent(new p.w.MouseEvent('pointerdown', { bubbles: true })); next.click();
+  assert.equal(p.menu(), null, 'a fresh backdrop press dismisses even if the hold emitted no compatibility click');
 });
 
 test('menu restores focus, traps keyboard focus, keeps selected text native, and closes on navigation', async t => {

@@ -227,6 +227,9 @@
       });
     }
     doc.addEventListener('pointerdown', event => {
+      // A fresh press is intentional. Some touch browsers omit the hold's
+      // compatibility click; never swallow the user's next backdrop tap.
+      suppress = null;
       if (hold) { clearHold(); return; }
       const binding = find(event.target);
       if (!binding || event.pointerType !== 'touch' || event.isPrimary === false || selected()
