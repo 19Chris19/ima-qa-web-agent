@@ -17,6 +17,7 @@ const pending = new Map();
 chrome.on('error', error => { chromeError = error.code || 'CHROME_START_FAILED'; });
 chrome.once('exit', (code, signal) => { chromeExit = { code, signal }; });
 chrome.stderr.on('data', chunk => { chromeStderr = (chromeStderr + chunk.toString()).slice(-8192); });
+const chromeClosed = new Promise(resolve => chrome.once('close', () => resolve(true)));
 try {
   let wsUrl;
   const startupDeadline = performance.now() + 20000;
@@ -62,7 +63,14 @@ try {
 } finally {
   for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.reject(Error('Browser test ended')); }
   socket?.close(); chrome.kill();
-  if (chrome.exitCode === null && !chromeError) await Promise.race([new Promise(resolve => chrome.once('exit', resolve)), delay(2000)]);
-  if (chrome.exitCode === null && !chromeError) chrome.kill('SIGKILL');
-  await fixture.close(); await rm(profile, { recursive: true, force: true });
+  let stopped = await Promise.race([chromeClosed, delay(2000).then(() => false)]);
+  if (!stopped && !chromeError) {
+    chrome.kill('SIGKILL');
+    stopped = await Promise.race([chromeClosed, delay(2000).then(() => false)]);
+  }
+  await fixture.close();
+  if (!stopped) throw Error('Headless Chrome did not finish closing; temporary profile retained');
+  // Browser helpers can release their last profile files just after close.
+  // Retry bounded ENOTEMPTY/EBUSY cleanup instead of hiding a failed removal.
+  await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
