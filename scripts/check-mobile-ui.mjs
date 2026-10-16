@@ -11,17 +11,21 @@ import { runMobileUiChecks } from '../test-support/mobile-ui-checks.mjs';
 const profile = await mkdtemp(join(tmpdir(), 'qa-mobile-ui-chrome-'));
 const fixture = await startMobileUiFixture();
 const chrome = spawn(process.env.CHROME_PATH || 'google-chrome', ['--headless=new', '--disable-gpu', '--no-first-run',
-  '--no-default-browser-check', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
-let chromeError, socket, sequence = 0;
+  '--no-default-browser-check', '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+let chromeError, chromeExit, chromeStderr = '', socket, sequence = 0;
 const pending = new Map();
 chrome.on('error', error => { chromeError = error.code || 'CHROME_START_FAILED'; });
+chrome.once('exit', (code, signal) => { chromeExit = { code, signal }; });
+chrome.stderr.on('data', chunk => { chromeStderr = (chromeStderr + chunk.toString()).slice(-8192); });
 try {
   let wsUrl;
-  for (let attempt = 0; attempt < 200; attempt++) {
+  const startupDeadline = performance.now() + 20000;
+  while (performance.now() < startupDeadline) {
     if (chromeError) throw Error(`Chrome unavailable (${chromeError}); set CHROME_PATH to a Chromium executable`);
+    if (chromeExit) throw Error(`Headless Chrome exited before ready (${chromeExit.code ?? chromeExit.signal}): ${chromeStderr.trim() || 'no browser diagnostic'}`);
     try { const [port, path] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).trim().split('\n'); wsUrl = `ws://127.0.0.1:${port}${path}`; break; } catch { await delay(25); }
   }
-  if (!wsUrl) throw Error('Headless Chrome did not expose its loopback debugging endpoint');
+  if (!wsUrl) throw Error(`Headless Chrome did not expose its loopback debugging endpoint within 20 seconds: ${chromeStderr.trim() || 'no browser diagnostic'}`);
   socket = new WebSocket(wsUrl);
   await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   socket.addEventListener('message', event => {
