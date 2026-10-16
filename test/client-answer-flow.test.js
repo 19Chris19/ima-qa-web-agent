@@ -24,7 +24,7 @@ async function pageWithAnswer(events) {
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
     window.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await waitFor(() => !window.document.querySelector('#sendButton').disabled);
@@ -103,7 +103,7 @@ test('the send control becomes stop and aborts exactly one in-flight request', a
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
     window.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await waitFor(() => !window.document.querySelector('#sendButton').disabled);

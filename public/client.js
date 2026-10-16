@@ -39,13 +39,16 @@
   const tasks = window.ProviderQaTasks.create(requestOptions);
   const terminal = window.ProviderQaTasks.terminal;
   let followStreamingAnswer = true;
-  let lastScrollTop = 0;
   const experience = window.ProviderQaExperience;
   const resizeComposer = experience.composer(form, input);
   const notice = document.querySelector('#composerNotice');
   const latest = experience.button('返回最新回答', 'latest', 'return-latest');
-  latest.hidden = true;
   document.querySelector('#readingActions').append(latest);
+  const latestControl = window.ChatControls.latest({ log: chatLog, button: latest,
+    following: () => followStreamingAnswer, setFollowing: value => { followStreamingAnswer = value; },
+    hasContent: () => Boolean(chatLog.querySelector('.message.user')),
+  });
+  const retryControls = new Set();
   const reconnect = document.createElement('button');
   reconnect.type = 'button';
   reconnect.className = 'source-toggle task-reconnect';
@@ -66,13 +69,11 @@
     else { renderWelcome(); setStatus('', 'ready'); updateComposer(); }
   });
   experience.selectionCopy(chatLog);
-  latest.addEventListener('click', () => {
-    followStreamingAnswer = true;
-    scrollToBottom({ force: true });
-    chatLog.focus({ preventScroll: true });
-  });
 
   function updateComposer() {
+    for (const control of retryControls) {
+      if (!control.button.isConnected) retryControls.delete(control); else control.refresh();
+    }
     for (const section of chatLog.querySelectorAll('.chat-suggestions')) {
       for (const control of section.querySelectorAll('button')) control.disabled = Boolean(input.value.trim()) || isBusy || navigating || recoveryRequired;
     }
@@ -117,18 +118,11 @@
     }
   });
 
-  chatLog.addEventListener('scroll', () => {
-    if (chatLog.scrollTop < lastScrollTop) followStreamingAnswer = false;
-    lastScrollTop = chatLog.scrollTop;
-    latest.hidden = followStreamingAnswer || isNearChatBottom();
-  });
-  const suspendFollowing = () => { followStreamingAnswer = false; };
-  chatLog.addEventListener('wheel', event => { if (event.deltaY < 0) suspendFollowing(); }, { passive: true });
-  chatLog.addEventListener('touchstart', suspendFollowing, { passive: true });
-  chatLog.addEventListener('pointerdown', suspendFollowing);
-  chatLog.addEventListener('keydown', event => {
-    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) suspendFollowing();
-  });
+  const composerWrap = document.querySelector('.composer-wrap');
+  if (window.ResizeObserver) new window.ResizeObserver(() => {
+    chatLog.style.setProperty('--composer-clearance', `${Math.ceil(composerWrap.getBoundingClientRect().height + 24)}px`);
+    latestControl.pin();
+  }).observe(composerWrap);
 
   newConversationButton.addEventListener('click', createConversation);
   sidebarToggle.addEventListener('click', () => setSidebarOpen(!workspace.classList.contains('sidebar-open')));
@@ -301,14 +295,15 @@
     }
   }
 
-  async function submitQuestion(rawQuestion) {
+  async function submitQuestion(rawQuestion, options = {}) {
     const question = rawQuestion.trim();
-    if (!question || isBusy || navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)) return;
+    if (!question || isBusy || navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)) return false;
     const view = beginView();
+    view.question = question;
     view.originalDraft = rawQuestion;
     view.draftRevision = draftRevision;
     followStreamingAnswer = true;
-    input.value = '';
+    if (!options.preserveDraft) input.value = '';
     setTaskPhase(view, legacyProvider || conversationId ? 'submitting' : 'preparing');
     appendMessage('user', question);
     view.message = appendMessage('assistant', '', { pending: true });
@@ -342,28 +337,32 @@
       view.reference = { conversationId, requestKey: identity.requestKey };
       localStorage.setItem(taskStorageKey, JSON.stringify(view.reference));
       view.submitted = true;
-      const task = await tasks.submit(question, conversationId, identity.key);
+      const task = await tasks.submit(question, conversationId, identity.key, options.sourceIntent);
       if (!current(view)) return;
       attachTask(view, task);
       void refreshConversationList();
       void watchTask(view);
+      return true;
     } catch (error) {
       if (!current(view)) return;
       if (view.submitted && (!error.status || error.status === 408 || error.status >= 500)) {
         await recoverSubmission(view);
+        return true; // Accepted or ambiguous: recovery keeps the original identity.
       } else {
         // Only definite non-acceptance restores a draft; ambiguous submissions stay blocked.
         view.submissionRejected = true;
-        if (draftRevision === view.draftRevision && !input.value) {
+        if (!options.preserveDraft && draftRevision === view.draftRevision && !input.value) {
           input.value = view.originalDraft;
           view.draftRestored = true;
         }
         finishTask(view, 'failed', error.message);
+        return false;
       }
     }
   }
 
   function detachView() {
+    latestControl.cancel();
     window.ChatPresentation?.closeCard();
     activeView?.frame.dispose();
     activeView?.controller?.abort();
@@ -427,7 +426,8 @@
     if (reference?.conversationId !== id) reference = null;
     const remembered = candidates.find(item => item.id === reference?.id || (reference?.requestKey && item.requestKey === reference.requestKey));
     const task = (remembered && !terminal(remembered.status) ? remembered : null)
-      || candidates.find(item => !terminal(item.status)) || remembered;
+      || candidates.find(item => !terminal(item.status)) || remembered
+      || (candidates[0]?.status !== 'succeeded' ? candidates[0] : null);
     if (!task && !reference?.requestKey) return;
     const view = beginView(epoch);
     view.restored = true;
@@ -568,10 +568,12 @@
       if (status !== 'succeeded') {
         const failure = document.createElement('p');
         failure.className = 'answer-failure';
-        failure.textContent = status === 'cancelled' ? '已停止，以上回答未完成。' : `回答未完成：${error || status}`;
+        failure.textContent = status === 'indeterminate' ? '本次回答未完成，结果尚未确认。请先检查原任务，避免重复发送。'
+          : status === 'cancelled' ? '已停止，以上回答未完成，已收到的内容已保留。' : '本次回答未完成，已收到的内容已保留。可以重试。';
         message.bubble.append(failure);
       }
       experience.answerCopy(message, status !== 'succeeded');
+      attachAnswerRetry(message, view.task, status, view.question || view.task?.question);
       window.ChatPresentation?.renderProcess(message.bubble, message.process, true);
       if (status === 'succeeded') window.ChatPresentation?.renderSuggestions(message.bubble, message.suggestions, input, true);
     }
@@ -580,13 +582,42 @@
     }[status] || '未完成');
     localStorage.removeItem(taskStorageKey);
     isBusy = false;
+    recoveryRequired = status === 'indeterminate';
     connectionNotice = view.submissionRejected
       ? view.draftRestored ? '问题未被接收，草稿已恢复。请检查后重新发送。' : '问题未被接收，请检查输入后重新发送。'
       : '';
     activeView = null;
     reconnect.hidden = true;
     updateComposer();
+    scrollToBottom();
     void refreshConversationList();
+  }
+
+  function attachAnswerRetry(message, task, status, question) {
+    if (!task?.id || !question || message.bubble.querySelector('.answer-retry')) return;
+    let tools = message.bubble.querySelector('.answer-tools');
+    if (!tools) { tools = document.createElement('div'); tools.className = 'answer-tools'; message.bubble.append(tools); }
+    const originalConversation = task.conversationId;
+    const control = window.ChatControls.retry({ host: tools,
+      label: phase => phase === 'pending' ? '正在检查…' : phase === 'sent' ? '已处理'
+        : status === 'indeterminate' ? '检查原任务' : status === 'succeeded' ? '再问一次' : '重试',
+      disabled: () => !message.article.isConnected || originalConversation !== conversationId
+        || isBusy || navigating || (status !== 'indeterminate' && recoveryRequired),
+      run: async () => {
+        const attemptEpoch = viewEpoch;
+        if (status === 'indeterminate') { await openConversation(originalConversation); return true; }
+        const snapshot = await tasks.read(task.id);
+        const confirmed = snapshot.task;
+        if (attemptEpoch !== viewEpoch || !message.article.isConnected) return false;
+        if (confirmed?.id !== task.id || confirmed.conversationId !== conversationId) throw new Error('retry_unavailable');
+        if (!['succeeded', 'failed', 'cancelled'].includes(confirmed.status)) {
+          await openConversation(originalConversation); return true;
+        }
+        return submitQuestion(confirmed.question || question, { preserveDraft: true, sourceIntent: confirmed.sourceIntent });
+      },
+      onError: () => '暂时无法核对原任务，没有重新发送。请稍后再试。',
+    });
+    retryControls.add(control);
   }
 
   async function stopTask() {
@@ -624,7 +655,9 @@
       renderWelcome();
       return;
     }
+    let pairedQuestion = '';
     for (const message of messages) {
+      if (message.role === 'user') pairedQuestion = message.content || '';
       const view = appendMessage(message.role, message.content || '');
       view.answer = message.content || '';
       view.sources = message.sources || [];
@@ -637,7 +670,10 @@
           answer: message.content || '',
         });
       }
-      if (message.role === 'assistant') experience.answerCopy(view, message.complete === false || message.interrupted === true);
+      if (message.role === 'assistant') {
+        experience.answerCopy(view, message.complete === false || message.interrupted === true);
+        if (message.taskId && pairedQuestion) attachAnswerRetry(view, { id: message.taskId, conversationId }, 'succeeded', pairedQuestion);
+      }
     }
     scrollToBottom();
   }
@@ -866,15 +902,5 @@
     return `${date.getMonth() + 1}/${date.getDate()}`;
   }
 
-  function isNearChatBottom() {
-    return chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 72;
-  }
-
-  function scrollToBottom(options = {}) {
-    if (options.force || followStreamingAnswer) {
-      chatLog.scrollTop = chatLog.scrollHeight;
-      lastScrollTop = chatLog.scrollTop;
-    }
-    latest.hidden = followStreamingAnswer || isNearChatBottom();
-  }
+  function scrollToBottom() { latestControl.pin(); }
 })();
