@@ -105,7 +105,8 @@ function classifyIMAKnowledgeAgentSource(item, {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     return Object.freeze({ kind: 'unknown', scope: 'unproved' });
   }
-  const sourceType = Number(item.sourceType);
+  // null, false and empty strings coerce to 0, but are not wire evidence of web.
+  const sourceType = Number.isInteger(item.sourceType) ? item.sourceType : NaN;
   if (sourceType === 0) return Object.freeze({ kind: 'web', scope: 'not_applicable' });
   if (item.sourceType === undefined
       && isFirstPartyDefaultWebSource(item, sourceEventName)) {

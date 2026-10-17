@@ -85,6 +85,13 @@ test('synthetic server install pins the image, pauses for human authorization an
     const state = JSON.parse(fs.readFileSync(path.join(root, '.onboarding/deployment.json')));
     assert.match(state.image, /@sha256:/);
     const before = fs.readFileSync(state.env, 'utf8');
+    const parsed = require('dotenv').parse(before), apps = JSON.parse(parsed.IMA_QA_APPLICATIONS_JSON);
+    assert.equal(parsed.IMA_QA_AGENT_APPLICATION_ID, 'ima-agent');
+    assert.equal(state.identity.applicationId, 'ima-agent');
+    assert.equal(state.credentials, undefined, 'completed receipt does not duplicate secrets');
+    assert.equal(apps[0].id, 'ima-agent');
+    assert.equal(new Set([parsed.IMA_QA_ADMIN_TOKEN, parsed.IMA_QA_API_TOKEN, parsed.IMA_QA_INTERNAL_SERVICE_TOKEN,
+      apps[0].apiTokens[0], apps[0].internalServiceTokens[0]]).size, 5);
     assert.ok(before.includes('IMA_QA_ADMIN_TOKEN='));
     assert.ok(!JSON.stringify(events).includes(before.match(/IMA_QA_ADMIN_TOKEN=(.*)/)[1]));
     assert.equal(events.at(-1).realQaVerified, false);
@@ -93,6 +100,31 @@ test('synthetic server install pins the image, pauses for human authorization an
     assert.equal(fs.readFileSync(state.env, 'utf8'), before);
     assert.ok(commands.every(args => !args.includes('down') && !args.includes('--force-recreate')));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+test('interrupted private configuration resumes with exactly the journaled credentials', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guided-journal-'));
+  const options = { mode: 'server', image: 'synthetic/provider:fixture', shareUrl: 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64) };
+  const deps = { run: async () => {}, portAvailable: async () => {}, capture: async (bin, args) => args[0] === 'image'
+    ? JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]) : '', fetch: async url => url.includes('/bootstrap')
+      ? Response.json({ provider: 'ima-web-agent', sharedKnowledgeBaseId: '123456789', enrollment: { authorizationProtocol: 'shared_library_membership_v1' } }) : new Response(fixture()) };
+  const original = fs.writeFileSync; let failOnce = true;
+  try {
+    fs.writeFileSync = function(file, ...args) {
+      if (String(file).endsWith('provider.env') && failOnce) { failOnce = false; throw Error('synthetic disk failure'); }
+      return original.call(this, file, ...args);
+    };
+    await assert.rejects(guided(root, 'install', options, () => {}, deps), /existing_installation_protected/);
+    fs.writeFileSync = original;
+    const journal = path.join(root, '.onboarding/installation-pending.json');
+    const pending = JSON.parse(fs.readFileSync(journal));
+    assert.equal(fs.statSync(journal).mode & 0o777, 0o600);
+    await guided(root, 'resume', options, () => {}, deps);
+    const env = require('dotenv').parse(fs.readFileSync(pending.env)), app = JSON.parse(env.IMA_QA_APPLICATIONS_JSON)[0];
+    assert.ok(env.IMA_QA_ADMIN_TOKEN === pending.credentials.admin);
+    assert.ok(app.apiTokens[0] === pending.credentials.ordinary);
+    assert.ok(app.internalServiceTokens[0] === pending.credentials.internal);
+    assert.equal(fs.existsSync(journal), false);
+  } finally { fs.writeFileSync = original; fs.rmSync(root, { recursive: true, force: true }); }
 });
 test('foreign projects and protocol failures block before any secret is generated', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guided-block-'));
@@ -159,4 +191,30 @@ test('a desktop-resolved manifest carries only target metadata to server install
     fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, shareUrl, knowledgeBaseId: 'a'.repeat(64), name: 'Synthetic' }));
     await assert.rejects(resolveGuidedTarget(root, { shareUrl, targetFile: file }, () => {}), /target_manifest_invalid/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('completed installation with interrupted journal cleanup resumes without rotating credentials', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'guided-journal-'));
+  const options = { mode: 'server', image: 'synthetic/provider:fixture', shareUrl: 'https://ima.qq.com/wiki/?shareId=' + 'a'.repeat(64) };
+  const deps = { run: async () => {}, portAvailable: async () => {}, capture: async (bin, args) => args[0] === 'image'
+    ? JSON.stringify(['synthetic/provider@sha256:' + 'a'.repeat(64)]) : '', fetch: async url => url.includes('/bootstrap')
+      ? Response.json({ provider: 'ima-web-agent', sharedKnowledgeBaseId: '123456789', enrollment: { authorizationProtocol: 'shared_library_membership_v1' } }) : new Response(fixture()) };
+  const original = fs.unlinkSync; let failOnce = true;
+  try {
+    fs.unlinkSync = function(file, ...args) {
+      if (String(file).endsWith('installation-pending.json') && failOnce) { failOnce = false; throw Error('synthetic cleanup failure'); }
+      return original.call(this, file, ...args);
+    };
+    await assert.rejects(guided(root, 'install', options, () => {}, deps), /synthetic cleanup failure/);
+    fs.unlinkSync = original;
+    const journal = path.join(root, '.onboarding/installation-pending.json');
+    const pending = JSON.parse(fs.readFileSync(journal));
+    assert.equal(fs.statSync(journal).mode & 0o777, 0o600);
+    await guided(root, 'resume', options, () => {}, deps);
+    const env = require('dotenv').parse(fs.readFileSync(pending.env)), app = JSON.parse(env.IMA_QA_APPLICATIONS_JSON)[0];
+    assert.ok(env.IMA_QA_ADMIN_TOKEN === pending.credentials.admin);
+    assert.ok(app.apiTokens[0] === pending.credentials.ordinary);
+    assert.ok(app.internalServiceTokens[0] === pending.credentials.internal);
+    assert.equal(fs.existsSync(journal), false);
+  } finally { fs.unlinkSync = original; fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -46,6 +46,14 @@ async function* parseIMAWebAgentStream(response, options = {}) {
     throw new IMAUpstreamProtocolError('upstream_stream_missing');
   }
   const decoder = new TextDecoder('utf-8', { fatal: true });
+  if (typeof options.onCitationDiagnostic === 'function') {
+    const observer = options.onCitationDiagnostic, signatures = new Set();
+    options = { ...options, onCitationDiagnostic: value => {
+      const signature = JSON.stringify(value);
+      if (signatures.has(signature) || signatures.size >= 32) return;
+      signatures.add(signature); observer(value);
+    } };
+  }
   const seenSources = new Set();
   const maxEventBytes = positiveLimit(options.maxEventBytes, DEFAULT_MAX_EVENT_BYTES);
   const maxStreamBytes = positiveLimit(options.maxStreamBytes, DEFAULT_MAX_STREAM_BYTES);
@@ -279,7 +287,7 @@ function sourceKindFromEvent(event, item) {
   const compact = String(canonicalEventName(event) || '')
     .replace(/[_\s-]/gu, '')
     .toLowerCase();
-  if (compact === 'contextreferences') return 'web';
+  if (compact === 'contextreferences') return 'unknown';
   if (compact === 'searchmedias' || compact === 'structuredblock') {
     return 'knowledge';
   }
@@ -854,7 +862,18 @@ function extractCitationMap(event, options) {
   const add = (namespace, key, item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return;
     const isContext = namespace === 'context';
-    const type = isContext && item.sourceType === undefined ? 'unknown' : classifySourceKind(options.sourceClassifier, event, item);
+    // Context keys alone do not prove provenance. When a scoped classifier is
+    // supplied, use its admitted evidence just as the source-list path does.
+    const type = isContext && item.sourceType === undefined && typeof options.sourceClassifier !== 'function'
+      ? 'unknown' : classifySourceKind(options.sourceClassifier, event, item);
+    if (typeof options.onCitationDiagnostic === 'function') {
+      try { options.onCitationDiagnostic(Object.freeze({
+        phase: 'normalization', category: type === 'unknown'
+          ? item.sourceType === undefined ? 'missing_at_ingress' : 'classification_unproved' : 'proved',
+        namespace, sourceTypePresent: Object.hasOwn(item, 'sourceType'),
+        materialIdPresent: typeof (item.media_id ?? item.mediaId) === 'string',
+      })); } catch { /* Diagnostics must not affect the answer. No IO here. */ }
+    }
     const url = chat.webUrl(item.url || item.href || item.jumpUrl || item.jump_url);
     const entry = { type, ...(type === 'web' && url ? { sources: [{ url,
       title: normalizeSourceText(item.title || item.name, 512),
@@ -938,6 +957,10 @@ function extractKnowledgeEvidence(event, options, citationMap) {
 function extractSourceRecords(event, seenSources, options = {}) {
   const data = event?.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return [];
+  const keyedContext = String(canonicalEventName(event)).replace(/[_\s-]/gu, '').toLowerCase() === 'contextreferences'
+    && !Array.isArray(data.references) && !Array.isArray(data.items)
+    ? Object.entries(data).slice(0, 100).flatMap(([referenceKey, entries]) => Array.isArray(entries)
+      ? entries.slice(0, 10).map(item => ({ referenceKey, item, contextReference: true })) : []) : [];
   const items = []
     .concat(Array.isArray(data.medias) ? data.medias : [])
     .concat(Array.isArray(data.Medias) ? data.Medias : [])
@@ -948,7 +971,8 @@ function extractSourceRecords(event, seenSources, options = {}) {
     .concat(isProvedStructuredReferenceIndexesBlock(data)
       ? Object.entries(data.Data.reference_indexes.indexes)
         .map(([referenceKey, item]) => ({ referenceKey, item }))
-      : []);
+      : [])
+    .concat(keyedContext);
   const records = [];
   for (const candidate of items) {
     if (seenSources.size >= MAX_NORMALIZED_SOURCES) break;
@@ -959,7 +983,7 @@ function extractSourceRecords(event, seenSources, options = {}) {
       && Object.prototype.hasOwnProperty.call(candidate, 'item');
     const item = referenceCandidate ? candidate.item : candidate;
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-    if (referenceCandidate && structuredReferenceItemCategory(item) !== 'valid') {
+    if (referenceCandidate && !candidate.contextReference && structuredReferenceItemCategory(item) !== 'valid') {
       observeNormalizationDiagnostic(options.onNormalizationDiagnostic, 'source_item_discarded');
       continue;
     }

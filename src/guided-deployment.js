@@ -88,6 +88,21 @@ function projectName(input) {
 function envRead(file) {
   try { return dotenv.parse(fs.readFileSync(file)); } catch { throw fail('private_configuration_unavailable'); }
 }
+function freshApplicationIdentity() {
+  const credentials = { admin: createSecret(), legacyOrdinary: createSecret(), legacyInternal: createSecret(),
+    ordinary: createSecret(), internal: createSecret() };
+  return { identity: { schemaVersion: 1, applicationId: 'ima-agent' }, credentials };
+}
+function validateInstallationIdentity(state) {
+  if (!state.identity) {
+    if (state.credentials) throw fail('installation_identity_invalid');
+    return; // Existing installations retain their legacy namespace.
+  }
+  if (state.identity.schemaVersion !== 1 || state.identity.applicationId !== 'ima-agent') throw fail('installation_identity_invalid');
+  if (!state.credentials || Object.keys(state.credentials).sort().join(',') !== 'admin,internal,legacyInternal,legacyOrdinary,ordinary') throw fail('installation_credentials_invalid');
+  const values = Object.values(state.credentials);
+  if (values.some(x => typeof x !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(x)) || new Set(values).size !== 5) throw fail('installation_credentials_invalid');
+}
 async function helperProbe(config) {
   let browser;
   try {
@@ -219,9 +234,14 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
   const journal = path.join(directory, 'installation-pending.json');
   function finishConfiguration(state) {
     if (state.root !== root || state.schemaVersion !== 1 || state.env !== path.join(directory, 'provider.env') || state.compose !== path.join(directory, 'compose.json')) throw fail('installation_owner_mismatch');
+    validateInstallationIdentity(state);
     if (!fs.existsSync(state.env)) {
-      let content = buildProviderAEnv({ sharedKnowledgeBaseId: state.target.knowledgeBaseId, hostPort: state.hostPort })
-        + `\nIMA_QA_API_TOKEN=${createSecret()}\nIMA_QA_INTERNAL_SERVICE_TOKEN=${createSecret()}\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL=${state.target.shareUrl}\n`;
+      let content = buildProviderAEnv({ sharedKnowledgeBaseId: state.target.knowledgeBaseId, hostPort: state.hostPort,
+        ...(state.credentials ? { adminToken: state.credentials.admin } : {}) })
+        + `\nIMA_QA_API_TOKEN=${state.credentials?.legacyOrdinary || createSecret()}\nIMA_QA_INTERNAL_SERVICE_TOKEN=${state.credentials?.legacyInternal || createSecret()}\nIMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_SHARE_URL=${state.target.shareUrl}\n`;
+      if (state.identity) content += `IMA_QA_AGENT_APPLICATION_ID=${state.identity.applicationId}\nIMA_QA_APPLICATIONS_JSON=${JSON.stringify([{
+        id: state.identity.applicationId, apiTokens: [state.credentials.ordinary], internalServiceTokens: [state.credentials.internal],
+      }])}\n`;
       if (state.mode === 'desktop') {
         const helper = JSON.parse(fs.readFileSync(path.join(directory, 'helper-state.json'), 'utf8'));
         if (helper.root !== root) throw fail('helper_owner_mismatch');
@@ -231,10 +251,21 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
       privateWrite(state.env, content);
     }
     if (envRead(state.env).IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID !== state.target.knowledgeBaseId) throw fail('knowledge_base_mismatch');
+    if (state.identity) {
+      const env = envRead(state.env);
+      let apps; try { apps = JSON.parse(env.IMA_QA_APPLICATIONS_JSON); } catch { throw fail('installation_identity_mismatch'); }
+      const app = Array.isArray(apps) && apps.find(x => x.id === state.identity.applicationId);
+      if (env.IMA_QA_AGENT_APPLICATION_ID !== state.identity.applicationId || app?.apiTokens?.[0] !== state.credentials.ordinary
+        || app?.internalServiceTokens?.[0] !== state.credentials.internal || env.IMA_QA_ADMIN_TOKEN !== state.credentials.admin
+        || env.IMA_QA_API_TOKEN !== state.credentials.legacyOrdinary || env.IMA_QA_INTERNAL_SERVICE_TOKEN !== state.credentials.legacyInternal) throw fail('installation_identity_mismatch');
+    }
     const spec = composeSpec({ image: state.image, env: state.env, port: state.hostPort, project: state.project });
     if (!fs.existsSync(state.compose)) privateWrite(state.compose, JSON.stringify(spec, null, 2));
     else if (JSON.stringify(JSON.parse(fs.readFileSync(state.compose))) !== JSON.stringify(spec)) throw fail('existing_compose_protected');
-    if (!fs.existsSync(statePath)) privateWrite(statePath, JSON.stringify(state, null, 2));
+    if (!fs.existsSync(statePath)) {
+      const { credentials, ...persistentState } = state;
+      privateWrite(statePath, JSON.stringify(persistentState, null, 2));
+    }
     if (fs.existsSync(journal)) fs.unlinkSync(journal);
   }
   if (command === 'resolve') {
@@ -313,7 +344,7 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     const target = await resolveGuidedTarget(root, { ...options, mode, project }, emit, dependencies);
     const env = path.join(directory, 'provider.env');
     const compose = path.join(directory, 'compose.json');
-    const state = { schemaVersion: 1, root, image: pinned, project, env, compose, mode, hostPort,
+    const state = { schemaVersion: 1, root, image: pinned, project, env, compose, mode, hostPort, ...freshApplicationIdentity(),
       version: require('../package.json').version, target: { knowledgeBaseId: target.knowledgeBaseId, name: target.name, shareUrl: target.shareUrl } };
     privateWrite(journal, JSON.stringify(state));
     if (mode === 'desktop') {
@@ -324,8 +355,16 @@ async function guided(root, command, options, emit = value => console.log(JSON.s
     await guided(root, 'resume', options, emit, dependencies); return;
   }
   if (command === 'resume' || command === 'check') {
-    if (command === 'resume' && !fs.existsSync(statePath) && fs.existsSync(journal)) {
-      const pending = JSON.parse(fs.readFileSync(journal, 'utf8'));
+    if (command === 'resume' && fs.existsSync(journal)) {
+      let pending;
+      try { pending = JSON.parse(fs.readFileSync(journal, 'utf8')); } catch { throw fail('installation_journal_invalid'); }
+      if (fs.existsSync(statePath)) {
+        let completed;
+        try { completed = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { throw fail('installation_receipt_invalid'); }
+        if (['root','env','compose','project','image','mode','hostPort'].some(key => completed[key] !== pending[key])
+          || completed.target?.knowledgeBaseId !== pending.target?.knowledgeBaseId
+          || completed.identity?.applicationId !== pending.identity?.applicationId) throw fail('installation_receipt_mismatch');
+      }
       if (pending.mode === 'desktop') await configureBrowser(root, { ...options, project: pending.project }, emit);
       finishConfiguration(pending);
     }
