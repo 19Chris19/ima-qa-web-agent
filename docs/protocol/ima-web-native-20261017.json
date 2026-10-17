@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "scope": "One human-authorized browser account, one bound shared library, DS quick and deep; no production account-pool access or deployment.",
+  "implementation": "src/ima-web-protocol-client.js",
+  "upstream": "https://ima.qq.com",
+  "runtimeEnabled": false,
+  "operations": [
+    {"id":"model.list","method":"getModels","discovery":"browser_and_public_script","synthetic":"passed","real":"scoped_passed","release":"unpublished"},
+    {"id":"model.select","method":"selectModel","discovery":"browser_request_comparison","synthetic":"passed","real":"ds_family_only","release":"unpublished"},
+    {"id":"mode.quick","method":"streamAsk","discovery":"browser_request_and_response","synthetic":"passed","real":"scoped_passed","release":"unpublished"},
+    {"id":"mode.deep","method":"streamAsk","discovery":"browser_request_and_response","synthetic":"passed","real":"scoped_passed_after_fix","release":"unpublished"},
+    {"id":"knowledge.list","method":"listKnowledgeBases","discovery":"public_script_and_real_http","synthetic":"passed","real":"scoped_passed","release":"unpublished"},
+    {"id":"knowledge.get","variant":"web_identity","method":"getLibraryPage","discovery":"browser_request_and_response","synthetic":"passed","real":"scoped_passed","release":"unpublished"},
+    {"id":"material.list","variant":"web_identity","method":"listMaterials","discovery":"browser_request_and_response","synthetic":"passed","real":"two_pages_scoped_passed","release":"unpublished"}
+  ],
+  "fixtures": ["test/fixtures/ima-web-native/wire.json", "test/fixtures/ima-web-native/deep-thinking.json"],
+  "tests": ["test/ima-web-protocol-client.test.js", "test/ima-web-deep-contract.test.js", "test/ima-web-native-fixture-privacy.test.js"],
+  "realQa": {"attempts":5,"complete":4,"parserFailedUpstreamOutcomeUnknown":1,"failedRequestReplayed":false},
+  "pending": ["Other model/account QA", "Automatic browser device-context renewal", "MCP/CLI tool exposure", "Source original-content reading", "Web-on evidence", "Artifact generation", "Material writes", "Long-term memory", "Deployment"],
+  "rawEvidence": "Private local directory only; no account, credentials, questions, histories, material titles or material URLs included."
+}
