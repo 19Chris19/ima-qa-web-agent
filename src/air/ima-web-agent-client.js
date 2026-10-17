@@ -113,6 +113,7 @@ class IMAWebAgentClient extends BaseClient {
     try {
       if (!response.ok) throw Object.assign(new Error('upstream_http_failure'), { code: 'upstream_http_failure', statusCode: 502 });
       for await (const event of parseIMAWebAgentStream(response, {
+        ...(mode === 'knowledge_agent' ? { knowledgeScopeRef: crypto.createHash('sha256').update(this.knowledgeBaseId).digest('hex') } : {}),
         onEventDescriptor: this.protocolObserver, onUnknownEventDescriptor: this.protocolUnknownObserver,
         onNormalizationDiagnostic: this.protocolNormalizationObserver,
         sourceClassifier: mode === 'knowledge_agent' ? (item, context = {}) => classifyIMAKnowledgeAgentSource(item, {

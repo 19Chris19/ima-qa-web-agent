@@ -1,6 +1,7 @@
 'use strict';
 
 const chat = require('./chat-presentation');
+const knowledge = require('./knowledge-evidence');
 const { setImmediate: yieldToEventLoop } = require('node:timers/promises');
 
 const DEFAULT_MAX_EVENT_BYTES = 896 * 1024;
@@ -251,8 +252,10 @@ function normalizeIMAWebAgentEvent(event, seenSources = new Set(), options = {})
       ? event.data.processing
       : '';
     const citationMap = extractCitationMap(event, options);
-    return sources.length > 0 || searchSummary || Object.keys(citationMap).length
-      ? { type: 'sources', sources, searchSummary, sourceKind, sourceKinds, ...(Object.keys(citationMap).length ? { citationMap } : {}) }
+    const knowledgeEvidence = extractKnowledgeEvidence(event, options, citationMap);
+    return sources.length > 0 || searchSummary || Object.keys(citationMap).length || knowledge.hasData(knowledgeEvidence)
+      ? { type: 'sources', sources, searchSummary, sourceKind, sourceKinds, ...(Object.keys(citationMap).length ? { citationMap } : {}),
+        ...(knowledge.hasData(knowledgeEvidence) ? { knowledgeEvidence } : {}) }
       : { type: 'control' };
   }
   const completion = completionCode(event.data);
@@ -881,6 +884,55 @@ function extractCitationMap(event, options) {
     }
   }
   return result;
+}
+
+function extractKnowledgeEvidence(event, options, citationMap) {
+  const scope = options.knowledgeScopeRef || '';
+  const result = knowledge.empty(scope);
+  if (!/^[a-f0-9]{64}$/u.test(scope)) return result;
+  const data = event.data;
+  const addMaterial = (item, allowId = false) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return '';
+    const materialId = item.media_id ?? item.mediaId ?? (allowId ? item.id : undefined);
+    if (typeof materialId !== 'string' || !materialId || materialId.length > 2048 || /[\u0000-\u001f\u007f]/u.test(materialId)) return '';
+    const ref = knowledge.sourceRef(scope, 'ima_web_media', materialId.trim());
+    result.materials[ref] = { materialId: materialId.trim(), idNamespace: 'ima_web_media',
+      ...(item.title || item.name ? { title: normalizeSourceText(item.title || item.name, 512) } : {}),
+      ...(typeof item.knowledgeBaseInfo?.id === 'string' ? { knowledgeBaseId: item.knowledgeBaseInfo.id } : {}),
+      ...(Number.isSafeInteger(item.type) ? { mediaType: item.type } : {}) };
+    return ref;
+  };
+  const addReference = (namespace, key, item) => {
+    const citationKey = namespace + ':' + key;
+    const type = citationMap[citationKey]?.type || 'unknown';
+    const ref = type === 'web' ? '' : addMaterial(item);
+    const old = result.citations[citationKey];
+    result.citations[citationKey] = { type, sourceRefs: [...new Set([...(old?.sourceRefs || []), ...(ref ? [ref] : [])])], displayNumbers: [],
+      ...(item?.positions !== undefined ? { upstreamPositions: item.positions } : {}) };
+  };
+  if (isProvedStructuredReferenceIndexesBlock(data)) {
+    for (const [key, item] of Object.entries(data.Data.reference_indexes.indexes))
+      if (structuredReferenceItemCategory(item) === 'valid') addReference('index', key, item);
+  } else if (String(canonicalEventName(event)).replace(/[_\s-]/gu, '').toLowerCase() === 'contextreferences') {
+    const arrays = ['references', 'items'].flatMap(key => Array.isArray(data[key]) ? data[key] : []);
+    if (arrays.length) {
+      for (const item of arrays) {
+        const key = item?.referenceKey ?? item?.reference_key ?? item?.id;
+        // An array item's id may identify the reference, never assume it is a media ID.
+        if (typeof key === 'string' || Number.isSafeInteger(key)) addReference('context', key, item);
+      }
+    } else {
+      for (const [key, items] of Object.entries(data).slice(0, 100))
+        if (Array.isArray(items)) for (const item of items.slice(0, 10)) addReference('context', key, item);
+    }
+  }
+  const materials = []
+    .concat(Array.isArray(data?.medias) ? data.medias : [])
+    .concat(Array.isArray(data?.Medias) ? data.Medias : [])
+    .concat(isProvedStructuredFileListBlock(data) ? data.Data.file_list.files : [])
+    .concat(isProvedStructuredFileContentBlock(data) ? [data.Data.file_content.media] : []);
+  for (const item of materials.slice(0, 100)) if (item.sourceType === 1 || item.sourceType === 2) addMaterial(item, true);
+  return knowledge.normalize(result);
 }
 
 function extractSourceRecords(event, seenSources, options = {}) {

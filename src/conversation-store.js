@@ -1,4 +1,5 @@
 const chat = require('./chat-presentation');
+const knowledge = require('./knowledge-evidence');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -182,6 +183,7 @@ class ConversationStore {
       searchSummary: normalizeSearchSummary(metadata.searchSummary),
       evidence: normalizeEvidence(metadata),
       ...chat.metadata(metadata),
+      ...(knowledge.hasData(metadata.knowledgeEvidence) ? { knowledgeEvidence: knowledge.normalize(metadata.knowledgeEvidence) } : {}),
     });
     if (!conversation.title) {
       conversation.title = conversationTitle(normalizedQuestion);
@@ -205,7 +207,8 @@ class ConversationStore {
       conversation.turns.push({ taskId, question, answer, createdAt: now,
         sources: normalizePublicSources(metadata.sources, answer),
         searchSummary: normalizeSearchSummary(metadata.searchSummary), evidence: normalizeEvidence(metadata),
-        ...chat.metadata(metadata) });
+        ...chat.metadata(metadata),
+        ...(knowledge.hasData(metadata.knowledgeEvidence) ? { knowledgeEvidence: knowledge.normalize(metadata.knowledgeEvidence) } : {}) });
       conversation.turns = conversation.turns.slice(-this.maxTurns);
       conversation.upstream = normalizeUpstream(upstream, conversation.upstream);
       if (!conversation.title) conversation.title = conversationTitle(question);
@@ -224,6 +227,11 @@ class ConversationStore {
       { role: 'user', content: turn.question },
       { role: 'assistant', content: turn.answer },
     ]);
+  }
+
+  getKnowledgeEvidence(id, taskId, ownerKey = '') {
+    const turn = this.require(id, ownerKey).turns.find(item => item.taskId === taskId);
+    return knowledge.normalize(turn?.knowledgeEvidence);
   }
 
   list(ownerKey = '', options = {}) {
@@ -390,6 +398,7 @@ function normalizeConversation(value) {
             searchSummary: normalizeSearchSummary(turn?.searchSummary),
             evidence: normalizeEvidence(turn?.evidence),
             ...chat.metadata(turn),
+            ...(knowledge.hasData(turn?.knowledgeEvidence) ? { knowledgeEvidence: knowledge.normalize(turn.knowledgeEvidence) } : {}),
           }))
           .filter((turn) => turn.question && turn.answer)
       : [],

@@ -435,6 +435,7 @@ function getConfig(env = process.env) {
         { min: 0 },
       ),
     },
+    sourceEvidence: { applications: sourceEvidenceApplications(readEnv(env, 'IMA_QA_SOURCE_EVIDENCE_APPLICATIONS_JSON')) },
     sourcePreview: {
       enabled: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_ENABLED')),
       ipv4Only: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_IPV4_ONLY')),
@@ -646,6 +647,16 @@ function getConfig(env = process.env) {
       ),
     },
   };
+}
+
+function sourceEvidenceApplications(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed) || parsed.length > 64 || new Set(parsed).size !== parsed.length
+      || parsed.some(id => typeof id !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/u.test(id))) throw new Error();
+    return parsed;
+  } catch { throw new ConfigError('IMA_QA_SOURCE_EVIDENCE_APPLICATIONS_JSON must be a unique application ID array'); }
 }
 
 module.exports = {
