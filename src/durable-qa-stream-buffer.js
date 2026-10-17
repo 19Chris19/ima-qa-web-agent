@@ -14,6 +14,7 @@ class DurableQAStreamBuffer {
     this.traceMs = traceMs;
     this.maxDeltaBytes = maxDeltaBytes;
     this.trace = {};
+    this.privateEvents = [];
     this.text = '';
     this.textBytes = 0;
     this.seenDelta = false;
@@ -83,6 +84,10 @@ class DurableQAStreamBuffer {
     }
   }
 
+  evidence(data) {
+    if (!this.closed) this.privateEvents.push({ event: 'knowledge_evidence', data });
+  }
+
   flush(extra) {
     if (this.closed) return;
     clearTimeout(this.deltaTimer); this.deltaTimer = null;
@@ -90,11 +95,12 @@ class DurableQAStreamBuffer {
     const events = [];
     if (this.text) events.push({ event: 'delta', data: { text: this.text,
       ...(this.hasRequestId ? { requestId: this.requestId } : {}) } });
+    events.push(...this.privateEvents);
     if (extra) events.push(extra);
     const trace = this.trace;
     // On a rejected write none of these events were published. Do not retry an
     // oversized batch forever while trying to persist a terminal failure.
-    this.text = ''; this.textBytes = 0; this.trace = {};
+    this.text = ''; this.textBytes = 0; this.trace = {}; this.privateEvents = [];
     if (!events.length && !Object.keys(trace).length) return;
     const saved = this.store.update(this.id, task => {
       if (TERMINAL.has(task.status)) throw fault('task_terminal', 409);
@@ -114,7 +120,7 @@ class DurableQAStreamBuffer {
     this.closed = true;
     clearTimeout(this.deltaTimer);
     clearTimeout(this.traceTimer);
-    this.text = ''; this.textBytes = 0; this.trace = {};
+    this.text = ''; this.textBytes = 0; this.trace = {}; this.privateEvents = [];
   }
 }
 

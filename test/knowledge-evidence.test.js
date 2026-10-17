@@ -8,6 +8,7 @@ const chat = require('../src/chat-presentation');
 const { ConversationStore } = require('../src/conversation-store');
 const { DurableQATaskStore, readTaskRecord } = require('../src/durable-qa-store');
 const { getConfig } = require('../src/config');
+const { DurableQAStreamBuffer } = require('../src/durable-qa-stream-buffer');
 const { fixture, reference, normalize, scope } = require('../scripts/test-fixtures/source-evidence-app.cjs');
 
 test('knowledge IDs remain explicitly keyed, unordered, deduplicated and late-updatable', () => {
@@ -137,4 +138,29 @@ test('repeated source events persist only changed private evidence and never dow
   assert.equal(Object.keys(events[1].data.knowledgeEvidence.materials).length, 0);
   assert.equal(task.events.filter(event => event.event === 'done').length, 1);
   assert.equal(f.calls(), 1);
+});
+
+test('private provenance and its public source frame cross one persistence boundary', () => {
+  const task = { status: 'running', events: [] }; let commits = 0;
+  const store = { now: Date.now, update(_id, fn) { commits++; fn(task); return task; }, addEvent(task, event, data) { task.events.push({ event, data }); } };
+  const buffer = new DurableQAStreamBuffer({ store, id: 'synthetic', publish() {}, onError(error) { throw error; } });
+  buffer.evidence({ knowledgeEvidence: normalize(reference('42', { type: 2, media_id: 'a' })).knowledgeEvidence });
+  assert.equal(commits, 0);
+  buffer.append('sources', { citationMap: { 'index:42': { type: 'knowledge' } } });
+  assert.equal(commits, 1); assert.deepEqual(task.events.map(event => event.event), ['knowledge_evidence', 'sources']);
+  buffer.close();
+});
+
+test('ordinary website traffic and non-opted-in internal tasks do not record private material identities', async t => {
+  const f = await fixture(t);
+  const response = await f.request('/api/tasks', { method: 'POST', headers: { 'Idempotency-Key': 'ordinary-no-private-evidence' },
+    body: JSON.stringify({ conversationId: f.conversationId, question: 'Synthetic ordinary question' }) }, 'synthetic-a');
+  const { task } = await response.json();
+  for (let n = 0; n < 100 && f.app.locals.durableQATasks.store.tasks.get(task.id).status !== 'succeeded'; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(f.app.locals.durableQATasks.store.tasks.get(task.id).events.some(event => event.event === knowledge.EVENT), false);
+  f.config.sourceEvidence.applications = [];
+  const taskId = await f.submit();
+  assert.equal(f.app.locals.durableQATasks.store.tasks.get(taskId).events.some(event => event.event === knowledge.EVENT), false);
+  assert.equal(f.conversations.require(f.conversationId, f.app.locals.durableQATasks.store.tasks.get(taskId).ownerKey)
+    .turns.some(turn => knowledge.hasData(turn.knowledgeEvidence)), false);
 });

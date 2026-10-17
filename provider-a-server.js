@@ -141,6 +141,7 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
     imaWebAgentClient.stopAutoRefresh();
     try {
       await new Promise(resolve => server.close(resolve));
+      await app.locals.sourceReader?.close();
       await airRuntime?.close();
       await accountDirectory.close();
       process.exitCode = 0;

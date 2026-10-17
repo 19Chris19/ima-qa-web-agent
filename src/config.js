@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parseShareUrl } = require('./shared-kb-target');
 const { normalizeApplicationMappings } = require('./application-identity');
+const sourceReaderConfig = require('./source-reader-config');
 
 const DEFAULT_MIMO_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 const DEFAULT_MIMO_MODEL = 'mimo-v2.5';
@@ -435,7 +436,8 @@ function getConfig(env = process.env) {
         { min: 0 },
       ),
     },
-    sourceEvidence: { applications: sourceEvidenceApplications(readEnv(env, 'IMA_QA_SOURCE_EVIDENCE_APPLICATIONS_JSON')) },
+    sourceEvidence: { applications: sourceEvidenceApplications(readEnv(env, 'IMA_QA_SOURCE_EVIDENCE_APPLICATIONS_JSON')),
+      readerConfig: sourceReaderConfig.fromFile(readEnv(env, 'IMA_QA_SOURCE_READER_CONFIG_PATH')) },
     sourcePreview: {
       enabled: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_ENABLED')),
       ipv4Only: parseBoolean(readEnv(env, 'IMA_QA_SOURCE_PREVIEW_IPV4_ONLY')),
