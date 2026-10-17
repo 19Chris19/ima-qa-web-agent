@@ -311,13 +311,15 @@ test('migration fences both stores before port probes, preventing startup throug
   assert.equal((await applying).state, 'applied_disabled');
 });
 
-test('both Provider entrypoints acquire the lifecycle fence before constructing the account directory', () => {
-  for (const file of ['provider-a-server.js', 'server.js']) {
-    const source = read(path.join(__dirname, '..', file));
-    const fence = source.indexOf('await acquireAccountStoreFence(config.webAgent.accountStorePath)');
-    assert.ok(fence > 0);
-    assert.ok(fence < source.indexOf('new WebAgentAccountDirectory('));
-  }
+test('both IMA entrypoints share the asynchronous directory lifecycle fence', () => {
+  const source = read(path.join(__dirname, '../provider-a-server.js'));
+  assert.ok(source.indexOf('await new AsyncAccountDirectory(') < source.indexOf('new IMAWebAgentPool('));
+  const facade = read(path.join(__dirname, '../src/async-account-directory.js'));
+  assert.ok(facade.indexOf('await acquireAccountStoreFence(') < facade.indexOf('try { this._spawn();'));
+  const legacy = read(path.join(__dirname, '../server.js'));
+  assert.match(legacy, /config.qaProvider === 'ima-web-agent'/u);
+  assert.match(legacy, /require\('\.\/provider-a-server'\).main/u);
+  assert.doesNotMatch(legacy, /new WebAgentAccountDirectory/u);
 });
 
 test('offline apply respects both ordinary store locks and releases partial acquisitions', async t => {

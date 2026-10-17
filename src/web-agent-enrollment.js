@@ -226,9 +226,9 @@ class WebAgentEnrollmentManager {
     return false;
   }
 
-  _stageIdentityConflict(job, auth) {
+  async _stageIdentityConflict(job, auth) {
     if (job.reauthAccountId && !job.addIdentity &&
-        this.accountDirectory.classifyCapturedIdentity(job.reauthAccountId, auth.headers) === 'distinct') {
+        await this.accountDirectory.classifyCapturedIdentity(job.reauthAccountId, auth.headers) === 'distinct') {
       job.pendingAuth = { ...auth, headers: { ...auth.headers } };
       job.qr = null;
       this._setState(job, 'identity_conflict', '扫码身份与原账号不同；原账号保持不变。可命名新增账号或取消。');
@@ -239,7 +239,7 @@ class WebAgentEnrollmentManager {
 
   async _acceptAuth(job, auth) {
     if (!await this._checkPending(job)) return;
-    if (this._stageIdentityConflict(job, auth)) return;
+    if (await this._stageIdentityConflict(job, auth)) return;
     this._setState(job, 'verifying', '知识库授权通过，正在检查会话能力');
     const client = this.clientFactory({ id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
       headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3 });
@@ -254,10 +254,10 @@ class WebAgentEnrollmentManager {
     const target = !job.addIdentity && resolveAccountWriteTarget(this.accountDirectory.listAccounts(), {
       ...capturedAccount, ...(reauth ? { id: reauth.id, name: reauth.name } : {}),
     });
-    const writeAndSync = () => {
-      job.account = job.addIdentity ? this.accountDirectory.addCapturedAccount(capturedAccount)
-        : job.reauthAccountId ? this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount, target)
-          : this.accountDirectory.upsertCapturedAccount(capturedAccount, target);
+    const writeAndSync = async () => {
+      job.account = job.addIdentity ? await this.accountDirectory.addCapturedAccount(capturedAccount)
+        : job.reauthAccountId ? await this.accountDirectory.replaceCapturedAccount(job.reauthAccountId, capturedAccount, target)
+          : await this.accountDirectory.upsertCapturedAccount(capturedAccount, target);
       const previousPoolAccount = this.pool.accounts?.find(account => account.id === job.account.id);
       try {
         this.pool.syncAccounts(this.accountDirectory.getPoolAccounts()); this.onAccountsSynced?.();
@@ -271,8 +271,8 @@ class WebAgentEnrollmentManager {
         throw enrollmentError('登录态已保存，但调度同步失败；账号本机隔离，请先核对状态', 503, { code: 'pool_sync_failed' });
       }
     };
-    if (target?.previousId && this.pool.withCredentialReplacement) this.pool.withCredentialReplacement(target.previousId, writeAndSync);
-    else writeAndSync();
+    if (target?.previousId && this.pool.withCredentialReplacement) await this.pool.withCredentialReplacement(target.previousId, writeAndSync);
+    else await writeAndSync();
     // Login expiry ends here. The declared QA probe owns a separate bounded timeout.
     await this._cleanup(job);
     if (job.state === 'cancelled') return;
@@ -662,7 +662,7 @@ class WebAgentEnrollmentManager {
             }));
             return;
           }
-          if (this._stageIdentityConflict(job, auth)) return;
+          if (await this._stageIdentityConflict(job, auth)) return;
           if (await this._verifyMembership(job, auth)) await this._acceptAuth(job, auth);
           return;
         }

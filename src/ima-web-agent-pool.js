@@ -1,3 +1,4 @@
+const { createHash } = require('node:crypto');
 const { IMAWebAgentClient } = require('./ima-web-agent-client');
 const {
   classifyAccountHealthError,
@@ -26,6 +27,8 @@ class IMAWebAgentPool {
     this.clientFactory = clientFactory;
     this.onAccountStateChange = options.onAccountStateChange || null;
     this.onAccountCredentialsChange = options.onAccountCredentialsChange || null;
+    this.managedPersistence = options.managedPersistence === true;
+    this.persistenceReady = options.persistenceReady || (() => true);
     this.policyEligibility = options.policyEligibility || null;
     this.now = options.now || Date.now;
     this.waiters = new Set();
@@ -101,6 +104,10 @@ class IMAWebAgentPool {
         if (account.disabled || account.activeRequests || account.maintenanceOperation) return false;
         return this._runMaintenanceOperation(account, 'auto_refresh', fn);
       };
+      if (this.managedPersistence) {
+        account.client.managedPersistence = true;
+        account.client.onCredentialCommit = (_snapshot, generation) => this._notifyCredentials(account, generation);
+      }
       next.push(account);
       added.push(account);
       seen.add(id);
@@ -129,12 +136,11 @@ class IMAWebAgentPool {
   withCredentialReplacement(accountId, writeAndSync) {
     const previous = this.accounts.find(account => account.id === accountId);
     if (!previous) return writeAndSync();
-    // The caller writes and syncs synchronously; no old refresh can persist in between.
+    // Keep quarantine across asynchronous persistence and pool synchronization.
     previous.client.invalidateCredentials?.({ suspend: true });
     previous.client.stopAutoRefresh?.();
-    try {
-      return writeAndSync();
-    } catch (error) {
+    previous.maintenanceOperation = 'credential_replacement';
+    const failed = error => {
       for (const account of new Set([previous, ...this.accounts.filter(row => row.id === previous.id)])) {
         account.client.invalidateCredentials?.({ suspend: true });
         account.client.stopAutoRefresh?.();
@@ -142,6 +148,16 @@ class IMAWebAgentPool {
         account.webQualification = null;
       }
       throw error;
+    };
+    const completed = value => {
+      if (previous.maintenanceOperation === 'credential_replacement') previous.maintenanceOperation = '';
+      this._notifyAvailability(); return value;
+    };
+    try {
+      const result = writeAndSync();
+      return result && typeof result.then === 'function' ? result.then(completed, failed) : completed(result);
+    } catch (error) {
+      return failed(error);
     }
   }
 
@@ -156,7 +172,7 @@ class IMAWebAgentPool {
         await this._runMaintenanceOperation(account, 'refresh', async () => {
           refreshed = await account.client.ensureFreshAuth();
           account.client.persistRuntimeEnv?.();
-          if (refreshed) this._notifyCredentials(account);
+          if (refreshed) await this._notifyCredentials(account);
         });
         return refreshed;
       }),
@@ -246,10 +262,10 @@ class IMAWebAgentPool {
           yield { type: 'session', sessionId };
         }
       }
-      this._markSuccess(account);
+      await this._markSuccess(account);
     } catch (error) {
       if (!options.signal?.aborted && !(error instanceof NoAvailableWebAgentAccountError)) {
-        this._markFailure(account, error);
+        await this._markFailure(account, error);
       }
       throw error;
     } finally {
@@ -264,7 +280,8 @@ class IMAWebAgentPool {
   }
 
   _requestEligible(account, options) {
-    return !(options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account))
+    return this.persistenceReady() && !account.client.pendingCredentialPersistence && !account.client.credentialWritesSuspended
+      && !(options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account))
       && !(options.retrievalPolicy && this.policyEligibility && !this.policyEligibility(account, options));
   }
 
@@ -455,7 +472,7 @@ class IMAWebAgentPool {
           options.timeoutMs || this.healthCheckTimeoutMs,
         );
         account.client.persistRuntimeEnv?.();
-        this._notifyCredentials(account);
+        await this._notifyCredentials(account);
       } catch (error) {
         throw createAccountHealthError(classifyAccountHealthError(error, 'refresh'), error);
       }
@@ -524,9 +541,16 @@ class IMAWebAgentPool {
       throw createAccountHealthError('account_operation_in_progress');
     }
     account.maintenanceOperation = operation;
-    try { this._notifyState(account); }
+    const generation = account.client.credentialGeneration;
+    try {
+      const persisted = this._notifyState(account);
+      if (persisted && typeof persisted.then === 'function') await persisted;
+      if (generation !== account.client.credentialGeneration || account.client.credentialWritesSuspended) {
+        throw Object.assign(new Error('credential_generation_stale'), { code: 'credential_generation_stale' });
+      }
+    }
     catch (error) {
-      account.maintenanceOperation = '';
+      if (account.maintenanceOperation === operation) account.maintenanceOperation = '';
       this._notifyAvailability();
       throw error;
     }
@@ -536,7 +560,7 @@ class IMAWebAgentPool {
     } finally {
       // Credential replacement may install a quarantine while maintenance runs.
       if (account.maintenanceOperation === operation) account.maintenanceOperation = '';
-      try { this._notifyState(account); }
+      try { await this._notifyState(account); }
       finally { this._notifyAvailability(); }
     }
     return { ...result, ...this._publicAccountState(account, { includeDetails: true }) };
@@ -550,7 +574,9 @@ class IMAWebAgentPool {
   _findAvailableAccount(eligible = () => true) {
     const now = this.now();
     return this.accounts
+      .filter(() => this.persistenceReady())
       .filter((account) => !account.disabled)
+      .filter((account) => !account.client.pendingCredentialPersistence && !account.client.credentialWritesSuspended)
       .filter(eligible)
       .filter((account) => !account.maintenanceOperation)
       .filter((account) => account.activeRequests < account.maxConcurrent)
@@ -709,7 +735,7 @@ class IMAWebAgentPool {
     account.consecutiveErrors = 0;
     account.lastError = '';
     account.cooldownUntil = 0;
-    this._notifyState(account);
+    return this._notifyState(account);
   }
 
   _markFailure(account, error) {
@@ -719,14 +745,13 @@ class IMAWebAgentPool {
     if (isAuthError(error)) {
       account.disabled = true;
       account.disabledReason = 'auth_failed';
-      this._notifyState(account);
-      return;
+      return this._notifyState(account);
     }
 
     if (isCooldownError(error) || account.consecutiveErrors >= this.maxConsecutiveErrors) {
       account.cooldownUntil = this.now() + this.cooldownMs;
     }
-    this._notifyState(account);
+    return this._notifyState(account);
   }
 
   stats(options = {}) {
@@ -830,7 +855,7 @@ class IMAWebAgentPool {
 
   _notifyState(account) {
     if (typeof this.onAccountStateChange === 'function') {
-      this.onAccountStateChange({
+      const result = this.onAccountStateChange({
         id: account.id,
         name: account.name,
         activeRequests: account.activeRequests,
@@ -842,6 +867,11 @@ class IMAWebAgentPool {
         lastUsedAt: account.lastUsedAt,
         totalRequests: account.totalRequests,
       });
+      // Reservations/releases are synchronous. Observe their async failures too.
+      if (result && typeof result.catch === 'function') result.catch(() => {
+        try { this._notifyAvailability(); } catch { this.availabilityObserverErrors++; }
+      });
+      return result;
     }
   }
 
@@ -849,7 +879,18 @@ class IMAWebAgentPool {
     if (!this.accounts.includes(account) || account.maintenanceOperation === 'qualification'
         || account.client.credentialWritesSuspended || generation !== account.client.credentialGeneration) return;
     if (typeof this.onAccountCredentialsChange === 'function') {
-      return this.onAccountCredentialsChange(account.id, account.client.getConfigSnapshot?.() || {});
+      const snapshot = account.client.getConfigSnapshot?.() || {};
+      if (!this.managedPersistence) return this.onAccountCredentialsChange(account.id, snapshot);
+      const key = createHash('sha256').update(JSON.stringify([generation, snapshot])).digest('hex');
+      if (account.persistedCredentialKey === key) return;
+      if (account.credentialCommit?.key === key) return account.credentialCommit.promise;
+      const promise = Promise.resolve().then(() => {
+        if (generation !== account.client.credentialGeneration || account.client.credentialWritesSuspended) throw new Error('credential_generation_stale');
+        return this.onAccountCredentialsChange(account.id, snapshot);
+      }).then(() => { account.persistedCredentialKey = key; }).finally(() => {
+        if (account.credentialCommit?.key === key) account.credentialCommit = null;
+      });
+      account.credentialCommit = { key, promise }; return promise;
     }
   }
 }

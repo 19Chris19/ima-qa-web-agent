@@ -56,7 +56,10 @@ test('actual pool consumes the Air clientFactory in its second argument', () => 
   assert.equal(runtime.poolOptions.policyEligibility(pool.accounts[0], { mode: 'knowledge_agent' }), true);
   const source = fs.readFileSync(path.join(__dirname, '../provider-a-server.js'), 'utf8');
   assert.match(source, /accounts: accountDirectory\.getPoolAccounts\(\),\s*\},\s*\{\s*\.\.\.airRuntime\?\.poolOptions/u);
-  assert.ok(source.indexOf('await acquireAccountStoreFence(') < source.indexOf('new AirAccountDirectory('));
+  assert.ok(source.indexOf('await new AsyncAccountDirectory(') < source.indexOf('new IMAWebAgentPool('));
+  const facade = fs.readFileSync(path.join(__dirname, '../src/async-account-directory.js'), 'utf8');
+  assert.ok(facade.indexOf('await acquireAccountStoreFence(') < facade.indexOf('try { this._spawn();'));
+  assert.match(fs.readFileSync(path.join(__dirname, '../src/account-persistence-worker.js'), 'utf8'), /workerData.air \? AirAccountDirectory/);
 });
 
 test('five existing basic native proofs remain eligible without rewriting proof, probing or electing mode', () => {
@@ -98,6 +101,11 @@ test('five existing basic native proofs remain eligible without rewriting proof,
   assert.equal(readiness.snapshot().accounts[1].qualified, true);
   assert.equal(readiness.snapshot().accounts[1].state, 'disabled');
   assert.equal(readiness.snapshot().pending, 1);
+  const beforeStorageFailure = JSON.stringify(source);
+  directory.persistenceReady = false;
+  assert.equal(readiness.snapshot().capacity, 0);
+  assert.equal(policies.policyCapacitySnapshot().knowledge_agent, 0);
+  assert.equal(JSON.stringify(source), beforeStorageFailure);
 });
 
 test('source policies retain proof, lane, active profile and distinct-account pair requirements', () => {

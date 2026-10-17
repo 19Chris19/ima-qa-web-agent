@@ -43,3 +43,5 @@ jobs:
       - name: Verify standalone agent package
         working-directory: packages/ima-qa-client
         run: npm pack --dry-run
+      - name: Native touch targets and mobile composer (Chromium)
+        run: npm run test:mobile-ui

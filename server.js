@@ -1,75 +1,20 @@
 const { createApp } = require('./src/app');
-const { registerAdminRoutes } = require('./src/admin-routes');
 const { getConfig } = require('./src/config');
 const { IMAClient } = require('./src/ima-client');
-const { IMAWebAgentPool } = require('./src/ima-web-agent-pool');
-const { WebAgentEnrollmentManager } = require('./src/web-agent-enrollment');
-const { WebAgentAccountDirectory } = require('./src/web-agent-account-directory');
-const { AccountPoolExerciseManager, AccountPoolExerciseReportStore } = require('./src/account-pool-exercise');
-const { ConversationStore } = require('./src/conversation-store');
-const { LocalRAGClient } = require('./src/local-rag-client');
 const { MIMOClient } = require('./src/mimo-client');
-const { synchronizeProviderAQueueCapacity } = require('./src/provider-a-capacity');
+const { LocalRAGClient } = require('./src/local-rag-client');
+const { ConversationStore } = require('./src/conversation-store');
 const { loadRuntimeEnv } = require('./src/runtime-env');
-const { acquireAccountStoreFence } = require('./src/account-store-fence');
-const fs = require('node:fs');
-const path = require('node:path');
 
 async function main() {
   const envLoad = loadRuntimeEnv();
   const config = getConfig(process.env);
-  if (config.airBot?.enabled) {
+  // Both IMA entrypoints share the same asynchronous, fenced implementation.
+  if (config.qaProvider === 'ima-web-agent' || config.airBot?.enabled) {
     return require('./provider-a-server').main({ config, envLoad });
   }
   const qaProvider = config.qaProvider || 'openapi-mimo';
-  if (qaProvider === 'ima-web-agent') {
-    fs.mkdirSync(path.dirname(config.webAgent.accountStorePath), { recursive: true, mode: 0o700 });
-    await acquireAccountStoreFence(config.webAgent.accountStorePath);
-  }
-  const accountDirectory =
-    qaProvider === 'ima-web-agent'
-      ? new WebAgentAccountDirectory({
-          storePath: config.webAgent.accountStorePath,
-          keyPath: config.webAgent.accountStoreKeyPath,
-        })
-      : null;
   const conversationStore = new ConversationStore(config.conversations);
-  if (accountDirectory) {
-    seedAccountDirectory(accountDirectory, config.webAgent.accounts);
-    validateDirectoryKnowledgeBase(accountDirectory, config.webAgent.sharedKnowledgeBaseId);
-  }
-  let synchronizeQueueCapacity = () => {};
-  const imaWebAgentClient =
-    qaProvider === 'ima-web-agent'
-      ? new IMAWebAgentPool(
-          {
-            ...config.webAgent,
-            accounts: accountDirectory?.getPoolAccounts() || config.webAgent.accounts,
-          },
-          {
-            onAccountStateChange(snapshot) {
-              accountDirectory?.recordRuntimeState(snapshot);
-              synchronizeQueueCapacity();
-            },
-            onAccountCredentialsChange(accountId, snapshot) {
-              accountDirectory?.updateCredentialsFromClient(accountId, snapshot);
-            },
-          },
-        )
-      : null;
-  if (imaWebAgentClient) {
-    try {
-      const refreshed = await imaWebAgentClient.ensureFreshAuth();
-      imaWebAgentClient.persistRuntimeEnv?.();
-      if (refreshed) {
-        console.log('IMA Web Agent auth refreshed on startup');
-      }
-    } catch (error) {
-      console.warn(`IMA Web Agent startup auth check failed: ${error.message}`);
-    }
-    imaWebAgentClient.startAutoRefresh();
-  }
-
   const app = createApp({
     config,
     imaClient: qaProvider === 'openapi-mimo' ? new IMAClient(config.ima) : null,
@@ -77,50 +22,9 @@ async function main() {
       qaProvider === 'openapi-mimo' || qaProvider === 'local-rag-mimo'
         ? new MIMOClient(config.mimo)
         : null,
-    imaWebAgentClient,
     localRagClient: qaProvider === 'local-rag-mimo' ? new LocalRAGClient(config.localRag) : null,
-    accountDirectory,
     conversationStore,
   });
-  synchronizeQueueCapacity = () =>
-    synchronizeProviderAQueueCapacity({
-      askQueue: app.locals.imaQaAskQueue,
-      config,
-      pool: imaWebAgentClient,
-    });
-  synchronizeQueueCapacity();
-  const accountPoolExerciseManager = accountDirectory && imaWebAgentClient
-    ? new AccountPoolExerciseManager({
-      askQueue: app.locals.imaQaAskQueue,
-      accountDirectory,
-      pool: imaWebAgentClient,
-      requestTimeoutMs: config.concurrency.requestTimeoutMs,
-      reportStore: new AccountPoolExerciseReportStore({
-        storePath: config.exercises.reportStorePath,
-        ttlMs: config.exercises.reportTtlMs,
-        maxCount: config.exercises.reportMaxCount,
-      }),
-    })
-    : null;
-  app.locals.accountPoolExerciseManager = accountPoolExerciseManager;
-  const enrollmentManager = accountDirectory && imaWebAgentClient
-    ? new WebAgentEnrollmentManager({
-      config,
-      accountDirectory,
-      pool: imaWebAgentClient,
-      onAccountsSynced: synchronizeQueueCapacity,
-    })
-    : null;
-  registerAdminRoutes(app, {
-    config,
-    accountDirectory,
-    imaWebAgentClient,
-    askQueue: app.locals.imaQaAskQueue,
-    onAccountsSynced: synchronizeQueueCapacity,
-    enrollmentManager,
-    accountPoolExerciseManager,
-  });
-
   app.listen(config.port, () => {
     console.log('IMA shared knowledge QA web app is running');
     console.log(`Main page: http://localhost:${config.port}`);
@@ -135,44 +39,6 @@ async function main() {
       }`,
     );
   });
-}
-
-function validateDirectoryKnowledgeBase(accountDirectory, sharedKnowledgeBaseId) {
-  const expected = String(sharedKnowledgeBaseId || '').trim();
-  if (!expected) {
-    return;
-  }
-  const mismatched = accountDirectory
-    .listAccounts()
-    .find((account) => account.knowledgeBaseId && account.knowledgeBaseId !== expected);
-  if (mismatched) {
-    throw new Error(`账号 ${mismatched.name} 不属于当前配置的 IMA 共享知识库，拒绝启动`);
-  }
-}
-
-function seedAccountDirectory(accountDirectory, accounts = []) {
-  for (const account of accounts) {
-    if (!account?.headers || !account?.knowledgeBaseId) {
-      continue;
-    }
-    if (accountDirectory.getAccount(account.id || account.name)) {
-      continue;
-    }
-    accountDirectory.upsertCapturedAccount({
-      id: account.id,
-      name: account.name,
-      knowledgeBaseId: account.knowledgeBaseId,
-      headers: account.headers,
-      runtimeEnvPath: account.runtimeEnvPath,
-      modelId: account.modelId,
-      modelType: account.modelType,
-      tokenExpiresAt: account.tokenExpiresAt,
-      refreshTokenExpiresAt: account.refreshTokenExpiresAt,
-      refreshSkewMs: account.refreshSkewMs,
-      refreshIntervalMs: account.refreshIntervalMs,
-      source: 'env-seed',
-    });
-  }
 }
 
 main().catch((error) => {

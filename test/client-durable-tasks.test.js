@@ -62,6 +62,7 @@ async function page(t, options = {}) {
       const payload = JSON.parse(init.body);
       const record = { task: {
         id: `synthetic-task-${records.length + 1}`, conversationId: payload.conversationId, status: options.taskStatus || 'running',
+        question: payload.question, sourceIntent: payload.sourceIntent || 'knowledge',
         requestKey: createHash('sha256').update(init.headers['Idempotency-Key']).digest('hex'),
       }, events: [] };
       records.push(record);
@@ -101,7 +102,7 @@ async function page(t, options = {}) {
     if (!sequence) record.events.push(item);
     streams.get(id)?.enqueue(new TextEncoder().encode(`id: ${item.id}\r\nevent: ${event}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`));
   }
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', ...(options.presentation ? ['chat-presentation.js'] : []), 'answer-renderer.js', 'qa-experience.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', ...(options.presentation ? ['chat-presentation.js'] : []), 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
     if (file === 'answer-renderer.js') {
       const render = w.ImaAnswerRenderer.updateAnswerElement;
@@ -133,6 +134,53 @@ const deferred = () => {
   const promise = new Promise(resolve => { release = resolve; });
   return { promise, release };
 };
+
+for (const mode of ['index', 'embed']) for (const entrance of ['icon', 'message menu']) test(`${mode} ${entrance}: confirmed failure retries once, preserves draft and original record, and keeps web intent`, async t => {
+  const check = deferred(); let hold = false;
+  const p = await page(t, { mode, intercept: async url => {
+    if (hold && url === '/api/tasks/synthetic-task-1') { hold = false; await check.promise; }
+  } });
+  p.submit('original synthetic question'); await waitFor(() => p.streams.size === 1);
+  p.records[0].task.question = 'original synthetic question'; p.records[0].task.sourceIntent = 'web';
+  p.complete('synthetic-task-1', 'failed');
+  await waitFor(() => p.d.querySelector('.answer-retry') && !p.d.querySelector('.answer-retry').disabled);
+  const original = JSON.stringify(p.records[0]);
+  const input = p.d.querySelector('#questionInput'); input.value = 'unsent draft'; input.dispatchEvent(new p.w.Event('input'));
+  const retry = p.d.querySelector('.answer-retry'); hold = true;
+  if (entrance === 'message menu') {
+    p.d.querySelector('.message.user .message-actions-trigger').click();
+    assert.equal(p.d.querySelector('.message-action-item[data-action="retry"] span').textContent, '重试');
+    p.d.querySelector('.message-action-item[data-action="retry"]').click();
+  } else retry.click();
+  retry.click(); assert.equal(retry.disabled, true); assert.equal(p.records.length, 1);
+  check.release(); await waitFor(() => p.records.length === 2);
+  const posts = p.calls.filter(call => call.url === '/api/tasks' && call.method === 'POST');
+  assert.equal(posts.length, 2);
+  assert.notEqual(posts[0].headers['Idempotency-Key'], posts[1].headers['Idempotency-Key']);
+  assert.deepEqual(JSON.parse(posts[1].body), { question: 'original synthetic question', conversationId: 'synthetic-conversation-1', sourceIntent: 'web' });
+  assert.equal(input.value, 'unsent draft'); assert.equal(JSON.stringify(p.records[0]), original);
+  assert.equal(p.d.querySelectorAll('.message.user').length, 2); assert.ok(p.d.querySelector('.answer-failure'));
+  await waitFor(() => p.streams.has('synthetic-task-2')); p.complete('synthetic-task-2');
+});
+
+test('retry verification failure and indeterminate recovery never dispatch a new question', async t => {
+  let rejectRead = false;
+  const p = await page(t, { intercept: async url => rejectRead && url === '/api/tasks/synthetic-task-1'
+    ? Response.json({ error: 'synthetic denial' }, { status: 403 }) : null });
+  p.submit(); await waitFor(() => p.streams.size === 1); p.complete('synthetic-task-1', 'failed');
+  await waitFor(() => p.d.querySelector('.answer-retry') && !p.d.querySelector('.answer-retry').disabled);
+  rejectRead = true; p.d.querySelector('.answer-retry').click();
+  await waitFor(() => p.d.querySelector('.retry-status').textContent.includes('没有重新发送'));
+  assert.equal(p.records.length, 1);
+  rejectRead = false; p.records[0].task.status = 'indeterminate';
+  p.d.querySelector('.answer-retry').click();
+  await waitFor(() => p.d.querySelector('.answer-retry')?.textContent === '检查原任务');
+  p.d.querySelector('.message.user .message-actions-trigger').click();
+  assert.equal(p.d.querySelector('.message-action-item[data-action="retry"] span').textContent, '检查原任务');
+  p.d.querySelector('.message-action-item[data-action="retry"]').click();
+  await waitFor(() => p.d.querySelector('.answer-retry')?.textContent === '检查原任务');
+  assert.equal(p.records.length, 1); assert.equal(p.d.querySelector('#sendButton').disabled, true);
+});
 
 for (const mode of ['index', 'embed']) {
   test(`${mode}: burst paints once per frame and terminal flush preserves exact Markdown`, async t => {
@@ -293,7 +341,8 @@ for (const status of ['failed', 'cancelled', 'indeterminate']) {
     p.complete('synthetic-task-1', status);
     await waitFor(() => p.d.querySelector('.answer-copy'));
     assert.equal(p.frames.size, 0);
-    assert.match(p.d.querySelector('.answer-failure').textContent, /未完成/);
+    assert.match(p.d.querySelector('.answer-failure').textContent, status === 'cancelled' ? /已停止/ : status === 'indeterminate' ? /尚无法确认/ : /未完成/);
+    assert.equal(p.d.querySelector('.answer-failure').dataset.outcome, status);
     p.d.querySelector('.answer-copy').click(); await tick();
     assert.deepEqual(p.copied, ['**Synthetic exact partial**\n']);
   });
@@ -473,7 +522,8 @@ test('refresh of failed task keeps replayed partial text even when history conta
   await waitFor(() => p.d.querySelector('.answer-copy'));
   p.d.querySelector('.answer-copy').click(); await tick();
   assert.deepEqual(p.copied, ['**received partial**']);
-  assert.match(p.d.querySelector('.answer-failure').textContent, /synthetic failure/);
+  assert.match(p.d.querySelector('.answer-failure').textContent, /未完成.*已保留/);
+  assert.doesNotMatch(p.d.querySelector('.answer-failure').textContent, /synthetic failure/);
   assert.equal(p.calls.some(call => call.method === 'POST'), false);
 });
 

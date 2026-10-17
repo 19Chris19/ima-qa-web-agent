@@ -15,7 +15,8 @@ class AirWebReadiness extends WebReadiness {
   }
 
   nativeEligible(account) {
-    return !['auth_expired', 'auth_rejected'].includes(this.directory.getAccount(account.id)?.runtime?.lastCheckCode)
+    return this.directory.persistenceReady !== false
+      && !['auth_expired', 'auth_rejected'].includes(this.directory.getAccount(account.id)?.runtime?.lastCheckCode)
       && this.policies.eligible(this.currentAccount(account), 'knowledge_agent');
   }
 
