@@ -111,7 +111,17 @@ ima-qa cancel <task-id> --json
 
 标准输出始终是 JSON（`mcp` 为协议消息），诊断写 stderr；失败退出非零。默认导出拒绝覆盖，明确需要覆盖才使用 `--force`。CLI 可以省略 request-key 自动生成，但 Agent 推荐显式给出，便于请求响应丢失后精确恢复。
 
-MCP 有六个工具：`ima_qa_status`、`ima_qa_ask`、`ima_qa_get_task`、`ima_qa_get_conversation`、`ima_qa_cancel`、`ima_qa_export`。ask 要求 requestKey，同一逻辑请求重试不变，新追问换新 key。工具等待最多 25 秒；queued/running 是有效结果，继续 get_task。超时、关闭 CLI 或 MCP 断连不取消任务。indeterminate 不自动重提。
+MCP 有八个工具：`ima_qa_status`、`ima_qa_ask`、`ima_qa_get_task`、`ima_qa_get_conversation`、`ima_qa_cancel`、`ima_qa_export`、`ima_qa_get_source`、`ima_qa_read_source`。ask 要求 requestKey，同一逻辑请求重试不变，新追问换新 key。工具等待最多 25 秒；queued/running 是有效结果，继续 get_task。超时、关闭 CLI 或 MCP 断连不取消任务。indeterminate 不自动重提。
+
+### 按需核验知识库原文
+
+这两项新工具需要配套 Provider 的私有材料映射与读取接口；旧 Provider 的六项能力继续工作，新增读取不会自动启用。status 中 `sourceEvidence.mappingSupported` 表示映射视图已授权，`readConfigured` 表示服务端配置了读取身份，不代表某份原文已经成功读取。新功能要求服务端命名应用配对；legacy_shared 问答不会自动获得新的材料访问权限。
+
+`get_source(taskId,citationKey)` 按准确上游键列出材料；`read_source(taskId,citationKey,sourceRef,cursor?)` 读取选中的材料。调用方不能提交任意 URL 或任意材料 ID。OpenAPI 凭证只在 Provider 的私有读取配置中，Agent 客户端和 Skill 不取得它；普通问答仍不需要 OpenAPI 凭证。网页端 ID 不自动视作 OpenAPI ID，需明确绑定或经维护者核验的 ID 合同。
+
+原文提取与问答队列分离，首版限制单并发、全实例每分钟最多 6 次新读取、10 秒、5MiB 下载与每页 8000 字符。原文正文不加入回答 SSE；当前 PDF 解析未达到内存门槛，Provider 禁止启用，需优化并通过资源验收后再提供。页齐和完整提取分别标注；同一 readId 的分页共享摘要和读取时间，不混用不同版本。
+
+每页读取另存为私有 state/evidence 附件。`ima_qa_export(...,includeReadEvidence=true)` 或 CLI `export ... --include-read-evidence` 生成新的核验导出，校验页连续性和全文提取摘要；不修改旧任务缓存或旧导出。完整问答、完整提取和结论已核验是不同状态。Skill 的[原文证据核验流程](../packages/ima-qa-client/skills/ima-qa/references/source-verification.md)明确区分 IMA 回答、引用片段、实际原文与 Agent 归纳。
 
 ask 和 get_task 默认 `summary`：活动任务只返回进度与长度，终态正文最多 6000 字符，`answerTruncated` 明示截断；不重复把巨大来源数组塞进上下文。终态使用 get_task 的 `view=full` 读取完整正文、精确 citationMap、实际 process 与纯文本 suggestions。长结果返回 JSON 文本分页（offset、chunk、nextOffset），每页都维持 `view=full`；拼接后解析，不能混合活动快照。
 
@@ -143,7 +153,7 @@ npm ci --ignore-scripts
 npm ci --prefix packages/ima-qa-client --ignore-scripts
 npm test
 npm test --prefix packages/ima-qa-client
-npm pack --prefix packages/ima-qa-client --dry-run
+npm pack ./packages/ima-qa-client --dry-run --ignore-scripts
 ```
 
 自动测试包括真实 Provider 路由上的应用身份和追问、丢失提交响应后的幂等恢复、不取消/不重新派发、长文本和来源保留、MCP SDK 握手及安装回滚。真实 IMA 答案质量另需用同一知识库的人工网页问答作对照；本轮合成测试不能证明质量。
