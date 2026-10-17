@@ -24,7 +24,7 @@ function registerAdminRoutes(app, options = {}) {
   };
   const replaceCredentials = (input, write, runtimeEnv = false) => {
     const target = resolveAccountWriteTarget(accountDirectory.listAccounts(), input, { runtimeEnv });
-    const writeAndSync = () => { const account = write(target); syncPool(); return account; };
+    const writeAndSync = async () => { const account = await write(target); syncPool(); return account; };
     const pool = options.imaWebAgentClient;
     return target.previousId && pool?.withCredentialReplacement
       ? pool.withCredentialReplacement(target.previousId, writeAndSync) : writeAndSync();
@@ -57,6 +57,11 @@ function registerAdminRoutes(app, options = {}) {
   };
   syncPool();
 
+  if (accountDirectory.reconcile) app.post('/api/admin/persistence/reconcile', auth, async (_req, res) => {
+    try { const result = await accountDirectory.reconcile(); syncPool(); res.json({ success: true, ...result }); }
+    catch (error) { sendAdminError(res, error); }
+  });
+
   app.get('/api/admin/accounts', auth, (req, res) => {
     res.json({
       success: true,
@@ -67,9 +72,9 @@ function registerAdminRoutes(app, options = {}) {
   });
 
   if (webReadiness) {
-    app.post('/api/admin/web-mode', auth, (req, res) => {
+    app.post('/api/admin/web-mode', auth, async (req, res) => {
       try {
-        const readiness = webReadiness.setMode(req.body?.mode);
+        const readiness = await webReadiness.setMode(req.body?.mode);
         options.onAccountsSynced?.();
         res.json({ success: true, readiness });
       }
@@ -278,7 +283,7 @@ function registerAdminRoutes(app, options = {}) {
           return res.status(409).json({ success: false, code: 'membership_unverified', error: '尚未确认目标知识库访问权限；不会保存账号，请加入后继续验证' });
         }
       }
-      const account = replaceCredentials(req.body, target => accountDirectory.upsertCapturedAccount({
+      const account = await replaceCredentials(req.body, target => accountDirectory.upsertCapturedAccount({
         name: req.body?.name,
         id: req.body?.id,
         knowledgeBaseId: requireSharedKnowledgeBaseId(
@@ -301,14 +306,14 @@ function registerAdminRoutes(app, options = {}) {
     }
   });
 
-  app.post('/api/admin/accounts/import-runtime', auth, (req, res) => {
+  app.post('/api/admin/accounts/import-runtime', auth, async (req, res) => {
     try {
       const runtimeEnvText = String(req.body?.runtimeEnvText || '');
       if (!runtimeEnvText || runtimeEnvText.length > 128 * 1024) {
         return res.status(400).json({ success: false, error: 'runtimeEnvText is required and must be under 128KB' });
       }
       rejectDuplicateAccount(accountDirectory, req.body, Boolean(req.body?.replace));
-      const account = replaceCredentials(req.body, target => accountDirectory.upsertFromRuntimeEnv({
+      const account = await replaceCredentials(req.body, target => accountDirectory.upsertFromRuntimeEnv({
         name: req.body?.name,
         id: req.body?.id,
         knowledgeBaseId: requireSharedKnowledgeBaseId(
@@ -327,9 +332,9 @@ function registerAdminRoutes(app, options = {}) {
     }
   });
 
-  app.post('/api/admin/accounts/:accountId/disable', auth, (req, res) => {
+  app.post('/api/admin/accounts/:accountId/disable', auth, async (req, res) => {
     try {
-      accountDirectory.setDisabled(req.params.accountId, true, req.body?.reason);
+      await accountDirectory.setDisabled(req.params.accountId, true, req.body?.reason);
       options.imaWebAgentClient?.setAccountDisabled?.(req.params.accountId, true, req.body?.reason);
       syncPool();
       res.json(actionResponse(req.params.accountId, 'disable', {
@@ -341,9 +346,9 @@ function registerAdminRoutes(app, options = {}) {
     }
   });
 
-  app.post('/api/admin/accounts/:accountId/enable', auth, (req, res) => {
+  app.post('/api/admin/accounts/:accountId/enable', auth, async (req, res) => {
     try {
-      accountDirectory.setDisabled(req.params.accountId, false);
+      await accountDirectory.setDisabled(req.params.accountId, false);
       options.imaWebAgentClient?.setAccountDisabled?.(req.params.accountId, false);
       syncPool();
       res.json(actionResponse(req.params.accountId, 'enable', {
@@ -359,7 +364,7 @@ function registerAdminRoutes(app, options = {}) {
     try {
       syncPool();
       const poolAccount = await options.imaWebAgentClient.refreshAccount(req.params.accountId);
-      accountDirectory.recordAccountHealth(req.params.accountId, {
+      await accountDirectory.recordAccountHealth(req.params.accountId, {
         operation: 'refresh',
         ...poolAccount.healthCheck,
       });
@@ -369,7 +374,7 @@ function registerAdminRoutes(app, options = {}) {
         expected: 'present',
       }));
     } catch (error) {
-      const code = recordAccountHealthFailure(accountDirectory, req.params.accountId, error, 'refresh');
+      const code = await recordAccountHealthFailure(accountDirectory, req.params.accountId, error, 'refresh');
       sendAdminError(res, error, code);
     }
   });
@@ -378,7 +383,7 @@ function registerAdminRoutes(app, options = {}) {
     try {
       syncPool();
       const poolAccount = await options.imaWebAgentClient.checkAccount(req.params.accountId);
-      accountDirectory.recordAccountHealth(req.params.accountId, {
+      await accountDirectory.recordAccountHealth(req.params.accountId, {
         operation: 'check',
         ...poolAccount.healthCheck,
       });
@@ -387,23 +392,23 @@ function registerAdminRoutes(app, options = {}) {
         expected: 'present',
       }));
     } catch (error) {
-      const code = recordAccountHealthFailure(accountDirectory, req.params.accountId, error, 'check');
+      const code = await recordAccountHealthFailure(accountDirectory, req.params.accountId, error, 'check');
       sendAdminError(res, error, code);
     }
   });
 
-  app.post('/api/admin/accounts/:accountId/write-runtime', auth, (req, res) => {
+  app.post('/api/admin/accounts/:accountId/write-runtime', auth, async (req, res) => {
     try {
-      const runtimeEnvPath = accountDirectory.writeRuntimeEnvFile(req.params.accountId);
+      const runtimeEnvPath = await accountDirectory.writeRuntimeEnvFile(req.params.accountId);
       res.json({ success: true, runtimeEnvPath });
     } catch (error) {
       sendAdminError(res, error);
     }
   });
 
-  app.delete('/api/admin/accounts/:accountId', auth, (req, res) => {
+  app.delete('/api/admin/accounts/:accountId', auth, async (req, res) => {
     try {
-      const deleted = accountDirectory.deleteAccount(req.params.accountId);
+      const deleted = await accountDirectory.deleteAccount(req.params.accountId);
       syncPool();
       if (!deleted) {
         return res.status(404).json({ success: false, error: '账号不存在' });
@@ -468,7 +473,7 @@ function verifyAccountConsistency({ accountDirectory, pool, accountId, expected 
   };
 }
 
-function recordAccountHealthFailure(accountDirectory, accountId, error, operation) {
+async function recordAccountHealthFailure(accountDirectory, accountId, error, operation) {
   const code = HEALTH_CODES[error?.code]
     ? error.code
     : classifyAccountHealthError(error, operation);
@@ -487,7 +492,7 @@ function recordAccountHealthFailure(accountDirectory, accountId, error, operatio
     outcome.webReady = false;
   }
   try {
-    accountDirectory.recordAccountHealth(accountId, outcome);
+    await accountDirectory.recordAccountHealth(accountId, outcome);
   } catch {
     // Preserve the primary management error if its local audit update also fails.
   }

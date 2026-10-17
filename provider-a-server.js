@@ -3,17 +3,15 @@ const { registerAdminRoutes } = require('./src/admin-routes');
 const { getConfig } = require('./src/config');
 const { IMAWebAgentPool } = require('./src/ima-web-agent-pool');
 const { WebAgentEnrollmentManager } = require('./src/web-agent-enrollment');
-const { WebAgentAccountDirectory } = require('./src/web-agent-account-directory');
+const { AsyncAccountDirectory } = require('./src/async-account-directory');
 const { AccountPoolExerciseManager, AccountPoolExerciseReportStore } = require('./src/account-pool-exercise');
 const { ConversationStore } = require('./src/conversation-store');
 const { synchronizeProviderAQueueCapacity } = require('./src/provider-a-capacity');
 const { loadRuntimeEnv } = require('./src/runtime-env');
 const { WebReadiness } = require('./src/web-readiness');
-const { acquireAccountStoreFence } = require('./src/account-store-fence');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createAirRuntime } = require('./src/air/startup');
-const { AirAccountDirectory } = require('./src/air/account-directory');
 const { createAirEnrollmentHooks } = require('./src/air/enrollment-hooks');
 const { AirWebReadiness } = require('./src/air/web-readiness');
 
@@ -23,21 +21,24 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
   assertProviderA(config);
 
   fs.mkdirSync(path.dirname(config.webAgent.accountStorePath), { recursive: true, mode: 0o700 });
-  // Held for the process lifetime; proper-lockfile releases on exit, not on listen.
-  await acquireAccountStoreFence(config.webAgent.accountStorePath);
+  // AsyncAccountDirectory holds the store fence for the service lifetime.
 
-  const airRuntime = createAirRuntime({ config });
   const directoryOptions = {
     storePath: config.webAgent.accountStorePath,
     keyPath: config.webAgent.accountStoreKeyPath,
   };
-  const accountDirectory = airRuntime
-    ? new AirAccountDirectory(directoryOptions)
-    : new WebAgentAccountDirectory(directoryOptions);
+  const accountDirectory = await new AsyncAccountDirectory({ ...directoryOptions, air: Boolean(config.airBot?.enabled),
+    onDiagnostic: state => console.warn(JSON.stringify({ event: 'account_persistence', ...state })),
+  }).initialize();
+  const airRuntime = createAirRuntime({ config });
   const conversationStore = new ConversationStore(config.conversations);
-  seedAccountDirectory(accountDirectory, config.webAgent.accounts);
+  await seedAccountDirectory(accountDirectory, config.webAgent.accounts);
+  await accountDirectory.initializeWebMode(config.webAgent.webMode);
   validateDirectoryKnowledgeBase(accountDirectory, config.webAgent.sharedKnowledgeBaseId);
   let synchronizeQueueCapacity = () => {};
+  accountDirectory.onPersistenceStateChange = () => {
+    synchronizeQueueCapacity();
+  };
 
   const imaWebAgentClient = new IMAWebAgentPool(
     {
@@ -46,12 +47,13 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
     },
     {
       ...airRuntime?.poolOptions,
+      managedPersistence: true,
+      persistenceReady: () => accountDirectory.persistenceReady,
       onAccountStateChange(snapshot) {
-        accountDirectory.recordRuntimeState(snapshot);
-        synchronizeQueueCapacity();
+        return accountDirectory.recordRuntimeState(snapshot).finally(() => synchronizeQueueCapacity());
       },
       onAccountCredentialsChange(accountId, snapshot) {
-        accountDirectory.updateCredentialsFromClient(accountId, snapshot);
+        return accountDirectory.updateCredentialsFromClient(accountId, snapshot);
       },
     },
   );
@@ -133,7 +135,18 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
     }
     console.log(`Model: ${config.webAgent.modelId}`);
   });
-  server.on('close', () => { airRuntime?.close().catch(() => {}); });
+  let closing = false;
+  const shutdown = async () => {
+    if (closing) return; closing = true;
+    imaWebAgentClient.stopAutoRefresh();
+    try {
+      await new Promise(resolve => server.close(resolve));
+      await airRuntime?.close();
+      await accountDirectory.close();
+      process.exitCode = 0;
+    } catch { process.exitCode = 1; await accountDirectory.close().catch(() => {}); }
+  };
+  process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);
 }
 
 function assertProviderA(config) {
@@ -155,16 +168,16 @@ function validateDirectoryKnowledgeBase(accountDirectory, sharedKnowledgeBaseId)
   }
 }
 
-function seedAccountDirectory(accountDirectory, accounts = []) {
+async function seedAccountDirectory(accountDirectory, accounts = []) {
   for (const account of accounts) {
     if (!account?.headers || !account?.knowledgeBaseId) {
       continue;
     }
     if (accountDirectory.getAccount(account.id || account.name)) {
-      if (account.maxConcurrent !== undefined) accountDirectory.setMaxConcurrent(account.id || account.name, account.maxConcurrent);
+      if (account.maxConcurrent !== undefined) await accountDirectory.setMaxConcurrent(account.id || account.name, account.maxConcurrent);
       continue;
     }
-    accountDirectory.upsertCapturedAccount({
+    await accountDirectory.upsertCapturedAccount({
       id: account.id,
       name: account.name,
       knowledgeBaseId: account.knowledgeBaseId,

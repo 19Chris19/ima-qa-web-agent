@@ -45,9 +45,9 @@ function registerAirAdminRoutes(app, { config, accountDirectory, manager, polici
     }) });
   });
   route('get', '/api/admin/v2/accounts/eligibility', (_req, res) => res.json({ success: true, ...buildAirEligibilityContract({ accountDirectory, policies }) }));
-  route('put', '/api/admin/accounts/:accountId/routing-lane', (req, res) => {
+  route('put', '/api/admin/accounts/:accountId/routing-lane', async (req, res) => {
     if (manager.isMaintenanceActive()) throw Object.assign(new Error('provider_maintenance_conflict'), { code: 'provider_maintenance_conflict', statusCode: 409 });
-    accountDirectory.setRoutingLane(req.params.accountId, req.body?.routingLane);
+    await accountDirectory.setRoutingLane(req.params.accountId, req.body?.routingLane);
     sync(); res.json({ success: true, account: accountDirectory.listAccounts().find(row => row.id === req.params.accountId) });
   });
 }

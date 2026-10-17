@@ -92,19 +92,18 @@ function applyImaClientIdentityToAccountDirectory(directory, value) {
   if (!Array.isArray(accounts) || accounts.length === 0) {
     throw new TypeError('ima_account_directory_empty');
   }
-  let updatedAccounts = 0;
-  for (const account of accounts) {
+  let pending;
+  const apply = account => {
     const cookie = account?.headers?.['x-ima-cookie'] || account?.headers?.cookie || '';
-    directory.updateCredentialsFromClient(account.id, {
-      ...account,
-      headers: {
-        ...account.headers,
-        'x-ima-cookie': mergeImaClientIdentity(cookie, identity),
-      },
+    return directory.updateCredentialsFromClient(account.id, {
+      ...account, headers: { ...account.headers, 'x-ima-cookie': mergeImaClientIdentity(cookie, identity) },
     });
-    updatedAccounts += 1;
+  };
+  for (const account of accounts) {
+    pending = pending && typeof pending.then === 'function' ? pending.then(() => apply(account)) : apply(account);
   }
-  return Object.freeze({ updated_accounts: updatedAccounts });
+  const result = () => Object.freeze({ updated_accounts: accounts.length });
+  return pending && typeof pending.then === 'function' ? pending.then(result) : result();
 }
 
 function parseCookieHeader(cookieHeader) {

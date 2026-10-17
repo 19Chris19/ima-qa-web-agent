@@ -44,6 +44,7 @@ class WebReadiness {
 
   setMode(mode) {
     if (!['classic_knowledge', 'knowledge_agent'].includes(mode)) throw Object.assign(new Error('不支持的问答模式'), { statusCode: 400 });
+    if (this.directory.setWebMode) return this.directory.setWebMode(mode).then(() => { this.sync(); return this.snapshot(); });
     this.directory.reload();
     this.directory.store.settings ||= {};
     this.directory.store.settings.webMode = mode;
@@ -60,7 +61,7 @@ class WebReadiness {
       const qualified = account && validProof(account);
       const needsLogin = ['auth_expired', 'auth_rejected'].includes(row.health?.last_check_code);
       const maxConcurrent = account?.maxConcurrent || 1;
-      const schedulable = Boolean(account && !account.disabled && !account.maintenanceOperation &&
+      const schedulable = Boolean(this.directory.persistenceReady !== false && account && !account.disabled && !account.maintenanceOperation &&
         !needsLogin &&
         account.activeRequests < maxConcurrent && account.cooldownUntil <= this.pool.now() &&
         (this.mode === 'classic_knowledge' || qualified));
@@ -74,14 +75,15 @@ class WebReadiness {
           account?.cooldownUntil > this.pool.now() ? 'cooling' : schedulable ? 'ready' : 'pending',
         reason: needsLogin ? row.health.last_check_code : job?.code || (qualified ? 'ok' : 'qualification_required') };
     });
-    const eligible = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
+    const eligible = this.pool.accounts.filter(account => this.directory.persistenceReady !== false && !account.disabled && !account.maintenanceOperation &&
       states.find(state => state.id === account.id)?.state !== 'needs_login' &&
       account.cooldownUntil <= this.pool.now() && (this.mode === 'classic_knowledge' || validProof(account)));
     const capacity = eligible.reduce((sum, account) => sum + (account.maxConcurrent || 1), 0);
-    const knowledgeAgentCapacity = this.pool.accounts.filter(account => !account.disabled && !account.maintenanceOperation &&
+    const knowledgeAgentCapacity = this.pool.accounts.filter(account => this.directory.persistenceReady !== false && !account.disabled && !account.maintenanceOperation &&
       states.find(state => state.id === account.id)?.state !== 'needs_login' &&
       account.cooldownUntil <= this.pool.now() && validProof(account)).reduce((sum, account) => sum + (account.maxConcurrent || 1), 0);
     return { mode: this.mode, generation: this.appliedGeneration, capacity, knowledgeAgentCapacity,
+      persistenceReady: this.directory.persistenceReady !== false,
       basicHealthy: rows.filter(a => a.health?.session_valid && a.health?.knowledge_ready && a.health?.web_ready).length,
       schedulable: states.reduce((sum, state) => sum + state.availableSlots, 0),
       eligibleAccounts: eligible.length, schedulableAccounts: states.filter(a => a.schedulable).length,
@@ -103,7 +105,8 @@ class WebReadiness {
     let timer;
     try {
       // Quarantine before dispatch, including revalidation in classic mode.
-      this.directory.beginWebQualification(id);
+      await this.directory.beginWebQualification(id);
+      if (controller.signal.aborted) throw new Error('probe_cancelled');
       try { this.sync(); } catch { throw new Error('pool_sync_failed'); }
       const config = this.directory.getPoolAccounts().find(a => a.id === id);
       if (!config) throw conflict();
@@ -127,7 +130,8 @@ class WebReadiness {
       if (requests !== 1 || terminals !== 1 || !answerLength || !knowledge) throw new Error('probe_evidence_insufficient');
       const proof = { contract: knowledgeAgentContractDigest(), principalFingerprint: config.principalFingerprint,
         scope: hash(config.knowledgeBaseId), verifiedAt: new Date().toISOString(), requests, terminals };
-      this.directory.commitWebQualification(id, proof, expected);
+      if (controller.signal.aborted) throw new Error('probe_cancelled');
+      await this.directory.commitWebQualification(id, proof, expected);
       job.commitApplied = true;
       try { this.sync(); } catch { job.code = 'pool_sync_failed'; throw new Error('pool_sync_failed'); }
       job.code = 'ok';
@@ -135,7 +139,7 @@ class WebReadiness {
       job.code = ['account_store_generation_conflict', 'account_store_locked'].includes(error.code) ? error.code :
         /^probe_|^pool_sync_failed$/.test(error.message) ? error.message : classifyAccountHealthError(error);
       if (job.code === 'account_store_generation_conflict') {
-        try { this.directory.reload(); this.sync(); }
+        try { await this.directory.reload(); this.sync(); }
         catch { job.code = 'pool_sync_failed'; }
       }
     } finally {

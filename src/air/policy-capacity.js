@@ -34,6 +34,7 @@ class AirPolicyCapacity {
   }
 
   eligible(account, policy) {
+    if (this.directory.persistenceReady === false) return false;
     if (!POLICIES.includes(policy) || !account || account.disabled || account.maintenanceOperation
         || Number(account.cooldownUntil || 0) > this.now()) return false;
     if (policy === 'knowledge_agent') return this.nativeQualified(account);
