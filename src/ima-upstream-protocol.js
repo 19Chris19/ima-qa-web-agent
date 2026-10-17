@@ -91,7 +91,7 @@ async function* parseIMAWebAgentStream(response, options = {}) {
           throw new IMAUpstreamProtocolError('upstream_event_too_large');
         }
         const event = parseIMAWebAgentEvent(block);
-        observeEventDescriptor(options.onEventDescriptor, event);
+        observeEventDescriptor(options.onEventDescriptor, event, options);
         const result = normalizeIMAWebAgentEvent(event, seenSources, options);
         if (result.type === 'control') {
           if (isProvedStructuredStatusNoticeEvent(event)) {
@@ -139,7 +139,7 @@ async function* parseIMAWebAgentStream(response, options = {}) {
       throw new IMAUpstreamProtocolError('upstream_event_too_large');
     }
     const event = parseIMAWebAgentEvent(buffer);
-    observeEventDescriptor(options.onEventDescriptor, event);
+    observeEventDescriptor(options.onEventDescriptor, event, options);
     const result = normalizeIMAWebAgentEvent(event, seenSources, options);
     if (result.type === 'control') {
       if (isProvedStructuredStatusNoticeEvent(event)) {
@@ -175,10 +175,10 @@ async function* parseIMAWebAgentStream(response, options = {}) {
   }
 }
 
-function observeEventDescriptor(observer, event) {
+function observeEventDescriptor(observer, event, options = {}) {
   if (typeof observer !== 'function') return;
   try {
-    observer(describeIMAWebAgentEvent(event));
+    observer(describeIMAWebAgentEvent(event, options));
   } catch {}
 }
 
@@ -228,13 +228,13 @@ function parseIMAWebAgentEvent(eventBlock) {
 }
 
 function normalizeIMAWebAgentEvent(event, seenSources = new Set(), options = {}) {
-  const eventFamily = eventFamilyFromName(canonicalEventName(event), event?.data);
+  const eventFamily = eventFamilyFromName(canonicalEventName(event), event?.data, options);
   if (String(canonicalEventName(event)).replace(/[_\s-]/gu, '').toLowerCase() === 'suggestquestion') {
     const questions = chat.suggestions(event.data);
     return questions.length ? { type: 'suggestions', suggestions: questions } : { type: 'control' };
   }
   if (eventFamily === 'unknown') {
-    observeEventDescriptor(options.onUnknownEventDescriptor, event);
+    observeEventDescriptor(options.onUnknownEventDescriptor, event, options);
     throw new IMAUpstreamProtocolError('protocol_variant_unrecognized');
   }
   if (eventFamily === 'control') {
@@ -250,6 +250,11 @@ function normalizeIMAWebAgentEvent(event, seenSources = new Set(), options = {})
     const text = pickMessageChunk(unwrapBlockMessage(event.data));
     if (!text) throw new IMAUpstreamProtocolError('upstream_message_text_missing');
     return { type: 'delta', text };
+  }
+  if (eventFamily === 'thinking') {
+    // The opt-in native deep-mode contract exposes phase only. Thought text
+    // and tips are neither answer content nor evidence and are not projected.
+    return { type: 'thinking', status: event.data.Data.thinking_message.Status === 1 ? 'running' : 'completed' };
   }
   if (eventFamily === 'sources') {
     const records = extractSourceRecords(event, seenSources, options);
@@ -301,9 +306,9 @@ function collapseSourceKinds(sourceKinds, event) {
   return sourceKindFromEvent(event, null);
 }
 
-function describeIMAWebAgentEvent(event) {
+function describeIMAWebAgentEvent(event, options = {}) {
   const name = canonicalEventName(event);
-  const eventFamily = eventFamilyFromName(name, event?.data);
+  const eventFamily = eventFamilyFromName(name, event?.data, options);
   const recognized = eventFamily !== 'unknown';
   let fieldSignatures = [];
   let signatureFailureCategory = '';
@@ -427,10 +432,11 @@ function canonicalEventName(event) {
   return rawName || 'message';
 }
 
-function eventFamilyFromName(value, data) {
+function eventFamilyFromName(value, data, options = {}) {
   const compact = String(value || '').replace(/[_\s-]/gu, '').toLowerCase();
   if (compact === 'message' && typeof data === 'string' && data === '[DONE]') return 'unknown';
   if (compact === 'structuredblock') {
+    if (options.thinkingBlocks === 'phase_only_v1' && isProvedStructuredThinkingBlock(data)) return 'thinking';
     if (isProvedStructuredBlockMessage(data)) return 'message';
     if (isProvedStructuredFileListBlock(data)) return 'sources';
     if (isProvedStructuredFileContentBlock(data)) return 'sources';
@@ -452,6 +458,21 @@ function eventFamilyFromName(value, data) {
   if (compact === 'completed') return 'done';
   if (CONTROL_EVENTS.has(compact)) return 'control';
   return 'unknown';
+}
+
+function isProvedStructuredThinkingBlock(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)
+    || !exactKeys(data, ['Data', 'Id', 'Type']) || data.Type !== 'blockThinking'
+    || !boundedControlString(data.Id, 512)) return false;
+  const block = data.Data;
+  if (!block || typeof block !== 'object' || Array.isArray(block)
+    || !exactKeys(block, ['thinking_message'])) return false;
+  const message = block.thinking_message;
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+  return message.Status === 1 && exactKeys(message, ['Message', 'Status'])
+      && boundedMessageText(message.Message, DEFAULT_MAX_EVENT_BYTES)
+    || message.Status === 2 && exactKeys(message, ['Status', 'Tips'])
+      && boundedOptionalMessageText(message.Tips, 2048);
 }
 
 function isProvedEmptyStructuredEnvelope(data) {

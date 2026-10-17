@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "kind": "synthetic_parser_health_comparison",
+  "before": {
+    "rounds": 30,
+    "healthP95Ms": 2.898750000000007,
+    "firstTextP95Ms": 1.1728330000000113,
+    "eventGapP95Ms": 0.014541999999991617,
+    "eventLoopP95Ms": 2.287615,
+    "cpuMs": 161.936,
+    "startRSSMiB": 45.484375,
+    "peakRSSMiB": 85.53125,
+    "fsWrites": 0
+  },
+  "after": {
+    "rounds": 30,
+    "healthP95Ms": 3.4150000000000063,
+    "firstTextP95Ms": 1.3601670000000041,
+    "eventGapP95Ms": 0.01804199999999412,
+    "eventLoopP95Ms": 2.248703,
+    "cpuMs": 168.303,
+    "startRSSMiB": 45.28125,
+    "peakRSSMiB": 85.09375,
+    "fsWrites": 0
+  },
+  "delta": {
+    "firstTextP95Ms": 0.18733399999999278,
+    "eventGapP95Ms": 0.003500000000002501,
+    "peakRSSMiB": -0.4375
+  },
+  "passed": true,
+  "limitations": "Fixed in-memory synthetic streams and loopback health only; no IMA calls, production state, browser, disk persistence or 3DGS load."
+}
