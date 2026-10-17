@@ -1,0 +1,1673 @@
+{
+  "schemaVersion": 1,
+  "upstream": "ima",
+  "baseline": {
+    "providerMain": "286653e5e08679d7534172c0188831c01310668d",
+    "referenceMethod": "https://github.com/teng-lin/notebooklm-py/blob/4188d7e26a07b6b94b67bf95041c81bc1530c508/docs/rpc-development.md"
+  },
+  "evidence": [
+    {
+      "id": "repo.native",
+      "kind": "repository",
+      "file": "src/ima-knowledge-agent-contract.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/ima-knowledge-agent-contract.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Fixed native request family; not arbitrary model/mode support."
+    },
+    {
+      "id": "repo.protocol",
+      "kind": "repository",
+      "file": "src/ima-upstream-protocol.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/ima-upstream-protocol.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Recognized QA events only; file blocks do not imply material CRUD."
+    },
+    {
+      "id": "repo.session",
+      "kind": "repository",
+      "file": "src/conversation-store.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/conversation-store.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Local owner/account/session binding; not cross-account upstream history."
+    },
+    {
+      "id": "repo.auth",
+      "kind": "repository",
+      "file": "src/ima-web-agent-client.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/ima-web-agent-client.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Refresh needs valid saved credentials; never a promise of permanent login."
+    },
+    {
+      "id": "repo.login",
+      "kind": "repository",
+      "file": "src/web-agent-enrollment.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/web-agent-enrollment.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Human QR flow and browser capture; not a standalone QR wire API."
+    },
+    {
+      "id": "repo.scope",
+      "kind": "repository",
+      "file": "src/shared-kb-target.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/shared-kb-target.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Target membership check; does not enumerate every private library."
+    },
+    {
+      "id": "repo.intent",
+      "kind": "repository",
+      "file": "src/app.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/app.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Intent suffix and observed counts; no hard guarantee that every request searches."
+    },
+    {
+      "id": "repo.openapi",
+      "kind": "repository",
+      "file": "src/ima-client.js",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/286653e5e08679d7534172c0188831c01310668d/src/ima-client.js",
+      "revision": "286653e5e08679d7534172c0188831c01310668d",
+      "limitations": "Independent OpenAPI credentials and ID namespace; not the web account pool."
+    },
+    {
+      "id": "acceptance.qa",
+      "kind": "historical_acceptance",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/d176184306f8d143b1915cef8d0fb21a57243713/docs/AGENT_WORKFLOW_ACCEPTANCE_20261014.md",
+      "revision": "d176184306f8d143b1915cef8d0fb21a57243713",
+      "limitations": "Two SDK STDIO MCP questions in one conversation, scoped to that historical machine/profile. Does not prove all accounts or fresh native MCP asks."
+    },
+    {
+      "id": "candidate.mapping",
+      "kind": "candidate_pr",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/pull/34",
+      "revision": "ceca7a8955c29397416de3dc5ce4eb22037a81c8",
+      "limitations": "Synthetic material mapping; exact upstream IDs are required. Not merged or deployed."
+    },
+    {
+      "id": "candidate.reader",
+      "kind": "candidate_pr",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/pull/35",
+      "revision": "f11e367f64af933c8c1e7f1675f9e2487288cd88",
+      "limitations": "Separate OpenAPI identity and verified bindings required. Real reading pending; PDF disabled."
+    },
+    {
+      "id": "bundle.app",
+      "kind": "public_script",
+      "file": "contracts/evidence/public-bundle-0.json",
+      "reference": "https://fe-static.ima.myqcloud.com/ima/assets/chat/assets/app-DNcHlL3P.js",
+      "limitations": "Anonymous static declarations. Prefixes and suffixes are not automatically paired; no business request executed."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "auth.login",
+      "family": "auth",
+      "operation": "Human QR enrollment and private state capture",
+      "effect": "authentication",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "Human account authorization; admin scope for enrollment.",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": "Official browser with a human scan; credentials are captured privately."
+      },
+      "response": {
+        "shape": "Enrollment state and validated account identity.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Credential commit and qualification are separate gates.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.login"
+      ],
+      "unknowns": [
+        "Fresh QR was not performed in this work; expiration or risk controls may require re-login."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/web-agent-enrollment.js",
+        "symbol": "captureAuthFromContext",
+        "tests": [
+          "test/web-agent-enrollment.test.js"
+        ]
+      }
+    },
+    {
+      "id": "auth.refresh",
+      "family": "auth",
+      "operation": "Refresh saved web authentication",
+      "effect": "authentication",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "Existing valid refresh credentials.",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/auth_login/refresh",
+        "shape": "Saved refresh identity; private headers."
+      },
+      "response": {
+        "shape": "Token generation and expiry fields.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Correlated response plus durable generation-protected credential commit.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.auth"
+      ],
+      "unknowns": [
+        "Valid credentials and upstream acceptance remain account-specific."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-web-agent-client.js",
+        "symbol": "refreshAuth",
+        "tests": [
+          "test/ima-web-agent-client.test.js"
+        ]
+      }
+    },
+    {
+      "id": "knowledge.scope",
+      "family": "knowledge",
+      "operation": "Resolve and verify a shared knowledge scope",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "Official shared-library membership.",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/knowledge_share_get/get_share_info",
+        "shape": "share_id, cursor, limit, folder_id"
+      },
+      "response": {
+        "shape": "knowledge_base_info.id and permission proof.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.scope"
+      ],
+      "unknowns": [
+        "A share URL is not permission to read arbitrary private materials."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/shared-kb-target.js",
+        "symbol": "verifySharedMembership",
+        "tests": [
+          "test/shared-kb-target.test.js"
+        ]
+      }
+    },
+    {
+      "id": "session.create",
+      "family": "session",
+      "operation": "Create a bound native session",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/session_logic/init_session",
+        "shape": "Bound knowledge scope, envInfo, sceneType, history options.",
+        "fixture": "contracts/fixtures/native-qa.json",
+        "fixtureSection": "session"
+      },
+      "response": {
+        "shape": "session_id or session_info.id",
+        "events": []
+      },
+      "identity": "Bind application, visitor, account, scope and answer profile to the returned session.",
+      "completion": "Correlated session identity.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "historical_scoped",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.native",
+        "acceptance.qa"
+      ],
+      "unknowns": [
+        "Cross-account continuation is unsupported."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-knowledge-agent-contract.js",
+        "symbol": "buildIMAKnowledgeAgentSessionRequest",
+        "tests": [
+          "test/native-web-contract.test.js"
+        ]
+      }
+    },
+    {
+      "id": "session.followup",
+      "family": "session",
+      "operation": "Continue a bound session",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Same bound account/profile and session_id."
+      },
+      "response": {
+        "shape": "QA stream and a single local terminal.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "historical_scoped",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.session",
+        "acceptance.qa"
+      ],
+      "unknowns": [
+        "Upstream session expiration; local history alone does not prove upstream continuity."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/conversation-store.js",
+        "symbol": "setUpstream",
+        "tests": [
+          "test/session-affinity.test.js"
+        ]
+      }
+    },
+    {
+      "id": "qa.stream",
+      "family": "qa",
+      "operation": "Native streamed answer",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Same bound QA request; not a separate operation endpoint.",
+        "fixture": "contracts/fixtures/native-qa.json",
+        "fixtureSection": "qa"
+      },
+      "response": {
+        "shape": "Normalized text, sources, exact keys, completion and suggestions.",
+        "events": [
+          "BLOCK_MESSAGE",
+          "MESSAGE",
+          "COMPLETED"
+        ]
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "historical_scoped",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.protocol",
+        "acceptance.qa"
+      ],
+      "unknowns": [
+        "Unrecognized semantic structures remain rejected; missing provenance is not inferred."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-upstream-protocol.js",
+        "symbol": "normalizeIMAWebAgentEvent",
+        "tests": [
+          "test/chat-presentation.test.js",
+          "test/native-web-contract.test.js"
+        ]
+      }
+    },
+    {
+      "id": "qa.process",
+      "family": "qa",
+      "operation": "Observed retrieval and answer stages",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Same bound QA request; not a separate operation endpoint."
+      },
+      "response": {
+        "shape": "Normalized text, sources, exact keys, completion and suggestions.",
+        "events": [
+          "STRUCTURED_BLOCK",
+          "SEARCH_MEDIAS"
+        ]
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.protocol"
+      ],
+      "unknowns": [
+        "Unrecognized semantic structures remain rejected; missing provenance is not inferred."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-upstream-protocol.js",
+        "symbol": "normalizeIMAWebAgentEvent",
+        "tests": [
+          "test/chat-presentation.test.js",
+          "test/native-web-contract.test.js"
+        ]
+      }
+    },
+    {
+      "id": "qa.suggestions",
+      "family": "qa",
+      "operation": "Answer-specific suggested questions",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Same bound QA request; not a separate operation endpoint."
+      },
+      "response": {
+        "shape": "Normalized text, sources, exact keys, completion and suggestions.",
+        "events": [
+          "SUGGEST_QUESTION"
+        ]
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.protocol"
+      ],
+      "unknowns": [
+        "Unrecognized semantic structures remain rejected; missing provenance is not inferred."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-upstream-protocol.js",
+        "symbol": "normalizeIMAWebAgentEvent",
+        "tests": [
+          "test/chat-presentation.test.js",
+          "test/native-web-contract.test.js"
+        ]
+      }
+    },
+    {
+      "id": "citation.web",
+      "family": "citation",
+      "operation": "Exact web citation relationships",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Same bound QA request; not a separate operation endpoint."
+      },
+      "response": {
+        "shape": "Normalized text, sources, exact keys, completion and suggestions.",
+        "events": [
+          "STRUCTURED_BLOCK",
+          "CONTEXT_REFERENCES"
+        ]
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "historical_scoped",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.protocol",
+        "acceptance.qa"
+      ],
+      "unknowns": [
+        "Unrecognized semantic structures remain rejected; missing provenance is not inferred."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-upstream-protocol.js",
+        "symbol": "normalizeIMAWebAgentEvent",
+        "tests": [
+          "test/chat-presentation.test.js",
+          "test/native-web-contract.test.js"
+        ]
+      }
+    },
+    {
+      "id": "citation.knowledge",
+      "family": "citation",
+      "operation": "Static knowledge citations",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Same bound QA request; not a separate operation endpoint."
+      },
+      "response": {
+        "shape": "Normalized text, sources, exact keys, completion and suggestions.",
+        "events": [
+          "STRUCTURED_BLOCK",
+          "CONTEXT_REFERENCES"
+        ]
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.protocol"
+      ],
+      "unknowns": [
+        "Unrecognized semantic structures remain rejected; missing provenance is not inferred."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-upstream-protocol.js",
+        "symbol": "normalizeIMAWebAgentEvent",
+        "tests": [
+          "test/chat-presentation.test.js",
+          "test/native-web-contract.test.js"
+        ]
+      }
+    },
+    {
+      "id": "qa.web_intent",
+      "family": "qa",
+      "operation": "Request web supplementation and inspect evidence",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "source_intent=web_requested is preserved and appended to upstream question."
+      },
+      "response": {
+        "shape": "Actual typed sources and terminal knowledge/web counts.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "QA completion is distinct from whether web evidence was observed.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "historical_scoped",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.intent",
+        "acceptance.qa"
+      ],
+      "unknowns": [
+        "The new-computer MCP round lacks raw upstream evidence; its cause remains undetermined."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/app.js",
+        "symbol": "WEB_REQUESTED_SUFFIX",
+        "tests": [
+          "test/app.test.js"
+        ]
+      }
+    },
+    {
+      "id": "material.resolve",
+      "family": "material",
+      "operation": "Resolve exact knowledge citation to a material identity",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": "Task, exact citation key, named application and scope."
+      },
+      "response": {
+        "shape": "Private material dictionary and explicit namespace.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "candidate.mapping"
+      ],
+      "unknowns": [
+        "Actual upstream material IDs and namespace relations need separate acceptance."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "material.read",
+      "family": "material",
+      "operation": "Read a referenced material on demand",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "Named internal application plus independent server-side OpenAPI identity.",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": "Owned task, citation key and authorized source reference; no arbitrary URL."
+      },
+      "response": {
+        "shape": "Bounded text pages with read identity and digest.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "candidate.reader"
+      ],
+      "unknowns": [
+        "Real material permission/ID bindings pending; PDF, OCR and Office not enabled."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "knowledge.get",
+      "family": "knowledge",
+      "operation": "Read metadata for one known knowledge base through separate OpenAPI credentials",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "Independent OpenAPI client ID/API key and library ID namespace.",
+      "request": {
+        "method": "POST",
+        "path": "/openapi/wiki/v1/get_knowledge_base",
+        "shape": "OpenAPI knowledge base scope."
+      },
+      "response": {
+        "shape": "Knowledge-base metadata.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "Existing bounded read retries; quota circuit is separate from web account health.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.openapi"
+      ],
+      "unknowns": [
+        "This is not current web-pool enumeration; current real permissions unverified."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-client.js",
+        "symbol": "_getKnowledgeBaseProfileSource",
+        "tests": [
+          "test/ima-client.test.js"
+        ]
+      }
+    },
+    {
+      "id": "material.list",
+      "family": "material",
+      "operation": "List materials through the separate OpenAPI branch",
+      "effect": "read",
+      "runtimeImplemented": true,
+      "callableFromCatalog": false,
+      "auth": "Independent OpenAPI client ID/API key.",
+      "request": {
+        "method": "POST",
+        "path": "/openapi/wiki/v1/get_knowledge_list",
+        "shape": "OpenAPI scope, folder and bounded pagination."
+      },
+      "response": {
+        "shape": "Material metadata rows.",
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "Existing bounded read retries; never borrow web credentials.",
+      "validation": {
+        "discovery": "repository",
+        "synthetic": "covered_by_tests",
+        "real": "pending",
+        "release": "published"
+      },
+      "evidenceRefs": [
+        "repo.openapi"
+      ],
+      "unknowns": [
+        "OpenAPI IDs are not automatically web media IDs."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture.",
+      "implementation": {
+        "file": "src/ima-client.js",
+        "symbol": "_listKnowledge",
+        "tests": [
+          "test/ima-client.test.js"
+        ]
+      }
+    },
+    {
+      "id": "mode.quick",
+      "family": "mode",
+      "operation": "Quick-mode selection",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "mode.deep",
+      "family": "mode",
+      "operation": "Deep-mode selection",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "model.list",
+      "family": "model",
+      "operation": "List available models",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/get_models"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "model.select",
+      "family": "model",
+      "operation": "Select an admitted model",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "report.create",
+      "family": "report",
+      "operation": "report create",
+      "effect": "generation",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "report.status",
+      "family": "report",
+      "operation": "report status",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/get_task_status",
+          "/get_task_process",
+          "/get_task_report"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "report.download",
+      "family": "report",
+      "operation": "report download",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/download_task_report"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "report.cancel",
+      "family": "report",
+      "operation": "report cancel",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/cancel_task"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "ppt.create",
+      "family": "ppt",
+      "operation": "ppt create",
+      "effect": "generation",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "ppt.status",
+      "family": "ppt",
+      "operation": "ppt status",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "ppt.download",
+      "family": "ppt",
+      "operation": "ppt download",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "ppt.cancel",
+      "family": "ppt",
+      "operation": "ppt cancel",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "podcast.create",
+      "family": "podcast",
+      "operation": "podcast create",
+      "effect": "generation",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "podcast.status",
+      "family": "podcast",
+      "operation": "podcast status",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/get_podcast_profile",
+          "/get_podcast_config"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "podcast.download",
+      "family": "podcast",
+      "operation": "podcast download",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "podcast.cancel",
+      "family": "podcast",
+      "operation": "podcast cancel",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Service prefix/operation pairing, request and response schema, account quota, resource identity and terminal semantics need proof.",
+        "Report task methods are not automatically PPT or podcast contracts."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "memory.read",
+      "family": "memory",
+      "operation": "Long-term memory read",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "not_observed",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "The public bundle memoryCache label is local configuration evidence, not proof of server long-term memory APIs."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "memory.write",
+      "family": "memory",
+      "operation": "Long-term memory write",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "not_observed",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "The public bundle memoryCache label is local configuration evidence, not proof of server long-term memory APIs."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "memory.delete",
+      "family": "memory",
+      "operation": "Long-term memory delete",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "not_observed",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "The public bundle memoryCache label is local configuration evidence, not proof of server long-term memory APIs."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "knowledge.create",
+      "family": "knowledge",
+      "operation": "Knowledge base create",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/create_knowledge_base"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Current account permission, request fields, response wire shape and completion/cancellation semantics."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "knowledge.update",
+      "family": "knowledge",
+      "operation": "Knowledge base update",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/update_basic_info"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Current account permission, request fields, response wire shape and completion/cancellation semantics."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "knowledge.delete",
+      "family": "knowledge",
+      "operation": "Knowledge base delete",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/delete_knowledge_base"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Current account permission, request fields, response wire shape and completion/cancellation semantics."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "material.upload",
+      "family": "material",
+      "operation": "Material upload",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/get_upload_credential",
+          "/create_media",
+          "/add_knowledge"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Upload, media creation and library attachment are separate operations; destructive scope and durable completion must be captured."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "material.update",
+      "family": "material",
+      "operation": "Material update",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/rename_knowledge",
+          "/replace_knowledge"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Upload, media creation and library attachment are separate operations; destructive scope and durable completion must be captured."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "material.delete",
+      "family": "material",
+      "operation": "Material delete",
+      "effect": "write",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/del_knowledge",
+          "/delete_temp_media"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "Upload, media creation and library attachment are separate operations; destructive scope and durable completion must be captured."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    },
+    {
+      "id": "knowledge.list",
+      "family": "knowledge",
+      "operation": "Enumerate accessible knowledge bases",
+      "effect": "read",
+      "runtimeImplemented": false,
+      "callableFromCatalog": false,
+      "auth": "web account permission and feature availability unverified",
+      "request": {
+        "method": null,
+        "path": null,
+        "shape": null,
+        "candidateMethodSuffixes": [
+          "/get_knowledge_base_list"
+        ]
+      },
+      "response": {
+        "shape": null,
+        "events": []
+      },
+      "identity": "Account, library, session and material ownership must be established per operation.",
+      "completion": "Unknown; require correlated response and any upstream terminal state.",
+      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "validation": {
+        "discovery": "public_script_candidate",
+        "synthetic": "not_run",
+        "real": "pending",
+        "release": "unpublished"
+      },
+      "evidenceRefs": [
+        "bundle.app"
+      ],
+      "unknowns": [
+        "A public service declaration is visible; exact account scope, request fields, pagination and response shape remain unverified."
+      ],
+      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+    }
+  ]
+}
