@@ -24,18 +24,24 @@ export async function connectLocal(options, { Client = ImaClient } = {}) {
   try { applications = env.IMA_QA_APPLICATIONS_JSON ? JSON.parse(env.IMA_QA_APPLICATIONS_JSON) : []; }
   catch { throw fault('invalid_application_mapping'); }
   if (!Array.isArray(applications)) throw fault('invalid_application_mapping');
-  const id = options.applicationId || (applications.length === 0 ? 'legacy' : applications.length === 1 ? applications[0].id : null);
-  if (!id) throw fault('application_selection_required');
-  const app = applications.find(x => x.id === id);
-  if (id !== 'legacy' && !app) throw fault('application_not_found');
-  const apiToken = app ? app.apiTokens?.[0] : env.IMA_QA_API_TOKEN;
-  const internalServiceToken = app ? app.internalServiceTokens?.[0] : env.IMA_QA_INTERNAL_SERVICE_TOKEN;
-  if (typeof apiToken !== 'string' || !apiToken || typeof internalServiceToken !== 'string' || !internalServiceToken) throw fault('credential_pair_missing');
-  if (apiToken === internalServiceToken || [apiToken, internalServiceToken].includes(env.IMA_QA_ADMIN_TOKEN)) throw fault('credential_role_conflict');
   const file = resolve(options.config || defaultConfig()), profile = options.profile || 'default';
   return lock(`${file}.lock`, async () => {
     const root = await optionalJson(file) || { profiles: {} };
     const old = root.profiles?.[profile];
+    // Old profiles keep their original owner space even after an administrator
+    // adds a default named app. New profiles never silently fall back to legacy.
+    const id = options.applicationId || old?.applicationId || env.IMA_QA_AGENT_APPLICATION_ID
+      || (applications.length === 1 ? applications[0]?.id : null);
+    if (!id) throw fault(applications.length ? 'application_selection_required' : 'named_application_required');
+    if (typeof id !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/u.test(id)) throw fault('invalid_application_mapping');
+    if (applications.some(x => !x || typeof x !== 'object') || new Set(applications.map(x => x.id)).size !== applications.length) throw fault('invalid_application_mapping');
+    const app = applications.find(x => x.id === id);
+    if (id !== 'legacy' && !app) throw fault('application_not_found');
+    const apiToken = app ? app.apiTokens?.[0] : env.IMA_QA_API_TOKEN;
+    const internalServiceToken = app ? app.internalServiceTokens?.[0] : env.IMA_QA_INTERNAL_SERVICE_TOKEN;
+    if (typeof apiToken !== 'string' || !apiToken || typeof internalServiceToken !== 'string' || !internalServiceToken) throw fault('credential_pair_missing');
+    if (apiToken === internalServiceToken || [apiToken, internalServiceToken].includes(env.IMA_QA_ADMIN_TOKEN)
+      || (app && [apiToken, internalServiceToken].some(x => [env.IMA_QA_API_TOKEN, env.IMA_QA_INTERNAL_SERVICE_TOKEN].includes(x)))) throw fault('credential_role_conflict');
     const candidate = { baseUrl: url.origin, applicationId: id, clientId: old?.clientId || `ima-agent-${randomUUID()}`,
       knowledgeScopeRef: digest(scope.trim()), knowledgeBaseName: options.knowledgeBaseName || old?.knowledgeBaseName || '', apiToken, internalServiceToken };
     if (old) {
@@ -44,7 +50,7 @@ export async function connectLocal(options, { Client = ImaClient } = {}) {
       return { configured: true, reused: true, configFile: file, provider: await new Client(current).status() };
     }
     const provider = await new Client(candidate).status();
-    if (!['verified', 'legacy_shared'].includes(provider.identityPairing)) throw fault('application_pairing_unverified');
+    if (!(provider.identityPairing === 'verified' || (id === 'legacy' && provider.identityPairing === 'legacy_shared'))) throw fault('application_pairing_unverified');
     root.profiles ||= {};
     root.profiles[profile] = candidate;
     await atomic(file, root);

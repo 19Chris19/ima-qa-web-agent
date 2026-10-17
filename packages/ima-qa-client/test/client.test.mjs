@@ -20,7 +20,7 @@ async function fixture(t) {
     assert.equal(options.headers['x-ima-client-id'], 'client');
     if (url.endsWith('/api/capabilities')) return Response.json({ applicationId: 'app', features: { durable_qa_tasks_v1: true } });
     if (url.endsWith('/internal/provider-a/capacity')) return Response.json({ applicationId: 'app', available: 1, policies: { knowledge_agent: { max_concurrent: 1 } },
-      features: { durable_qa_tasks_v1: true, knowledge_agent_keyed_sse_v1: true } });
+      features: { durable_qa_tasks_v1: true, knowledge_agent_keyed_sse_v1: true, source_intent_web_requested_v1: true } });
     if (url.endsWith('/api/conversations')) {
       assert.equal(options.headers.authorization, 'Bearer ordinary'); conversations++;
       return Response.json({ conversation: { conversationId: 'conv-1' } });

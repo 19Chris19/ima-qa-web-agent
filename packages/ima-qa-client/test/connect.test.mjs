@@ -14,7 +14,8 @@ test('local deployment bridge copies only paired client credentials, keeps ident
   let checks = 0;
   class Client { constructor(p) { assert.equal(p.applicationId, 'legacy'); this.p = p; }
     async status() { checks++; return { identityPairing: 'legacy_shared', ready: false }; } }
-  const options = { providerEnv, config, baseUrl: 'http://127.0.0.1:3117' };
+  const options = { providerEnv, config, baseUrl: 'http://127.0.0.1:3117', applicationId: 'legacy' };
+  await assert.rejects(connectLocal({ ...options, applicationId: undefined }), { code: 'named_application_required' });
   assert.equal((await connectLocal(options, { Client })).configured, true);
   const before = await readFile(config, 'utf8');
   assert.ok(!before.includes('admin-secret')); assert.ok(!before.includes('cookie-secret')); assert.ok(!before.includes('encryption-secret'));
