@@ -48,6 +48,21 @@ function validateCatalog(catalog, root) {
     if (c.request.path && (!/^\/(cgi-bin|openapi)\/[A-Za-z0-9_/-]{1,200}$/u.test(c.request.path)
       || !['GET','POST'].includes(c.request.method))) fail('contract_request_path_invalid');
     if (c.request.fixture && !repositoryFile(root, c.request.fixture)) fail('contract_fixture_missing');
+    if (c.variants !== undefined) {
+      if (!Array.isArray(c.variants) || c.variants.length > 16) fail('contract_variants_invalid');
+      const variants = new Set();
+      for (const v of c.variants) {
+        if (!stableId.test(v.id) || variants.has(v.id) || v.runtimeImplemented !== false || v.callableFromCatalog !== false
+          || typeof v.auth !== 'string' || !v.auth || !Array.isArray(v.unknowns) || !v.nextVerification
+          || !DISCOVERY.has(v.validation?.discovery) || !SYNTHETIC.has(v.validation?.synthetic)
+          || !REAL.has(v.validation?.real) || v.validation.release !== 'unpublished'
+          || !['GET', 'POST'].includes(v.request?.method)
+          || !/^\/(cgi-bin|openapi)\/[A-Za-z0-9_/-]{1,200}$/u.test(v.request?.path || '')
+          || !Array.isArray(v.evidenceRefs) || v.evidenceRefs.some(id => !evidence.has(id))) fail('contract_variants_invalid');
+        if (v.validation.real === 'historical_scoped' && !v.evidenceRefs.some(id => evidence.get(id).kind === 'historical_acceptance')) fail('contract_real_unproved');
+        variants.add(v.id);
+      }
+    }
     if (c.implementation) {
       for (const p of [c.implementation.file, ...c.implementation.tests]) {
         if (!repositoryFile(root, p)) fail('contract_implementation_missing');

@@ -97,6 +97,20 @@
       "file": "contracts/evidence/public-bundle-0.json",
       "reference": "https://fe-static.ima.myqcloud.com/ima/assets/chat/assets/app-DNcHlL3P.js",
       "limitations": "Anonymous static declarations. Prefixes and suffixes are not automatically paired; no business request executed."
+    },
+    {
+      "id": "candidate.native_sdk",
+      "kind": "candidate_pr",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/pull/45",
+      "revision": "855a232b621706eb3e7fd00f6dcbfd756ffef1b2",
+      "limitations": "Unmerged trusted native SDK; no runtime routes, MCP tools or installed client update."
+    },
+    {
+      "id": "acceptance.native_sdk",
+      "kind": "historical_acceptance",
+      "reference": "https://github.com/19Chris19/ima-qa-web-agent/blob/855a232b621706eb3e7fd00f6dcbfd756ffef1b2/docs/IMA_WEB_NATIVE_SDK.md",
+      "revision": "855a232b621706eb3e7fd00f6dcbfd756ffef1b2",
+      "limitations": "One authorized browser identity and shared library; DS quick/deep only, bounded native queries. Five QA submissions, four complete and one initial parser failure; no original-content or artifact generation acceptance."
     }
   ],
   "capabilities": [
@@ -687,7 +701,35 @@
         "tests": [
           "test/ima-client.test.js"
         ]
-      }
+      },
+      "variants": [
+        {
+          "id": "web.native_sdk",
+          "runtimeImplemented": false,
+          "callableFromCatalog": false,
+          "auth": "Authorized web account; independent from existing OpenAPI identity.",
+          "request": {
+            "method": "POST",
+            "path": "/cgi-bin/knowledge_tab_reader/get_knowledge_base_home_page",
+            "shape": "Explicit knowledge_base_id and folder_id; bounded page cursor/version for listMaterials."
+          },
+          "validation": {
+            "discovery": "repository",
+            "synthetic": "external_candidate_tests",
+            "real": "historical_scoped",
+            "release": "unpublished"
+          },
+          "evidenceRefs": [
+            "candidate.native_sdk",
+            "acceptance.native_sdk"
+          ],
+          "unknowns": [
+            "Trusted SDK only, not enabled in Provider/MCP.",
+            "Metadata listing does not establish original-content reading permission or OpenAPI ID equivalence."
+          ],
+          "nextVerification": "Review #45 and explicitly integrate named application authorization; retain the existing OpenAPI contract."
+        }
+      ]
     },
     {
       "id": "material.list",
@@ -728,7 +770,35 @@
         "tests": [
           "test/ima-client.test.js"
         ]
-      }
+      },
+      "variants": [
+        {
+          "id": "web.native_sdk",
+          "runtimeImplemented": false,
+          "callableFromCatalog": false,
+          "auth": "Authorized web account; independent from existing OpenAPI identity.",
+          "request": {
+            "method": "POST",
+            "path": "/cgi-bin/knowledge_tab_reader/get_knowledge_list",
+            "shape": "Explicit knowledge_base_id and folder_id; bounded page cursor/version for listMaterials."
+          },
+          "validation": {
+            "discovery": "repository",
+            "synthetic": "external_candidate_tests",
+            "real": "historical_scoped",
+            "release": "unpublished"
+          },
+          "evidenceRefs": [
+            "candidate.native_sdk",
+            "acceptance.native_sdk"
+          ],
+          "unknowns": [
+            "Trusted SDK only, not enabled in Provider/MCP.",
+            "Metadata listing does not establish original-content reading permission or OpenAPI ID equivalence."
+          ],
+          "nextVerification": "Review #45 and explicitly integrate named application authorization; retain the existing OpenAPI contract."
+        }
+      ]
     },
     {
       "id": "mode.quick",
@@ -737,32 +807,39 @@
       "effect": "read",
       "runtimeImplemented": false,
       "callableFromCatalog": false,
-      "auth": "web account permission and feature availability unverified",
+      "auth": "Authorized web account headers; browser device context is additionally required for QA.",
       "request": {
-        "method": null,
-        "path": null,
-        "shape": null
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Bound verified knowledge session, explicit admitted model_info, opaque browser device_info"
       },
       "response": {
-        "shape": null,
-        "events": []
+        "shape": "Recognized answer/source stream and one terminal, drained to EOF; no answer inferred from process text",
+        "events": [
+          "STRUCTURED_BLOCK",
+          "COMPLETED"
+        ]
       },
-      "identity": "Account, library, session and material ownership must be established per operation.",
-      "completion": "Unknown; require correlated response and any upstream terminal state.",
-      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "identity": "Same SDK identity owns the catalog and newly verified knowledge session; mode and model are pinned to the session. Listing remains within server-granted web account scope.",
+      "completion": "Successful scoped native response; QA additionally requires nonempty answer, one upstream terminal and complete stream drain.",
+      "retry": "No automatic retry; an attempted QA clientId cannot be replayed in the same instance. Existing Provider durable tasks remain required for cross-process recovery.",
       "validation": {
-        "discovery": "public_script_candidate",
-        "synthetic": "not_run",
-        "real": "pending",
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "historical_scoped",
         "release": "unpublished"
       },
       "evidenceRefs": [
-        "bundle.app"
+        "bundle.app",
+        "candidate.native_sdk",
+        "acceptance.native_sdk"
       ],
       "unknowns": [
-        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+        "Candidate code is not merged or exposed through production Provider/MCP.",
+        "Other account/model admission and automatic browser device-context renewal are unverified.",
+        "Only DS quick/deep with enhancement=false was QA-accepted; web-on execution evidence remains separate."
       ],
-      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+      "nextVerification": "Review #45, then separately integrate authorized Provider/MCP routes and verify each additional account/model before release."
     },
     {
       "id": "mode.deep",
@@ -771,32 +848,39 @@
       "effect": "read",
       "runtimeImplemented": false,
       "callableFromCatalog": false,
-      "auth": "web account permission and feature availability unverified",
+      "auth": "Authorized web account headers; browser device context is additionally required for QA.",
       "request": {
-        "method": null,
-        "path": null,
-        "shape": null
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "Bound verified knowledge session, explicit admitted model_info, opaque browser device_info"
       },
       "response": {
-        "shape": null,
-        "events": []
+        "shape": "Opt-in exact blockThinking phase shapes plus answer/source stream and one terminal; thought text is not projected",
+        "events": [
+          "STRUCTURED_BLOCK",
+          "COMPLETED"
+        ]
       },
-      "identity": "Account, library, session and material ownership must be established per operation.",
-      "completion": "Unknown; require correlated response and any upstream terminal state.",
-      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "identity": "Same SDK identity owns the catalog and newly verified knowledge session; mode and model are pinned to the session. Listing remains within server-granted web account scope.",
+      "completion": "Successful scoped native response; QA additionally requires nonempty answer, one upstream terminal and complete stream drain.",
+      "retry": "No automatic retry; an attempted QA clientId cannot be replayed in the same instance. Existing Provider durable tasks remain required for cross-process recovery.",
       "validation": {
-        "discovery": "public_script_candidate",
-        "synthetic": "not_run",
-        "real": "pending",
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "historical_scoped",
         "release": "unpublished"
       },
       "evidenceRefs": [
-        "bundle.app"
+        "bundle.app",
+        "candidate.native_sdk",
+        "acceptance.native_sdk"
       ],
       "unknowns": [
-        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+        "Candidate code is not merged or exposed through production Provider/MCP.",
+        "Other account/model admission and automatic browser device-context renewal are unverified.",
+        "Only DS quick/deep with enhancement=false was QA-accepted; web-on execution evidence remains separate."
       ],
-      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+      "nextVerification": "Review #45, then separately integrate authorized Provider/MCP routes and verify each additional account/model before release."
     },
     {
       "id": "model.list",
@@ -805,35 +889,35 @@
       "effect": "read",
       "runtimeImplemented": false,
       "callableFromCatalog": false,
-      "auth": "web account permission and feature availability unverified",
+      "auth": "Authorized web account headers; browser device context is additionally required for QA.",
       "request": {
-        "method": null,
-        "path": null,
-        "shape": null,
-        "candidateMethodSuffixes": [
-          "/get_models"
-        ]
+        "method": "POST",
+        "path": "/cgi-bin/model_manage/get_models",
+        "shape": "scene=0; web headers"
       },
       "response": {
-        "shape": null,
+        "shape": "models and explicit sub_model_infos/sub_model_types; no automatic eligibility guarantee",
         "events": []
       },
-      "identity": "Account, library, session and material ownership must be established per operation.",
-      "completion": "Unknown; require correlated response and any upstream terminal state.",
-      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "identity": "Same SDK identity owns the catalog and newly verified knowledge session; mode and model are pinned to the session. Listing remains within server-granted web account scope.",
+      "completion": "Successful scoped native response; QA additionally requires nonempty answer, one upstream terminal and complete stream drain.",
+      "retry": "No automatic retry; an attempted QA clientId cannot be replayed in the same instance. Existing Provider durable tasks remain required for cross-process recovery.",
       "validation": {
-        "discovery": "public_script_candidate",
-        "synthetic": "not_run",
-        "real": "pending",
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "historical_scoped",
         "release": "unpublished"
       },
       "evidenceRefs": [
-        "bundle.app"
+        "bundle.app",
+        "candidate.native_sdk",
+        "acceptance.native_sdk"
       ],
       "unknowns": [
-        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+        "Candidate code is not merged or exposed through production Provider/MCP.",
+        "Other account/model admission and automatic browser device-context renewal are unverified."
       ],
-      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+      "nextVerification": "Review #45, then separately integrate authorized Provider/MCP routes and verify each additional account/model before release."
     },
     {
       "id": "model.select",
@@ -842,32 +926,36 @@
       "effect": "read",
       "runtimeImplemented": false,
       "callableFromCatalog": false,
-      "auth": "web account permission and feature availability unverified",
+      "auth": "Authorized web account headers; browser device context is additionally required for QA.",
       "request": {
-        "method": null,
-        "path": null,
-        "shape": null
+        "method": "POST",
+        "path": "/cgi-bin/assistant/qa",
+        "shape": "model_info chosen from a fresh server catalog by exact modelRef and quick/deep sub-model pairing"
       },
       "response": {
-        "shape": null,
+        "shape": "Selected model_id/type echoed in observed successful DS requests; other advertised families untested",
         "events": []
       },
-      "identity": "Account, library, session and material ownership must be established per operation.",
-      "completion": "Unknown; require correlated response and any upstream terminal state.",
-      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "identity": "Same SDK identity owns the catalog and newly verified knowledge session; mode and model are pinned to the session. Listing remains within server-granted web account scope.",
+      "completion": "Successful scoped native response; QA additionally requires nonempty answer, one upstream terminal and complete stream drain.",
+      "retry": "No automatic retry; an attempted QA clientId cannot be replayed in the same instance. Existing Provider durable tasks remain required for cross-process recovery.",
       "validation": {
-        "discovery": "public_script_candidate",
-        "synthetic": "not_run",
-        "real": "pending",
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "historical_scoped",
         "release": "unpublished"
       },
       "evidenceRefs": [
-        "bundle.app"
+        "bundle.app",
+        "candidate.native_sdk",
+        "acceptance.native_sdk"
       ],
       "unknowns": [
-        "UI/configuration mentions do not prove selectable model parameters, account admission or the exact QA wire contract."
+        "Candidate code is not merged or exposed through production Provider/MCP.",
+        "Other account/model admission and automatic browser device-context renewal are unverified.",
+        "Only DS quick/deep with enhancement=false was QA-accepted; web-on execution evidence remains separate."
       ],
-      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+      "nextVerification": "Review #45, then separately integrate authorized Provider/MCP routes and verify each additional account/model before release."
     },
     {
       "id": "report.create",
@@ -1639,35 +1727,35 @@
       "effect": "read",
       "runtimeImplemented": false,
       "callableFromCatalog": false,
-      "auth": "web account permission and feature availability unverified",
+      "auth": "Authorized web account headers; browser device context is additionally required for QA.",
       "request": {
-        "method": null,
-        "path": null,
-        "shape": null,
-        "candidateMethodSuffixes": [
-          "/get_knowledge_base_list"
-        ]
+        "method": "POST",
+        "path": "/cgi-bin/knowledge_tab_reader/get_knowledge_base_list",
+        "shape": "params=[{type,cursor,limit}]; observed groups 1001/1002/1004/1005"
       },
       "response": {
-        "shape": null,
+        "shape": "results grouped by explicit type, knowledge_base_list and independent is_end/next_cursor",
         "events": []
       },
-      "identity": "Account, library, session and material ownership must be established per operation.",
-      "completion": "Unknown; require correlated response and any upstream terminal state.",
-      "retry": "No automatic replay after dispatch; a timeout is not proof of rejection.",
+      "identity": "Same SDK identity owns the catalog and newly verified knowledge session; mode and model are pinned to the session. Listing remains within server-granted web account scope.",
+      "completion": "Successful scoped native response; QA additionally requires nonempty answer, one upstream terminal and complete stream drain.",
+      "retry": "No automatic retry; an attempted QA clientId cannot be replayed in the same instance. Existing Provider durable tasks remain required for cross-process recovery.",
       "validation": {
-        "discovery": "public_script_candidate",
-        "synthetic": "not_run",
-        "real": "pending",
+        "discovery": "repository",
+        "synthetic": "external_candidate_tests",
+        "real": "historical_scoped",
         "release": "unpublished"
       },
       "evidenceRefs": [
-        "bundle.app"
+        "bundle.app",
+        "candidate.native_sdk",
+        "acceptance.native_sdk"
       ],
       "unknowns": [
-        "A public service declaration is visible; exact account scope, request fields, pagination and response shape remain unverified."
+        "Candidate code is not merged or exposed through production Provider/MCP.",
+        "Other account/model admission and automatic browser device-context renewal are unverified."
       ],
-      "nextVerification": "Read-only source analysis first; separately authorize one isolated real operation and retain a scrubbed contract fixture."
+      "nextVerification": "Review #45, then separately integrate authorized Provider/MCP routes and verify each additional account/model before release."
     }
   ]
 }

@@ -53,3 +53,16 @@ test('public-script receipts retain hashes and candidate limits, not raw bundles
   assert.ok(receipt.methodSuffixes.includes('/cancel_task'));
   assert.ok(!Object.hasOwn(receipt, 'source'));
 });
+test('scoped native SDK evidence never changes OpenAPI identity or enables a candidate variant', () => {
+  const native = catalog.capabilities.find(c => c.id === 'mode.deep');
+  assert.equal(native.validation.real, 'historical_scoped'); assert.equal(native.runtimeImplemented, false);
+  const original = catalog.capabilities.find(c => c.id === 'material.list');
+  assert.match(original.request.path, /^\/openapi\//u);
+  assert.match(original.variants[0].request.path, /^\/cgi-bin\//u);
+  for (const mutate of [v => v.runtimeImplemented = true, v => v.callableFromCatalog = true,
+    v => v.validation.release = 'published', v => v.evidenceRefs = ['missing.ref'],
+    v => v.request.path = 'https://example.invalid/private']) {
+    const changed = structuredClone(catalog), variant = changed.capabilities.find(c => c.id === 'material.list').variants[0];
+    mutate(variant); assert.throws(() => validateCatalog(changed, root));
+  }
+});

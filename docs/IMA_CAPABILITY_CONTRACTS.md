@@ -27,10 +27,10 @@
 | `material.read` | 未合并候选实现 | external_candidate_tests | pending | unpublished |
 | `knowledge.get` | 本仓已有实现 | covered_by_tests | pending | published |
 | `material.list` | 本仓已有实现 | covered_by_tests | pending | published |
-| `mode.quick` | 公开脚本候选 | not_run | pending | unpublished |
-| `mode.deep` | 公开脚本候选 | not_run | pending | unpublished |
-| `model.list` | 公开脚本候选 | not_run | pending | unpublished |
-| `model.select` | 公开脚本候选 | not_run | pending | unpublished |
+| `mode.quick` | #45 候选实现 | external_candidate_tests | historical_scoped | unpublished |
+| `mode.deep` | #45 候选实现 | external_candidate_tests | historical_scoped | unpublished |
+| `model.list` | #45 候选实现 | external_candidate_tests | historical_scoped | unpublished |
+| `model.select` | #45 候选实现 | external_candidate_tests | historical_scoped | unpublished |
 | `report.create` | 公开脚本候选 | not_run | pending | unpublished |
 | `report.status` | 公开脚本候选 | not_run | pending | unpublished |
 | `report.download` | 公开脚本候选 | not_run | pending | unpublished |
@@ -52,7 +52,15 @@
 | `material.upload` | 公开脚本候选 | not_run | pending | unpublished |
 | `material.update` | 公开脚本候选 | not_run | pending | unpublished |
 | `material.delete` | 公开脚本候选 | not_run | pending | unpublished |
-| `knowledge.list` | 公开脚本候选 | not_run | pending | unpublished |
+| `knowledge.list` | #45 候选实现 | external_candidate_tests | historical_scoped | unpublished |
+
+## 后续真实探索与候选实现（#45）
+
+在维护者明确授权的独立浏览器空间，完成网页请求观测、Node HTTP 复现和原生 SDK。模型列表／选择、快速／深度和知识库列表这五项，从脚本线索推进为有候选代码与限定真实验收。单库信息、材料列表新增网页身份 variants；原 OpenAPI 身份和主合同保持独立。材料分页两页各 50 条，无重复。
+
+#45 尚未合并，没有注册生产路由或 MCP 工具。真实范围仅一个账号和指定库、DS 快速／深度，其他模型只有目录证据。五次问答提交中四次完整，一次旧解析器深度失败；修复后新会话通过，未重放失败请求。失败 SDK 原始流未捕获，独立浏览器深度完整流已用于定位和回放。原文读取、产物生成、资料写入和长期记忆仍未验收。
+
+runtimeImplemented 仍以本分支实现为准，外部分支的真实样本不表示当前安装已经启用。详见 [SDK 实现与验收](https://github.com/19Chris19/ima-qa-web-agent/pull/45)。
 
 ## 本次公开源码探索
 
@@ -72,4 +80,4 @@
 
 ## 本轮限制
 
-本轮没有扫码、真实问答、材料读取、生成、上传、删除、生产配置变更或发布。新电脑的旧失败记录缺少原始 IMA 事件，因此其 unknown 来源与联网未观察到证据的历史根因仍不能断定；新合同和合成验证不会替代这一证据。
+目录初始只读整理没有扫码、真实问答、材料读取、生成、上传、删除、生产配置变更或发布；后续 #45 的限定真实查询与问答范围见上节。新电脑的旧失败记录缺少原始 IMA 事件，因此其 unknown 来源与联网未观察到证据的历史根因仍不能断定；新的真实样本不能替代旧任务缺失的证据。
