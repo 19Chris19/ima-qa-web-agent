@@ -1668,6 +1668,16 @@ function classifyFailureReason(error) {
   if (error?.name === 'AbortError' || error?.name === 'TimeoutError') {
     return 'timeout';
   }
+  // Node fetch wraps transport errors in cause. Keep only established public
+  // categories; never persist the exception message, target URL or headers.
+  let cause = error;
+  for (let depth = 0; cause && depth < 4; depth += 1, cause = cause.cause) {
+    if (['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT'].includes(cause.code)) return 'upstream_headers_timeout';
+    if (cause.code === 'UND_ERR_BODY_TIMEOUT') return 'upstream_idle_timeout';
+    if (['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EPIPE', 'UND_ERR_SOCKET'].includes(cause.code)) {
+      return 'upstream_connection_interrupted';
+    }
+  }
   if (error?.reason === 'local_rag_index_missing') {
     return 'local_rag_index_missing';
   }

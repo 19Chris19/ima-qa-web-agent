@@ -27,6 +27,28 @@ function page(t) {
 const mapping = { 'index:42': { type: 'web', sources: [{ url: 'https://example.org/paper', title: '<img onerror=alert(1)> Paper', snippet: 'Actual excerpt' }] },
   'index:5': { type: 'knowledge', sources: [{ url: 'https://example.org/private', title: 'PRIVATE TITLE', snippet: 'PRIVATE FILE' }] } };
 
+test('touching nested labels in adjacent references opens only the exact key, including multiple destinations', async t => {
+  const p = page(t);
+  const source = n => ({ url: `https://example.org/${n}`, title: `Source ${n}` });
+  const map = { 'index:8': { type: 'web', sources: [source(2), source(3)] },
+    'index:42': { type: 'web', sources: [source(1)] }, 'index:5': mapping['index:5'] };
+  p.render('[1](@index-ref?id=42)[2](@index-ref?id=8)[3](@index-ref?id=5)', { citationMap: map });
+  for (const key of ['index:42', 'index:8']) {
+    const marker = p.answer.querySelector(`[data-citation-key="${key}"]`);
+    const label = marker.querySelector('.chat-citation-label');
+    assert.ok(label);
+    const event = new p.window.MouseEvent('pointerdown', { bubbles: true });
+    Object.defineProperty(event, 'pointerType', { value: 'touch' }); label.dispatchEvent(event);
+    assert.equal(label.dispatchEvent(new p.window.MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })), false);
+    const sheet = p.window.document.querySelector('.chat-citation-sheet');
+    assert.deepEqual([...sheet.querySelectorAll('.chat-source-open')].map(a => a.href), map[key].sources.map(source => source.url));
+    sheet.querySelector('.chat-card-close').click();
+    await new Promise(resolve => p.window.requestAnimationFrame(resolve));
+    assert.equal(p.window.document.activeElement, marker);
+  }
+  assert.equal(p.answer.querySelectorAll('.chat-citation-knowledge a, .chat-citation-knowledge button').length, 0);
+});
+
 test('web marker previews on hover/focus and links to its exact source; knowledge marker is static and private', t => {
   const p = page(t);
   p.render('Web[7](@index-ref?id=42) Knowledge[2](@index-ref?id=5) Unknown[9](@index-ref?id=404)', { citationMap: mapping });

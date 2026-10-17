@@ -192,7 +192,8 @@ textarea {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  position: relative;
 }
 
 .sidebar-backdrop {
@@ -826,8 +827,9 @@ body[data-mode="embed"] .composer {
   padding: 6px 6px 6px 18px;
 }
 
-.composer-wrap { position: relative; min-width: 0; display: grid; grid-template-areas: "input" "notice"; padding: 10px 18px calc(16px + env(safe-area-inset-bottom, 0px)); }
-.composer-wrap .composer { grid-area: input; }
+.composer-wrap { position: absolute; inset: auto 0 0; z-index: 4; width: 100%; background: transparent; pointer-events: none; min-width: 0; display: grid; grid-template-areas: "input" "notice"; padding: 10px 18px calc(16px + env(safe-area-inset-bottom, 0px)); }
+.composer-wrap .composer { grid-area: input; pointer-events: auto; box-shadow: 0 8px 28px #18212f14; }
+.workspace .chat-panel .chat { padding-bottom: var(--composer-clearance, 128px); scroll-padding-bottom: var(--composer-clearance, 128px); }
 .composer-tools { display: flex; justify-content: flex-end; gap: 6px; }
 .composer .icon-button { border-radius: 50%; }
 .composer[data-layout="stacked"] { grid-template-columns: minmax(0, 1fr); }
@@ -836,6 +838,7 @@ body[data-mode="embed"] .composer {
 .composer[data-layout="stacked"] .composer-tools { margin-right: -10px; }
 .composer-notice { grid-area: notice; margin: 4px 6px 0; color: var(--muted); font: 12px/18px sans-serif; white-space: normal; overflow-wrap: anywhere; }
 .composer-notice:empty { display: none; }
+.composer-notice:not(:empty) { justify-self: center; max-width: 100%; padding: 3px 8px; border-radius: 8px; background: var(--panel); pointer-events: auto; }
 .qa-measure { position: fixed; left: -10000px; top: 0; height: 0; min-height: 0; max-height: none; padding: 0; border: 0; visibility: hidden; overflow: hidden; resize: none; box-sizing: content-box; white-space: pre-wrap; overflow-wrap: anywhere; }
 .qa-tool { display: inline-grid; place-items: center; flex: none; width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
 .qa-tool svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -852,10 +855,10 @@ body[data-mode="embed"] .composer {
 @keyframes submit-spin { to { transform: rotate(360deg); } }
 .reading-actions { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 1; }
 .return-latest { border-radius: 50%; border: 1px solid var(--line); background: var(--panel); box-shadow: 0 3px 12px #18212f14; }
-.task-reconnect { width: max-content; max-width: 240px; min-height: 44px; margin-top: 4px; }
+.task-reconnect { pointer-events: auto; width: max-content; max-width: 240px; min-height: 44px; margin-top: 4px; }
 .task-reconnect[hidden] { display: none; }
 .task-process { margin: 0 0 8px; color: var(--muted); font: 12px/18px sans-serif; overflow-wrap: anywhere; }
-.answer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.answer-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0; margin-top: 8px; }
 .copy-status { color: var(--muted); font: 12px/1.5 sans-serif; }
 .copy-fallback { display: flex; align-items: start; gap: 4px; width: 100%; }
 .copy-fallback textarea { min-width: 0; width: 100%; min-height: 96px; max-height: 144px; resize: vertical; border: 1px solid var(--line); border-radius: 4px; padding: 8px; color: var(--ink); background: var(--panel); font: 13px/1.5 monospace; }
@@ -866,7 +869,7 @@ body[data-mode="embed"] .composer {
 .status-pill { max-width: 96px; height: auto; min-height: 28px; overflow-wrap: anywhere; }
 
 @media (max-width: 680px) {
-  .composer-wrap { padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .composer-wrap { padding: 8px 12px max(32px, calc(8px + env(safe-area-inset-bottom, 0px))); }
   .workspace, body[data-mode="embed"] .workspace { height: 100dvh; }
 }
 

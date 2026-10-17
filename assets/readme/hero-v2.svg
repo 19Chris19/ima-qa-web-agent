@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="290" viewBox="0 0 1200 290" role="img" aria-labelledby="title desc">
+  <title id="title">IMA QA Web Agent</title>
+  <desc id="desc">已授权知识库到网站问答。账号、会话与持久任务由 Provider A 管理。</desc>
+  <rect width="1200" height="290" fill="#f6f9f8"/>
+  <path d="M0 0H1200" stroke="#087f70" stroke-width="10"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Arial,PingFang SC,Microsoft YaHei,sans-serif">
+    <text x="50" y="82" font-size="20" fill="#087f70" font-weight="700">PROVIDER A / IMA WEB AGENT</text>
+    <text x="50" y="146" font-size="46" fill="#172725" font-weight="700">知识有出处，问答有上下文。</text>
+    <text x="50" y="194" font-size="25" fill="#4c605d">从已授权 IMA 知识库，到你的网站与应用。</text>
+    <path d="M50 224H1150" stroke="#d6e2df"/>
+    <text x="50" y="264" font-size="22" fill="#263d38">账号池</text>
+    <text x="245" y="264" font-size="22" fill="#263d38">连续会话</text>
+    <text x="465" y="264" font-size="22" fill="#263d38">流式回答</text>
+    <text x="685" y="264" font-size="22" fill="#263d38">任务续接</text>
+    <text x="905" y="264" font-size="22" fill="#263d38">Node / Docker</text>
+  </g>
+</svg>
