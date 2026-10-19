@@ -116,7 +116,7 @@ Provider A 是独立服务，知天下是调用它的专业网站案例，不是
 
 ## 文档与开发
 
-[完整部署](docs/DEPLOYMENT.md) · [部署后验收](docs/ACCEPTANCE_TESTING.md) · [安装验收](docs/ONBOARDING_ACCEPTANCE.md) · [来源预览](docs/source-preview.md) · [更新日志](CHANGELOG.md)
+[完整部署](docs/DEPLOYMENT.md) · [部署后验收](docs/ACCEPTANCE_TESTING.md) · [安装验收](docs/ONBOARDING_ACCEPTANCE.md) · [来源预览](docs/source-preview.md) · [能力合同目录](docs/IMA_CAPABILITY_CONTRACTS.md) · [更新日志](CHANGELOG.md)
 
 ```sh
 npm ci
