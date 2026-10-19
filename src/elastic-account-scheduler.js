@@ -1,5 +1,5 @@
 'use strict';
-const { normalizeAccountLimits, matchingLimit } = require('./elastic-validation');
+const { normalizeAccountLimits, normalizeTrialLimits, matchingLimit } = require('./elastic-validation');
 
 // This controller retains counters only. It never holds questions, credentials,
 // streams, or a second work queue, and never issues a probe/retry of its own.
@@ -13,6 +13,10 @@ const DEFAULTS = Object.freeze({
 function normalizeElasticScheduling(input = {}) {
   const value = { ...DEFAULTS, ...input };
   value.accountLimits = Object.freeze(normalizeAccountLimits(input.accountLimits, value.maxPerAccount, value.initialConcurrent));
+  value.trialLimits = Object.freeze(normalizeTrialLimits(input.trialLimits, value.maxPerAccount, value.initialConcurrent));
+  for (const trial of value.trialLimits) {
+    if (matchingLimit({ id: trial.accountId }, trial, value.accountLimits)) throw new TypeError('Duplicate elastic acceptance and trial scope');
+  }
   if (typeof value.enabled !== 'boolean') throw new TypeError('elastic enabled must be boolean');
   const bounds = { initialConcurrent: [1, 20], maxPerAccount: [1, 20], maxGlobal: [1, 100],
     minStartSpacingMs: [1, 60000], maxStartSpacingMs: [1, 120000],
@@ -56,12 +60,15 @@ class ElasticAccountScheduler {
   }
   state(account) { return this.states.get(account.id); }
   initial(account) {
-    return Math.max(1, ...this.config.accountLimits.filter(row => row.accountId === account.id
+    return Math.max(1, ...[...this.config.accountLimits, ...this.config.trialLimits].filter(row => row.accountId === account.id
       && row.principalFingerprint === account.principalFingerprint
       && row.modelId === (account.client?.modelId ?? account.modelId)
       && row.modelType === Number(account.client?.modelType ?? account.modelType)).map(row => row.initialConcurrent));
   }
-  ceiling(account, descriptor) { return matchingLimit(account, descriptor || {}, this.config.accountLimits)?.validatedMaxConcurrent || 1; }
+  ceiling(account, descriptor) {
+    return matchingLimit(account, descriptor || {}, this.config.accountLimits)?.validatedMaxConcurrent
+      || matchingLimit(account, descriptor || {}, this.config.trialLimits)?.maxConcurrent || 1;
+  }
   capacity(account, descriptor) { return Math.min(this.state(account).limit, this.ceiling(account, descriptor)); }
   overallCapacity(account) { return this.state(account).limit; }
   canStart(account) { return this.state(account).nextStartAt <= this.now(); }
@@ -106,7 +113,10 @@ class ElasticAccountScheduler {
 
   snapshot(account, descriptor) {
     const state = this.state(account);
-    return { effectiveMaxConcurrent: this.capacity(account, descriptor), validatedMaxConcurrent: this.ceiling(account, descriptor), ceiling: this.config.maxPerAccount,
+    const validated = matchingLimit(account, descriptor || {}, this.config.accountLimits);
+    const trial = matchingLimit(account, descriptor || {}, this.config.trialLimits);
+    return { effectiveMaxConcurrent: this.capacity(account, descriptor), validatedMaxConcurrent: validated?.validatedMaxConcurrent || 1,
+      configuredMaxConcurrent: this.ceiling(account, descriptor), limitBasis: validated ? 'validated' : trial ? 'operator_trial' : 'default', ceiling: this.config.maxPerAccount,
       startSpacingMs: state.spacingMs, nextStartInMs: Math.max(0, state.nextStartAt - this.now()),
       reason: state.reason };
   }

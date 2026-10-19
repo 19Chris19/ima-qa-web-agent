@@ -92,7 +92,7 @@ Node 22：`node --test test/elastic-account-scheduling.test.js`；全仓：`npm 
 ## 分账号、分模式的验收记录
 
 `IMA_QA_ELASTIC_ACCOUNT_LIMITS_JSON` 为私有 JSON 数组（最多 256 条），每条含：
-`accountId`、`principalFingerprint`（64 位 SHA-256）、`mode`、`modelId`、`modelType`、
+`accountId`、`principalFingerprint`（账号库原有的 HMAC-SHA256 Base64URL 指纹；也接受 64 位十六进制输入，按原样匹配）、`mode`、`modelId`、`modelType`、
 `validatedMaxConcurrent`、可选 `initialConcurrent`。
 缺省初值取全局 initialConcurrent 与已验收上限的较小值；找不到准确记录时始终为 1。
 显式初值不得超过已验收上限，已验收上限不得超过理论上限。
@@ -102,6 +102,18 @@ mode 仅接受当前适配器支持的 classic_knowledge、knowledge_agent、ima
 未来接入新的思考模式或适配器时，必须扩充验收键与相应测试，不能继承旧额度。
 已有官方网页五路观察不能直接变成本 Provider native_bound 模式的验收记录。
 本分支只保存合成记录，未为任何生产账号签发新验收额度。
+
+### 显式五路试运行
+
+维护者明确批准后，可用独立的 `IMA_QA_ELASTIC_TRIAL_LIMITS_JSON` 设置临时试运行。
+每条仍准确绑定 accountId、principalFingerprint、mode、modelId、modelType，另含
+maxConcurrent 和可选 initialConcurrent。试运行硬上限为 5，不能借此开启 20 路。
+同一范围不得同时配置正式验收与试运行记录；未匹配范围继续为 1，切换模式、模型
+或登录主体不会继承额度。重启只使用明确配置，不进行自动探测或问答。
+
+管理快照以 limitBasis=operator_trial 区分，configuredMaxConcurrent 是配置上限，
+validatedMaxConcurrent 仍为 1；它不伪造逐账号、逐模式验收。删除试运行记录即可
+回到未验收范围的 1 路，或关闭弹性恢复原静态槽位。账号、凭据和历史不迁移。
 
 ## 调用方分配
 
