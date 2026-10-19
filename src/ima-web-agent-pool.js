@@ -1,4 +1,6 @@
 const { createHash } = require('node:crypto');
+const { normalizeElasticScheduling, ElasticAccountScheduler } = require('./elastic-account-scheduler');
+const { accountDescriptor } = require('./elastic-validation');
 const { IMAWebAgentClient } = require('./ima-web-agent-client');
 const {
   classifyAccountHealthError,
@@ -31,6 +33,17 @@ class IMAWebAgentPool {
     this.persistenceReady = options.persistenceReady || (() => true);
     this.policyEligibility = options.policyEligibility || null;
     this.now = options.now || Date.now;
+    const elasticConfig = normalizeElasticScheduling(config.elasticScheduling);
+    this.defaultElasticMode = config.webMode || 'classic_knowledge';
+    this.elastic = elasticConfig.enabled ? new ElasticAccountScheduler(elasticConfig, this.now) : null;
+    this.setTimer = options.setTimeout || setTimeout;
+    this.clearTimer = options.clearTimeout || clearTimeout;
+    this.availabilityTimer = null;
+    this.availabilityTimerAt = 0;
+    this.slotWaiters = 0;
+    this.schedulingClosed = false;
+    this.cancelSlotWaiters = new Set();
+    this.activeSessions = new Set();
     this.waiters = new Set();
     this.availabilityListeners = new Set();
     this.availabilityObserverErrors = 0;
@@ -54,6 +67,7 @@ class IMAWebAgentPool {
   }
 
   syncAccounts(accounts = []) {
+    if (this.elastic && new Set(accounts.map(accountId)).size !== accounts.length) throw new TypeError('Duplicate elastic account ID');
     const existingById = new Map(this.accounts.map((account) => [account.id, account]));
     const next = [];
     const added = [];
@@ -64,12 +78,16 @@ class IMAWebAgentPool {
       const existing = existingById.get(id);
       if (existing) {
         const wasDisabled = existing.disabled;
+        const elasticBindingChanged = existing.principalFingerprint !== config.principalFingerprint
+          || existing.modelId !== config.modelId || existing.modelType !== config.modelType;
         existing.name = config.name || existing.name || id;
+        existing.modelId = config.modelId; existing.modelType = config.modelType;
         existing.maxConcurrent = normalizeAccountMaxConcurrent(config.maxConcurrent);
         existing.webQualification = config.webQualification || null;
         existing.principalFingerprint = config.principalFingerprint;
         existing.knowledgeBaseId = config.knowledgeBaseId;
         existing.client.applyConfig?.({ ...config, id, name: existing.name });
+        if (elasticBindingChanged) this.elastic?.reset(existing);
         existing.disabled = Boolean(config.disabled);
         existing.disabledReason = config.disabledReason || '';
         if (existing.disabled) existing.client.stopAutoRefresh?.();
@@ -87,6 +105,7 @@ class IMAWebAgentPool {
         name: config.name || id,
         client: this.clientFactory({ ...config, id, name: config.name || id }),
         activeRequests: Number(config.activeRequests || 0),
+        modelId: config.modelId, modelType: config.modelType,
         maxConcurrent: normalizeAccountMaxConcurrent(config.maxConcurrent),
         cooldownUntil: Number(config.cooldownUntil || 0),
         consecutiveErrors: Number(config.consecutiveErrors || 0),
@@ -125,6 +144,7 @@ class IMAWebAgentPool {
     }
 
     this.accounts = next;
+    this.elastic?.sync(next);
     if (this.autoRefreshStarted) {
       for (const account of added) {
         if (!account.disabled) account.client.startAutoRefresh?.((_snapshot, generation) => this._notifyCredentials(account, generation));
@@ -136,6 +156,7 @@ class IMAWebAgentPool {
   withCredentialReplacement(accountId, writeAndSync) {
     const previous = this.accounts.find(account => account.id === accountId);
     if (!previous) return writeAndSync();
+    this.elastic?.reset(previous);
     // Keep quarantine across asynchronous persistence and pool synchronization.
     previous.client.invalidateCredentials?.({ suspend: true });
     previous.client.stopAutoRefresh?.();
@@ -208,7 +229,7 @@ class IMAWebAgentPool {
     options.signal?.throwIfAborted();
     const pair = this._parallelPair(options);
     let ownPairLease;
-    if (pair && !options.accountLease) {
+    if ((pair || this.elastic) && !options.accountLease) {
       ownPairLease = await this._waitForPairSlot(options);
       options = { ...options, accountLease: ownPairLease.value };
     }
@@ -262,7 +283,7 @@ class IMAWebAgentPool {
           yield { type: 'session', sessionId };
         }
       }
-      await this._markSuccess(account);
+      await this._markSuccess(account, options.accountLease && this.taskLeases.get(options.accountLease)?.elasticTicket);
     } catch (error) {
       if (!options.signal?.aborted && !(error instanceof NoAvailableWebAgentAccountError)) {
         await this._markFailure(account, error);
@@ -286,6 +307,7 @@ class IMAWebAgentPool {
   }
 
   _runnableAccount(options = {}) {
+    if (this.schedulingClosed) throw new NoAvailableWebAgentAccountError('服务正在停止');
     const pair = this._parallelPair(options);
     this._pruneParallelPairs();
     if (pair && !this.parallelPairs.has(pair.key) && this.parallelPairs.size >= this.maxParallelPairs) {
@@ -293,17 +315,26 @@ class IMAWebAgentPool {
     }
     const preferred = options.accountId || '';
     const eligible = account => this._requestEligible(account, options) && this._pairEligible(account, pair, options);
+    const sessionFree = account => !(this.elastic && options.sessionId && this.activeSessions.has(this._sessionKey(account, options)));
     if (preferred) {
       const account = this.accounts.find(item => item.id === preferred || item.name === preferred);
       if (!account || account.disabled) {
         throw new NoAvailableWebAgentAccountError('会话账号暂不可用');
       }
       if (account.maintenanceOperation) return null;
+      if (this.elastic && account.cooldownUntil > this.now()) { this._scheduleAvailability(); return null; }
       if (!eligible(account) || account.cooldownUntil > this.now()) throw new NoAvailableWebAgentAccountError('会话账号暂不可用');
-      return !account.maintenanceOperation && account.activeRequests < account.maxConcurrent ? account : null;
+      const available = sessionFree(account) && this._slotAvailable(account, true, options);
+      if (!available) this._scheduleAvailability();
+      return available ? account : null;
     }
-    if (!this._hasPotentialAvailability(account => account.maintenanceOperation || eligible(account))) throw new NoAvailableWebAgentAccountError();
-    return this._findAvailableAccount(eligible);
+    const potential = this.elastic
+      ? this.accounts.some(account => !account.disabled && (account.maintenanceOperation || account.cooldownUntil > this.now() || eligible(account)))
+      : this._hasPotentialAvailability(account => account.maintenanceOperation || eligible(account));
+    if (!potential) throw new NoAvailableWebAgentAccountError();
+    const account = this._findAvailableAccount(account => eligible(account) && sessionFree(account), options);
+    if (!account) this._scheduleAvailability();
+    return account;
   }
 
   canAcquireSlot(options) { return Boolean(this._runnableAccount(options)); }
@@ -313,12 +344,18 @@ class IMAWebAgentPool {
     const account = this._runnableAccount(options);
     if (!account) return null;
     const pairLease = this._recordParallelPairLease(this._parallelPair(options), account.id);
-    try { this._reserveAccount(account); }
-    catch (error) { pairLease?.release(); throw error; }
+    let elasticTicket;
+    const sessionKey = this.elastic && options.sessionId ? this._sessionKey(account, options) : null;
+    try { this._reserveAccount(account, () => {
+      elasticTicket = this.elastic?.reserve(account, accountDescriptor(account, options, this.defaultElasticMode));
+      if (sessionKey) this.activeSessions.add(sessionKey);
+    }); }
+    catch (error) { if (sessionKey) this.activeSessions.delete(sessionKey); pairLease?.release(); throw error; }
     const value = {};
-    const record = { account, pairLease, used: false, released: false, release: () => {
+    const record = { account, pairLease, elasticTicket, sessionId: String(options.sessionId || ''), used: false, released: false, release: () => {
       if (record.released) return;
       record.released = true;
+      if (sessionKey) this.activeSessions.delete(sessionKey);
       pairLease?.release();
       this._releaseAccount(account);
     } };
@@ -333,6 +370,7 @@ class IMAWebAgentPool {
     if (!record || record.used || record.released || !this.accounts.includes(account)
         || record.pairLease?.key !== pair?.key || record.pairLease?.leg !== pair?.leg
         || account.disabled || account.maintenanceOperation || account.cooldownUntil > this.now()
+        || (this.elastic && record.sessionId !== String(options.sessionId || ''))
         || (options.accountId && ![account.id, account.name].includes(options.accountId))
         || !this._requestEligible(account, options)) {
       throw new Error('Invalid account lease');
@@ -434,21 +472,36 @@ class IMAWebAgentPool {
     options.signal?.throwIfAborted();
     const lease = this.tryAcquireSlot(options);
     if (lease) return lease;
+    if (this.elastic && this.slotWaiters >= this.elastic.config.maxWaiters) {
+      throw Object.assign(new NoAvailableWebAgentAccountError('账号等待队列已满'), { code: 'account_wait_queue_full', statusCode: 429 });
+    }
+    this.slotWaiters++;
     return new Promise((resolve, reject) => {
       let settled = false;
+      let timer;
       const finish = (error, acquired) => {
         if (settled) { acquired?.release(); return; }
         settled = true;
+        this.slotWaiters--;
+        if (timer) this.clearTimer(timer);
+        this.cancelSlotWaiters.delete(cancel);
         unsubscribe();
         options.signal?.removeEventListener('abort', abort);
         if (error) reject(error); else resolve(acquired);
       };
       const abort = () => finish(new Error('request_aborted'));
+      const cancel = () => finish(new NoAvailableWebAgentAccountError('服务正在停止'));
       const wake = () => {
         try { const acquired = this.tryAcquireSlot(options); if (acquired) finish(null, acquired); }
         catch (error) { finish(error); }
       };
       const unsubscribe = this.onAvailability(wake);
+      if (this.elastic) {
+        this.cancelSlotWaiters.add(cancel);
+        timer = this.setTimer(() => finish(Object.assign(new NoAvailableWebAgentAccountError('等待账号超时'),
+          { code: 'account_wait_timeout' })), this.elastic.config.maxWaitMs);
+        // Keep a direct caller alive while it awaits admission; the deadline is bounded.
+      }
       options.signal?.addEventListener('abort', abort, { once: true });
       if (options.signal?.aborted) abort(); else wake();
     });
@@ -571,7 +624,7 @@ class IMAWebAgentPool {
     return account ? this._reserveAccount(account) : null;
   }
 
-  _findAvailableAccount(eligible = () => true) {
+  _findAvailableAccount(eligible = () => true, options = {}) {
     const now = this.now();
     return this.accounts
       .filter(() => this.persistenceReady())
@@ -579,19 +632,19 @@ class IMAWebAgentPool {
       .filter((account) => !account.client.pendingCredentialPersistence && !account.client.credentialWritesSuspended)
       .filter(eligible)
       .filter((account) => !account.maintenanceOperation)
-      .filter((account) => account.activeRequests < account.maxConcurrent)
+      .filter((account) => this._slotAvailable(account, true, options))
       .filter((account) => account.cooldownUntil <= now)
       .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0] || null;
   }
 
-  _reserveAccount(account) {
+  _reserveAccount(account, beforeNotify) {
     const now = this.now();
     const previousLastUsedAt = account.lastUsedAt;
     const previousTotalRequests = account.totalRequests;
     account.activeRequests += 1;
     account.lastUsedAt = now;
     account.totalRequests += 1;
-    try { this._notifyState(account); }
+    try { beforeNotify?.(); this._notifyState(account); }
     catch (error) {
       account.activeRequests -= 1;
       account.lastUsedAt = previousLastUsedAt;
@@ -723,15 +776,63 @@ class IMAWebAgentPool {
     }
   }
 
+  accountCapacity(account, options = {}) {
+    const current = this.accounts.find(row => row.id === account.id) || account;
+    return this.elastic ? this.elastic.capacity(current, accountDescriptor(current, options, this.defaultElasticMode)) : current.maxConcurrent;
+  }
+  capCapacity(capacity) { return this.elastic ? Math.min(capacity, this.elastic.config.maxGlobal) : capacity; }
+  availableCapacity(value) {
+    return this.elastic ? Math.max(0, Math.min(value, this.elastic.config.maxGlobal
+      - this.accounts.reduce((sum, account) => sum + account.activeRequests, 0))) : value;
+  }
+  _sessionKey(account, options) { return JSON.stringify([account.id, options.sessionId]); }
+  _slotAvailable(account, recordDemand = false, options = {}) {
+    if (recordDemand && this.elastic && account.activeRequests >= this.accountCapacity(account, options)) this.elastic.markDemand(account);
+    return account.activeRequests < this.accountCapacity(account, options) && (!this.elastic || (this.elastic.canStart(account)
+      && this.accounts.reduce((sum, row) => sum + row.activeRequests, 0) < this.elastic.config.maxGlobal));
+  }
+
+  // A single wake-up for all accounts; no polling and no per-task timer.
+  _scheduleAvailability() {
+    if (!this.elastic || this.schedulingClosed) return;
+    const now = this.now();
+    let next = Infinity;
+    for (const account of this.accounts) {
+      if (account.disabled || account.maintenanceOperation || account.activeRequests >= this.elastic.overallCapacity(account)) continue;
+      const at = Math.max(account.cooldownUntil, this.elastic.state(account).nextStartAt);
+      if (at > now) next = Math.min(next, at);
+    }
+    if (this.availabilityTimer && this.availabilityTimerAt === next) return;
+    if (this.availabilityTimer) this.clearTimer(this.availabilityTimer);
+    this.availabilityTimer = null;
+    this.availabilityTimerAt = next;
+    if (Number.isFinite(next)) {
+      this.availabilityTimer = this.setTimer(() => {
+        this.availabilityTimer = null;
+        this._notifyAvailability();
+      }, Math.max(1, next - now));
+      this.availabilityTimer.unref?.();
+    }
+  }
+
+  closeScheduling() {
+    this.schedulingClosed = true;
+    for (const cancel of [...this.cancelSlotWaiters]) cancel();
+    if (this.availabilityTimer) this.clearTimer(this.availabilityTimer);
+    this.availabilityTimer = null;
+  }
+
   _notifyAvailability() {
     this._drainWaiters();
     for (const listener of this.availabilityListeners) {
       try { listener(); }
       catch { this.availabilityObserverErrors += 1; }
     }
+    this._scheduleAvailability();
   }
 
-  _markSuccess(account) {
+  _markSuccess(account, ticket) {
+    if (this.elastic && !this.elastic.success(account, ticket)) return;
     account.consecutiveErrors = 0;
     account.lastError = '';
     account.cooldownUntil = 0;
@@ -741,8 +842,14 @@ class IMAWebAgentPool {
   _markFailure(account, error) {
     account.consecutiveErrors += 1;
     account.lastError = safeErrorMessage(error);
+    if (this.elastic && (isCooldownError(error) || ['upstream_quota', 'rate_limited'].includes(error?.code) || error?.statusCode === 429 || error?.status === 429)) {
+      this.elastic.congestion(account);
+      return this._notifyState(account);
+    }
+    if (this.elastic && !isAuthError(error) && error?.code !== 'upstream_auth') this.elastic.congestion(account, 'upstream_error');
 
-    if (isAuthError(error)) {
+    if (isAuthError(error) || (this.elastic && error?.code === 'upstream_auth')) {
+      this.elastic?.invalidate(account, 'auth_failed');
       account.disabled = true;
       account.disabledReason = 'auth_failed';
       return this._notifyState(account);
@@ -763,13 +870,15 @@ class IMAWebAgentPool {
 
     const summary = {
       totalAccounts: accounts.length,
-      totalSlots: accounts.reduce((sum, account) => sum + account.maxConcurrent, 0),
+      totalSlots: this.capCapacity(accounts.reduce((sum, account) => sum + this.accountCapacity(account), 0)),
       activeRequests: accounts.reduce((sum, account) => sum + account.activeRequests, 0),
-      waitingRequests: this.waiters.size,
+      waitingRequests: this.waiters.size + this.slotWaiters,
       waitingPreferredRequests: [...this.waiters].filter(waiter => waiter.kind === 'preferred').length,
-      availableSlots: accounts.reduce((sum, account) => sum + account.availableSlots, 0),
-      capacity: this.accounts.filter(account => !account.disabled && !account.maintenanceOperation
-        && account.cooldownUntil <= now).reduce((sum, account) => sum + account.maxConcurrent, 0),
+      availableSlots: Math.max(0, Math.min(this.capCapacity(Infinity) - accounts.reduce((sum, account) => sum + account.activeRequests, 0), accounts.reduce((sum, account) => sum + account.availableSlots, 0))),
+      capacity: this.capCapacity(this.accounts.filter(account => !account.disabled && !account.maintenanceOperation
+        && account.cooldownUntil <= now).reduce((sum, account) => sum + this.accountCapacity(account), 0)),
+      ...(this.elastic ? { elasticScheduling: { enabled: true, maxPerAccount: this.elastic.config.maxPerAccount,
+        maxGlobal: this.elastic.config.maxGlobal, directWaiters: this.slotWaiters } } : {}),
       availableAccounts: accounts.filter((account) => account.status === 'available').length,
       busyAccounts: accounts.filter((account) => account.status === 'busy').length,
       coolingDownAccounts: accounts.filter((account) => account.status === 'cooling_down').length,
@@ -835,8 +944,9 @@ class IMAWebAgentPool {
       disabledReason: account.disabledReason || '',
       activeRequests: account.activeRequests,
       maxConcurrent: account.maxConcurrent,
-      availableSlots: !account.disabled && !account.maintenanceOperation && !coolingDown
-        ? Math.max(0, account.maxConcurrent - account.activeRequests) : 0,
+      ...(this.elastic ? { elastic: this.elastic.snapshot(account, accountDescriptor(account, {}, this.defaultElasticMode)) } : {}),
+      availableSlots: !account.disabled && !account.maintenanceOperation && !coolingDown && (!this.elastic || this.elastic.canStart(account))
+        ? Math.max(0, this.accountCapacity(account) - account.activeRequests) : 0,
       cooldownSecondsRemaining: coolingDown
         ? Math.max(0, Math.ceil((account.cooldownUntil - now) / 1000))
         : 0,
