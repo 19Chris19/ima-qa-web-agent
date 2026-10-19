@@ -70,6 +70,7 @@ function createApp({
   const askQueue = createAskQueue({
     maxConcurrent: config.concurrency?.maxConcurrentAsk,
     queueLimit: config.concurrency?.queueLimit,
+    applicationScheduling: config.concurrency?.applicationScheduling,
   });
   app.locals.imaQaAskQueue = askQueue;
   app.locals.askLimits = config.limits;
@@ -212,16 +213,19 @@ function createApp({
     const state = webReadiness?.snapshot();
     const queue = askQueue.stats();
     const mode = state?.mode || config.webAgent?.mode;
+    const allocation = askQueue.applicationStats(_req.applicationKey);
+    const runtimeCapacity = allocation || imaWebAgentClient?.elastic ? queue.maxConcurrent : Infinity;
     const nativeCapacity = config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent'
-      ? Math.max(0, Math.min(Number(state?.knowledgeAgentCapacity) || 0, Number(state?.capacity) || 0)) : 0;
+      ? Math.max(0, Math.min(Number(state?.knowledgeAgentCapacity) || 0, Number(state?.capacity) || 0, runtimeCapacity, allocation?.maxConcurrent ?? Infinity)) : 0;
     res.setHeader('Cache-Control', 'no-store');
     const website = { schemaVersion: 1,
       ...(_req.applicationKey?.startsWith('application:') ? { applicationId: _req.applicationKey.slice(12) } : {}),
       generation: state?.generation || 0, mode,
-      maxConcurrent: state?.capacity ?? queue.maxConcurrent, available: state?.schedulable ?? 0,
+      ...(allocation ? { allocation: { ...allocation, available: Math.min(allocation.available, state?.schedulable ?? allocation.available) } } : {}),
+      maxConcurrent: Math.min(state?.capacity ?? queue.maxConcurrent, runtimeCapacity, allocation?.maxConcurrent ?? Infinity), available: Math.min(state?.schedulable ?? 0, allocation?.available ?? Infinity),
       totalSlots: state?.totalSlots ?? 0, eligibleAccounts: state?.eligibleAccounts ?? 0,
       totalAccounts: state?.totalAccounts ?? 0, schedulableAccounts: state?.schedulableAccounts ?? 0,
-      active: queue.activeRequests, queued: queue.queuedRequests,
+      active: allocation?.active ?? queue.activeRequests, queued: allocation?.queued ?? queue.queuedRequests,
       policies: { knowledge_agent: { max_concurrent: nativeCapacity } },
       features: {
         knowledge_agent_keyed_sse_v1: config.qaProvider === 'ima-web-agent' && mode === 'knowledge_agent',

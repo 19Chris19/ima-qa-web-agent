@@ -1,0 +1,49 @@
+{
+  "date": "2026-10-19",
+  "branch": "codex/elastic-account-scheduling-20261019",
+  "base": "286653e5e08679d7534172c0188831c01310668d",
+  "node": "22.23.3",
+  "newSchedulingTests": {
+    "passed": 20,
+    "failed": 0
+  },
+  "fullRepository": {
+    "tests": 975,
+    "passed": 969,
+    "failed": 0,
+    "skipped": 6,
+    "newSchedulingTestsIncluded": true
+  },
+  "skipDescriptions": [
+    "actual management and identity route responses interoperate with the admin UI without network # SKIP Set PROVIDER_ADMIN_CONTRACT_ROOT to the integrated backend checkout",
+    "mapped durable HTTP isolation, rotation and scheduler identity with companion executor # SKIP",
+    "full-clock task survives 365 seconds, disconnect and resubscription without re-dispatch # SKIP",
+    "actual website parser accepts audited synthetic exports # SKIP",
+    "actual public serialized store passes unchanged website parser # SKIP",
+    "real-clock task route -> fair queue -> pool -> native HTTP survives 365 seconds of upstream silence # SKIP"
+  ],
+  "packaging": {
+    "newModuleIncluded": true,
+    "fixtureIncluded": true,
+    "privateRuntimeIncluded": false,
+    "sourceLayoutStartupAccepted": true,
+    "dockerCopyLayoutStartupAccepted": true
+  },
+  "productionPostcheck": {
+    "localReady": true,
+    "onlineReady": true,
+    "capacity": 5,
+    "active": 0,
+    "queued": 0
+  },
+  "currentTurnRealQA": 0,
+  "productionChanged": false,
+  "credentialsHistoryOrOldExportsModified": false,
+  "publishedPR": false,
+  "realAcceptancePending": [
+    "Provider/BFF five-way same-account path",
+    "per-account/model incremental capacity",
+    "20/account and 100 global",
+    "sustained resource and streaming latency acceptance"
+  ]
+}

@@ -1,4 +1,6 @@
 const fs = require('node:fs');
+const { normalizeApplicationScheduling } = require('./application-scheduling');
+const { DEFAULTS: ELASTIC_DEFAULTS, normalizeElasticScheduling } = require('./elastic-account-scheduler');
 const path = require('node:path');
 const { parseShareUrl } = require('./shared-kb-target');
 const { normalizeApplicationMappings } = require('./application-identity');
@@ -166,6 +168,26 @@ function normalizeAllowedOrigin(value) {
     throw new ConfigError(`ALLOWED_ORIGINS must contain exact http(s) origins: ${value}`);
   }
   return parsed.origin;
+}
+
+function parseApplicationScheduling(env) {
+  try { const raw = readEnv(env, 'IMA_QA_APPLICATION_SCHEDULING_JSON'); return normalizeApplicationScheduling(raw ? JSON.parse(raw) : {}); }
+  catch { throw new ConfigError('Invalid IMA_QA_APPLICATION_SCHEDULING_JSON'); }
+}
+
+function parseElasticScheduling(env) {
+  const input = { enabled: parseBoolean(readEnv(env, 'IMA_QA_ELASTIC_ENABLED')) };
+  for (const key of Object.keys(ELASTIC_DEFAULTS).filter(key => key !== 'enabled')) {
+    const name = 'IMA_QA_ELASTIC_' + key.replace(/[A-Z]/g, char => '_' + char).toUpperCase();
+    const raw = readEnv(env, name);
+    if (raw) input[key] = Number(raw);
+  }
+  try {
+    const raw = readEnv(env, 'IMA_QA_ELASTIC_ACCOUNT_LIMITS_JSON');
+    input.accountLimits = raw ? JSON.parse(raw) : [];
+    return normalizeElasticScheduling(input);
+  }
+  catch (error) { throw new ConfigError(error.message); }
 }
 
 function parseBoolean(rawValue) {
@@ -386,6 +408,7 @@ function getConfig(env = process.env) {
       healthDetails: parseEnum(readEnv(env, 'IMA_QA_HEALTH_DETAILS'), ['basic', 'auth', 'full'], DEFAULT_HEALTH_DETAILS),
     },
     concurrency: {
+      applicationScheduling: parseApplicationScheduling(env),
       maxConcurrentAsk:
         accountPoolCapacityMode === 'auto'
           ? DEFAULT_MAX_CONCURRENT_ASK
@@ -520,6 +543,7 @@ function getConfig(env = process.env) {
       model: readEnv(env, 'MIMO_MODEL') || DEFAULT_MIMO_MODEL,
     },
     webAgent: {
+      elasticScheduling: parseElasticScheduling(env),
       webMode: readEnv(env, 'IMA_WEB_AGENT_WEB_MODE') || undefined,
       ...primaryWebAgentAccount,
       accounts: webAgentAccounts,

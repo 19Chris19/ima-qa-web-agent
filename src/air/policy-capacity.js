@@ -57,17 +57,19 @@ class AirPolicyCapacity {
         .map(key => [key, stored.get(row.id)?.[key]])) }));
   }
 
+  cap(value) { return this.pool.capCapacity?.(value) ?? value; }
+
   policyCapacitySnapshot() {
     const accounts = this.accounts();
-    return Object.fromEntries(POLICIES.map(policy => [policy, accounts.reduce((sum, account) =>
-      sum + (this.eligible(account, policy) ? Number(account.maxConcurrent || 1) : 0), 0)]));
+    return Object.fromEntries(POLICIES.map(policy => [policy, this.cap(accounts.reduce((sum, account) =>
+      sum + (this.eligible(account, policy) ? (this.pool.accountCapacity?.(account, { retrievalPolicy: policy }) ?? Number(account.maxConcurrent || 1)) : 0), 0))]));
   }
 
   laneCapacitySnapshot() {
     const accounts = this.accounts();
-    return Object.fromEntries(['knowledge', 'agent', 'flex'].map(lane => [lane, accounts.reduce((sum, account) =>
+    return Object.fromEntries(['knowledge', 'agent', 'flex'].map(lane => [lane, this.cap(accounts.reduce((sum, account) =>
       sum + ((account.routingLane || 'flex') === lane && POLICIES.some(policy => this.eligible(account, policy))
-        ? Number(account.maxConcurrent || 1) : 0), 0)]));
+        ? Math.max(...POLICIES.filter(policy => this.eligible(account, policy)).map(policy => this.pool.accountCapacity?.(account, { retrievalPolicy: policy }) ?? Number(account.maxConcurrent || 1))) : 0), 0))]));
   }
 
   pairedCapacitySnapshot() {
@@ -96,7 +98,7 @@ class AirPolicyCapacity {
         || (account.profileQualifications?.ima_agent_auto?.capabilityDigest === profile.capability_digest
           && account.profileQualifications.ima_agent_auto.answerBasis === 'mixed'));
       const schedulable = Boolean(qualified && !account.disabled && !account.maintenanceOperation && account.cooldownUntil <= this.now());
-      return { qualified: Boolean(qualified), schedulable, available_now: schedulable && account.activeRequests < account.maxConcurrent,
+      return { qualified: Boolean(qualified), schedulable, available_now: schedulable && account.activeRequests < (this.pool.accountCapacity?.(account, { answerProfile: profile.answer_profile }) ?? account.maxConcurrent) && (!this.pool.elastic || this.pool._slotAvailable(account, false, { answerProfile: profile.answer_profile })),
         reason_code: !qualified ? 'profile_qualification_missing' : schedulable ? 'schedulable' : 'account_unavailable',
         proof_state: qualified ? 'qualified' : 'missing', verified_at: account.profileQualifications?.[profile.answer_profile]?.verifiedAt || null };
     };
@@ -104,7 +106,7 @@ class AirPolicyCapacity {
       active_profile: active(account), routing_lane: account.routingLane || 'flex', strategies: Object.fromEntries(POLICIES.map(policy => {
         const eligible = this.eligible(account, policy);
         return [policy, { qualified: eligible, schedulable: eligible,
-          available_now: eligible && account.activeRequests < account.maxConcurrent,
+          available_now: eligible && account.activeRequests < (this.pool.accountCapacity?.(account, { retrievalPolicy: policy }) ?? account.maxConcurrent) && (!this.pool.elastic || this.pool._slotAvailable(account, false, { retrievalPolicy: policy })),
           reason_code: eligible ? 'schedulable' : 'policy_unavailable', proof_state: eligible ? 'qualified' : 'not_applicable',
           verified_at: policy === 'knowledge_agent' ? account.knowledgeAgentQualification?.verifiedAt || account.webQualification?.verifiedAt || null
             : account.retrievalPolicyQualifications?.[policy]?.verifiedAt || null }];
