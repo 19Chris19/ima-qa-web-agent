@@ -88,6 +88,7 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
       webReadiness,
       airPolicyCapacity: airPolicies,
     });
+  const unsubscribeScheduling = imaWebAgentClient.onAvailability(() => synchronizeQueueCapacity());
   synchronizeQueueCapacity();
   const accountPoolExerciseManager = new AccountPoolExerciseManager({
     askQueue: app.locals.imaQaAskQueue,
@@ -138,6 +139,8 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
   let closing = false;
   const shutdown = async () => {
     if (closing) return; closing = true;
+    unsubscribeScheduling();
+    imaWebAgentClient.closeScheduling();
     imaWebAgentClient.stopAutoRefresh();
     try {
       await new Promise(resolve => server.close(resolve));

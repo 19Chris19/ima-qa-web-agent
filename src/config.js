@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const { DEFAULTS: ELASTIC_DEFAULTS, normalizeElasticScheduling } = require('./elastic-account-scheduler');
 const path = require('node:path');
 const { parseShareUrl } = require('./shared-kb-target');
 const { normalizeApplicationMappings } = require('./application-identity');
@@ -166,6 +167,17 @@ function normalizeAllowedOrigin(value) {
     throw new ConfigError(`ALLOWED_ORIGINS must contain exact http(s) origins: ${value}`);
   }
   return parsed.origin;
+}
+
+function parseElasticScheduling(env) {
+  const input = { enabled: parseBoolean(readEnv(env, 'IMA_QA_ELASTIC_ENABLED')) };
+  for (const key of Object.keys(ELASTIC_DEFAULTS).filter(key => key !== 'enabled')) {
+    const name = 'IMA_QA_ELASTIC_' + key.replace(/[A-Z]/g, char => '_' + char).toUpperCase();
+    const raw = readEnv(env, name);
+    if (raw) input[key] = Number(raw);
+  }
+  try { return normalizeElasticScheduling(input); }
+  catch (error) { throw new ConfigError(error.message); }
 }
 
 function parseBoolean(rawValue) {
@@ -520,6 +532,7 @@ function getConfig(env = process.env) {
       model: readEnv(env, 'MIMO_MODEL') || DEFAULT_MIMO_MODEL,
     },
     webAgent: {
+      elasticScheduling: parseElasticScheduling(env),
       webMode: readEnv(env, 'IMA_WEB_AGENT_WEB_MODE') || undefined,
       ...primaryWebAgentAccount,
       accounts: webAgentAccounts,

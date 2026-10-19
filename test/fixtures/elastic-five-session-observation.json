@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-19",
+  "scope": "one logged-in account; five distinct preexisting official-web sessions; quick mode; model_id official_3",
+  "burst": {
+    "clickSpanMs": 2764,
+    "success": 3,
+    "temporaryFailures": 2,
+    "completionCode": 3,
+    "universalRateLimitKnown": false
+  },
+  "paced": {
+    "spacingMs": 3000,
+    "success": 5,
+    "requests": 5,
+    "textOverlapMs": 3348,
+    "textEventsPerSessionInsideOverlap": [
+      117,
+      118,
+      248,
+      206,
+      120
+    ],
+    "sessions": [
+      {
+        "alias": "A",
+        "requestStartMs": 80,
+        "firstTextMs": 6368,
+        "lastTextMs": 37982,
+        "terminalMs": 41963,
+        "oneTerminal": true,
+        "sessionMatchesExisting": true,
+        "markerCorrect": true,
+        "transportAbortedAfterTerminal": true
+      },
+      {
+        "alias": "B",
+        "requestStartMs": 4075,
+        "firstTextMs": 10881,
+        "lastTextMs": 42529,
+        "terminalMs": 47552,
+        "oneTerminal": true,
+        "sessionMatchesExisting": true,
+        "markerCorrect": true,
+        "transportAbortedAfterTerminal": false
+      },
+      {
+        "alias": "C",
+        "requestStartMs": 6082,
+        "firstTextMs": 11625,
+        "lastTextMs": 22834,
+        "terminalMs": 27896,
+        "oneTerminal": true,
+        "sessionMatchesExisting": true,
+        "markerCorrect": true,
+        "transportAbortedAfterTerminal": true
+      },
+      {
+        "alias": "D",
+        "requestStartMs": 9109,
+        "firstTextMs": 14411,
+        "lastTextMs": 30711,
+        "terminalMs": 36338,
+        "oneTerminal": true,
+        "sessionMatchesExisting": true,
+        "markerCorrect": true,
+        "transportAbortedAfterTerminal": true
+      },
+      {
+        "alias": "E",
+        "requestStartMs": 13192,
+        "firstTextMs": 19486,
+        "lastTextMs": 53711,
+        "terminalMs": 58143,
+        "oneTerminal": true,
+        "sessionMatchesExisting": true,
+        "markerCorrect": true,
+        "transportAbortedAfterTerminal": true
+      }
+    ]
+  },
+  "historyReloadPassed": true,
+  "scopeLimitations": [
+    "one account and quick official_3 only",
+    "no 20/account acceptance",
+    "no 100 global real acceptance",
+    "no sustained-load or single-stream control baseline",
+    "not a Provider/BFF end-to-end acceptance"
+  ]
+}

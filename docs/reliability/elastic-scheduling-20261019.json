@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-19",
+  "scope": "single local scheduler-only observation; virtual clock and mock clients; not full service or IMA",
+  "baseline": {
+    "scope": "offline scheduler-only; virtual start clock; not IMA or full-service performance",
+    "node": "v22.23.3",
+    "elastic": false,
+    "rounds": 30,
+    "tasks": 3000,
+    "maxActive": 100,
+    "simulatedStateNotifications": 9150,
+    "roundP95Ms": 6.199290999999988,
+    "extraPeakRSSMiB": 8.90625,
+    "extraPeakHeapMiB": 0.8501052856445312,
+    "retainedHeapDeltaMiB": 0.29103851318359375,
+    "cpuUserMs": 314.29,
+    "cpuSystemMs": 18.898,
+    "realRequests": 0,
+    "productionChanged": false
+  },
+  "elastic": {
+    "scope": "offline scheduler-only; virtual start clock; not IMA or full-service performance",
+    "node": "v22.23.3",
+    "elastic": true,
+    "rounds": 30,
+    "tasks": 3000,
+    "maxActive": 100,
+    "simulatedStateNotifications": 9150,
+    "roundP95Ms": 3.5308749999999947,
+    "extraPeakRSSMiB": 9.34375,
+    "extraPeakHeapMiB": 0.9253692626953125,
+    "retainedHeapDeltaMiB": 0.3177947998046875,
+    "cpuUserMs": 309.474,
+    "cpuSystemMs": 15.232,
+    "realRequests": 0,
+    "productionChanged": false
+  },
+  "observedDifference": {
+    "extraPeakRSSMiB": 0.4375,
+    "extraPeakHeapMiB": 0.07526397705078125,
+    "notificationsUnchanged": true
+  },
+  "limitations": [
+    "single measurement pair; timing differences are not evidence of speedup",
+    "no real IMA latency, BFF streaming, persistent task load, GPU stress, or 100-way real acceptance measured"
+  ]
+}
