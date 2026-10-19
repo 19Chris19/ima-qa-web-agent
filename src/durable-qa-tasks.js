@@ -193,7 +193,7 @@ class DurableQATasks {
   }
 
   queueOptions(task, signal) {
-    const options = { signal, applicationKey: task.applicationKey || task.scope,
+    const options = { signal, enqueuedAt: task.createdAt, applicationKey: task.applicationKey || task.scope,
       visitorKey: task.ownerKey, laneKey: task.input.conversationId };
     if (this.accountPool?.tryAcquireSlot) {
       const accountOptions = () => ({ ...this.routingOptions(task), ...this.conversations.getUpstream(task.input.conversationId, task.ownerKey),

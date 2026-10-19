@@ -1,3 +1,4 @@
+const { normalizeApplicationScheduling } = require('./application-scheduling');
 class QueueFullError extends Error {
   constructor(message = '当前访问人数较多，请稍后再试') {
     super(message);
@@ -17,6 +18,10 @@ class RequestAbortedError extends Error {
 function createAskQueue(options = {}) {
   let maxConcurrent = normalizeMaxConcurrent(options.maxConcurrent);
   let queueLimit = normalizeQueueLimit(options.queueLimit);
+  const scheduling = normalizeApplicationScheduling(options.applicationScheduling);
+  const now = options.now || Date.now;
+  const setTimer = options.setTimeout || setTimeout, clearTimer = options.clearTimeout || clearTimeout;
+  const serviceLevels = new Map();
   let activeRequests = 0;
   const queue = [];
   const activeLanes = new Set();
@@ -27,6 +32,16 @@ function createAskQueue(options = {}) {
   let preparing = false;
   let needsDrain = false;
   let resourceReleaseErrors = 0;
+
+  function policyFor(key) { return Object.hasOwn(scheduling.applications, key) ? scheduling.applications[key] : scheduling.default; }
+  function appActive(key) { return [...activeEntries].filter(entry => entry.applicationKey === key).length; }
+  function appQueued(key) { return queue.filter(entry => entry.applicationKey === key).length; }
+  function applicationStats(key) {
+    if (!scheduling.enabled) return null;
+    const policy = policyFor(key), active = appActive(key), queued = appQueued(key);
+    return { schemaVersion: 1, ...policy, active, queued, available: Math.max(0, Math.min(policy.maxConcurrent - active, maxConcurrent - activeRequests)), shared: true };
+  }
+  function appRunnable(entry) { return !scheduling.enabled || appActive(entry.applicationKey) < policyFor(entry.applicationKey).maxConcurrent; }
 
   function stats() {
     return {
@@ -54,9 +69,14 @@ function createAskQueue(options = {}) {
         tryAcquire: options.tryAcquire,
         isRunnable: options.isRunnable,
         applicationKey: String(options.applicationKey || 'legacy'),
+        enqueuedAt: Number.isSafeInteger(options.enqueuedAt) ? options.enqueuedAt : now(),
         visitorKey: String(options.visitorKey || 'legacy'),
         lane: laneFor(options),
       };
+
+      if (scheduling.enabled && now() - entry.enqueuedAt >= policyFor(entry.applicationKey).maxWaitMs) {
+        reject(Object.assign(new Error('等待执行额度超时'), { code: 'queue_wait_timeout', statusCode: 503 })); return;
+      }
 
       const onAbort = () => {
         if (entry.started) {
@@ -80,7 +100,7 @@ function createAskQueue(options = {}) {
 
       drain();
       if (activeRequests < maxConcurrent && !activeLanes.has(entry.lane)
-          && !queue.some(item => entry.lane && item.lane === entry.lane) && prepare(entry)) {
+          && appRunnable(entry) && !queue.some(item => entry.lane && item.lane === entry.lane) && prepare(entry)) {
         register(entry);
         start(entry);
         drain();
@@ -88,7 +108,7 @@ function createAskQueue(options = {}) {
       }
 
       if (entry.rejected) { drain(); return; }
-      if (queue.length >= queueLimit) {
+      if (queue.length >= queueLimit || (scheduling.enabled && appQueued(entry.applicationKey) >= policyFor(entry.applicationKey).queueLimit)) {
         cleanupQueuedEntry(entry);
         reject(new QueueFullError());
         drain();
@@ -96,6 +116,12 @@ function createAskQueue(options = {}) {
       }
 
       queue.push(entry);
+      if (scheduling.enabled) entry.waitTimer = setTimer(() => {
+        const index = queue.indexOf(entry); if (index < 0) return;
+        queue.splice(index, 1); entry.rejected = true; cleanupQueuedEntry(entry);
+        reject(Object.assign(new Error('等待执行额度超时'), { code: 'queue_wait_timeout', statusCode: 503 }));
+        drain();
+      }, Math.max(0, policyFor(entry.applicationKey).maxWaitMs - Math.max(0, now() - entry.enqueuedAt)));
       register(entry);
       drain();
     });
@@ -107,7 +133,8 @@ function createAskQueue(options = {}) {
     return !options.signal?.aborted && ((activeRequests < maxConcurrent
       && !activeLanes.has(laneFor(options))
       && !queue.some(item => laneFor(options) && item.lane === laneFor(options))
-      && runnable(options)) || queue.length < queueLimit);
+      && appRunnable({ ...options, applicationKey: String(options.applicationKey || 'legacy') }) && runnable(options))
+      || (queue.length < queueLimit && (!scheduling.enabled || appQueued(String(options.applicationKey || 'legacy')) < policyFor(String(options.applicationKey || 'legacy')).queueLimit)));
   }
 
   function runnable(entry) {
@@ -116,7 +143,7 @@ function createAskQueue(options = {}) {
   }
 
   function prepare(entry) {
-    if (!runnable(entry)) return false;
+    if (!appRunnable(entry) || !runnable(entry)) return false;
     if (!entry.tryAcquire) return true;
     preparing = true;
     try {
@@ -139,6 +166,7 @@ function createAskQueue(options = {}) {
   }
 
   function cleanupQueuedEntry(entry) {
+    if (entry.waitTimer) { clearTimer(entry.waitTimer); entry.waitTimer = null; }
     if (entry.signal && entry.onAbort) {
       entry.signal.removeEventListener('abort', entry.onAbort);
     }
@@ -166,6 +194,7 @@ function createAskQueue(options = {}) {
   function register(entry) {
     if (!applications.has(entry.applicationKey)) {
       applications.set(entry.applicationKey, []);
+      serviceLevels.set(entry.applicationKey, serviceLevels.size ? Math.min(...serviceLevels.values()) : 0);
       applicationOrder.splice(Math.max(0, applicationOrder.length - 1), 0, entry.applicationKey);
     }
     const visitors = applications.get(entry.applicationKey);
@@ -181,7 +210,9 @@ function createAskQueue(options = {}) {
     rescan: while (true) {
       const firstByLane = new Map();
       for (const entry of queue) if (entry.lane && !firstByLane.has(entry.lane)) firstByLane.set(entry.lane, entry);
-      for (const app of [...applicationOrder]) {
+      const ordered = [...applicationOrder];
+      if (scheduling.enabled) ordered.sort((a, b) => serviceLevels.get(a) - serviceLevels.get(b));
+      for (const app of ordered) {
         for (const visitor of applications.get(app)) {
           for (const entry of [...queue]) {
             if (entry.applicationKey !== app || entry.visitorKey !== visitor || activeLanes.has(entry.lane)
@@ -202,6 +233,7 @@ function createAskQueue(options = {}) {
       if (visitors.length) applications.set(app, visitors);
       else {
         applications.delete(app);
+        serviceLevels.delete(app);
         applicationOrder.splice(applicationOrder.indexOf(app), 1);
       }
     }
@@ -223,6 +255,7 @@ function createAskQueue(options = {}) {
     cleanupQueuedEntry(entry);
     activeRequests += 1;
     activeEntries.add(entry);
+    if (scheduling.enabled) serviceLevels.set(entry.applicationKey, serviceLevels.get(entry.applicationKey) + 1 / policyFor(entry.applicationKey).weight);
     if (entry.lane) activeLanes.add(entry.lane);
     rotate(applicationOrder, entry.applicationKey);
     rotate(applications.get(entry.applicationKey), entry.visitorKey);
@@ -249,6 +282,7 @@ function createAskQueue(options = {}) {
     setMaxConcurrent,
     updateLimits,
     stats,
+    applicationStats,
     wake: drain,
   };
 }

@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const { normalizeApplicationScheduling } = require('./application-scheduling');
 const { DEFAULTS: ELASTIC_DEFAULTS, normalizeElasticScheduling } = require('./elastic-account-scheduler');
 const path = require('node:path');
 const { parseShareUrl } = require('./shared-kb-target');
@@ -169,6 +170,11 @@ function normalizeAllowedOrigin(value) {
   return parsed.origin;
 }
 
+function parseApplicationScheduling(env) {
+  try { const raw = readEnv(env, 'IMA_QA_APPLICATION_SCHEDULING_JSON'); return normalizeApplicationScheduling(raw ? JSON.parse(raw) : {}); }
+  catch { throw new ConfigError('Invalid IMA_QA_APPLICATION_SCHEDULING_JSON'); }
+}
+
 function parseElasticScheduling(env) {
   const input = { enabled: parseBoolean(readEnv(env, 'IMA_QA_ELASTIC_ENABLED')) };
   for (const key of Object.keys(ELASTIC_DEFAULTS).filter(key => key !== 'enabled')) {
@@ -176,7 +182,11 @@ function parseElasticScheduling(env) {
     const raw = readEnv(env, name);
     if (raw) input[key] = Number(raw);
   }
-  try { return normalizeElasticScheduling(input); }
+  try {
+    const raw = readEnv(env, 'IMA_QA_ELASTIC_ACCOUNT_LIMITS_JSON');
+    input.accountLimits = raw ? JSON.parse(raw) : [];
+    return normalizeElasticScheduling(input);
+  }
   catch (error) { throw new ConfigError(error.message); }
 }
 
@@ -398,6 +408,7 @@ function getConfig(env = process.env) {
       healthDetails: parseEnum(readEnv(env, 'IMA_QA_HEALTH_DETAILS'), ['basic', 'auth', 'full'], DEFAULT_HEALTH_DETAILS),
     },
     concurrency: {
+      applicationScheduling: parseApplicationScheduling(env),
       maxConcurrentAsk:
         accountPoolCapacityMode === 'auto'
           ? DEFAULT_MAX_CONCURRENT_ASK

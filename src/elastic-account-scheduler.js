@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeAccountLimits, matchingLimit } = require('./elastic-validation');
 
 // This controller retains counters only. It never holds questions, credentials,
 // streams, or a second work queue, and never issues a probe/retry of its own.
@@ -11,6 +12,7 @@ const DEFAULTS = Object.freeze({
 
 function normalizeElasticScheduling(input = {}) {
   const value = { ...DEFAULTS, ...input };
+  value.accountLimits = Object.freeze(normalizeAccountLimits(input.accountLimits, value.maxPerAccount, value.initialConcurrent));
   if (typeof value.enabled !== 'boolean') throw new TypeError('elastic enabled must be boolean');
   const bounds = { initialConcurrent: [1, 20], maxPerAccount: [1, 20], maxGlobal: [1, 100],
     minStartSpacingMs: [1, 60000], maxStartSpacingMs: [1, 120000],
@@ -38,7 +40,7 @@ class ElasticAccountScheduler {
     for (const id of this.states.keys()) if (!ids.has(id)) this.states.delete(id);
     for (const account of accounts) {
       if (!this.states.has(account.id)) this.states.set(account.id, {
-        limit: this.config.initialConcurrent, spacingMs: this.config.minStartSpacingMs,
+        limit: this.initial(account), spacingMs: this.config.minStartSpacingMs,
         nextStartAt: 0, epoch: 0, successes: 0, failureStreak: 0,
         lastChangeAt: this.now(), demand: false, reason: 'initial',
       });
@@ -49,16 +51,24 @@ class ElasticAccountScheduler {
   markDemand(account) { this.state(account).demand = true; }
   reset(account) {
     const epoch = this.state(account).epoch + 1;
-    this.states.set(account.id, { limit: this.config.initialConcurrent, spacingMs: this.config.minStartSpacingMs,
+    this.states.set(account.id, { limit: this.initial(account), spacingMs: this.config.minStartSpacingMs,
       nextStartAt: 0, epoch, successes: 0, failureStreak: 0, lastChangeAt: this.now(), demand: false, reason: 'credentials_changed' });
   }
   state(account) { return this.states.get(account.id); }
-  capacity(account) { return this.state(account).limit; }
+  initial(account) {
+    return Math.max(1, ...this.config.accountLimits.filter(row => row.accountId === account.id
+      && row.principalFingerprint === account.principalFingerprint
+      && row.modelId === (account.client?.modelId ?? account.modelId)
+      && row.modelType === Number(account.client?.modelType ?? account.modelType)).map(row => row.initialConcurrent));
+  }
+  ceiling(account, descriptor) { return matchingLimit(account, descriptor || {}, this.config.accountLimits)?.validatedMaxConcurrent || 1; }
+  capacity(account, descriptor) { return Math.min(this.state(account).limit, this.ceiling(account, descriptor)); }
+  overallCapacity(account) { return this.state(account).limit; }
   canStart(account) { return this.state(account).nextStartAt <= this.now(); }
-  reserve(account) {
+  reserve(account, descriptor) {
     const state = this.state(account);
     state.nextStartAt = this.now() + state.spacingMs;
-    return { epoch: state.epoch, saturated: account.activeRequests >= state.limit };
+    return { epoch: state.epoch, saturated: account.activeRequests >= state.limit, validatedCeiling: this.ceiling(account, descriptor) };
   }
 
   success(account, ticket) {
@@ -68,7 +78,7 @@ class ElasticAccountScheduler {
     if (ticket.saturated) state.successes++;
     if (state.demand && state.successes >= this.config.successesToGrow
         && this.now() - state.lastChangeAt >= this.config.growthIntervalMs) {
-      state.limit = Math.min(this.config.maxPerAccount, state.limit + 1);
+      state.limit = Math.min(this.config.maxPerAccount, Math.max(state.limit, Math.min(ticket.validatedCeiling, state.limit + 1)));
       state.spacingMs = Math.max(this.config.minStartSpacingMs, Math.floor(state.spacingMs / 2));
       state.failureStreak = 0;
       state.successes = 0;
@@ -94,9 +104,9 @@ class ElasticAccountScheduler {
     state.reason = kind;
   }
 
-  snapshot(account) {
+  snapshot(account, descriptor) {
     const state = this.state(account);
-    return { effectiveMaxConcurrent: state.limit, ceiling: this.config.maxPerAccount,
+    return { effectiveMaxConcurrent: this.capacity(account, descriptor), validatedMaxConcurrent: this.ceiling(account, descriptor), ceiling: this.config.maxPerAccount,
       startSpacingMs: state.spacingMs, nextStartInMs: Math.max(0, state.nextStartAt - this.now()),
       reason: state.reason };
   }

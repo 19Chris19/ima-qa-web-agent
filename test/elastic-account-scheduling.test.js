@@ -6,6 +6,8 @@ const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
 const { createAskQueue } = require('../src/ask-queue');
 const { synchronizeProviderAQueueCapacity, providerAExecutionCapacity } = require('../src/provider-a-capacity');
 const { getConfig } = require('../src/config');
+const fingerprint = 'a'.repeat(64);
+const descriptor = { accountId: 'fixture', principalFingerprint: fingerprint, mode: 'classic_knowledge', modelId: 'fixture-model', modelType: 3 };
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function collect(stream) { const events = []; for await (const event of stream) events.push(event); return events; }
@@ -30,8 +32,8 @@ class Clock {
 }
 function harness(overrides = {}, count = 1) {
   const clock = new Clock(); const calls = []; const hold = gate();
-  const accounts = Array.from({ length: count }, (_, i) => ({ id: `fixture-${i}`, maxConcurrent: 1 }));
-  const pool = new IMAWebAgentPool({ accounts, elasticScheduling: { enabled: true, initialConcurrent: 5, ...overrides } }, {
+  const accounts = Array.from({ length: count }, (_, i) => ({ id: `fixture-${i}`, maxConcurrent: 1, principalFingerprint: fingerprint, modelId: 'fixture-model', modelType: 3 }));
+  const pool = new IMAWebAgentPool({ accounts, elasticScheduling: { enabled: true, initialConcurrent: 5, accountLimits: accounts.flatMap(account => ['classic_knowledge', 'knowledge_agent'].map(mode => ({ accountId: account.id, principalFingerprint: fingerprint, mode, modelId: 'fixture-model', modelType: 3, validatedMaxConcurrent: 20, initialConcurrent: overrides.initialConcurrent || 5 }))), ...overrides } }, {
     now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     clientFactory: account => ({ async *streamAsk(options) {
       calls.push({ account: account.id, session: options.sessionId, at: clock.now() });
@@ -113,15 +115,15 @@ test('a lower global cap applies even when there are more accounts and free per-
 });
 
 test('capacity grows only after healthy saturated demand, by one, to at most 20', () => {
-  let now = 0; const account = { id: 'fixture', activeRequests: 1 };
-  const scheduler = new ElasticAccountScheduler({ enabled: true, successesToGrow: 2, growthIntervalMs: 100 }, () => now);
+  let now = 0; const account = { id: 'fixture', activeRequests: 1, ...descriptor }; account.id = 'fixture';
+  const scheduler = new ElasticAccountScheduler({ enabled: true, successesToGrow: 2, growthIntervalMs: 100, accountLimits: [{ ...descriptor, initialConcurrent: 1, validatedMaxConcurrent: 20 }] }, () => now);
   scheduler.sync([account]); now = 100;
-  for (let i = 0; i < 10; i++) scheduler.success(account, scheduler.reserve(account));
-  assert.equal(scheduler.capacity(account), 1, 'serial success alone is not unmet demand');
+  for (let i = 0; i < 10; i++) scheduler.success(account, scheduler.reserve(account, descriptor));
+  assert.equal(scheduler.capacity(account, descriptor), 1, 'serial success alone is not unmet demand');
   for (let target = 2; target <= 21; target++) {
-    now += 100; account.activeRequests = scheduler.capacity(account); scheduler.markDemand(account);
-    scheduler.success(account, scheduler.reserve(account)); scheduler.success(account, scheduler.reserve(account));
-    assert.equal(scheduler.capacity(account), Math.min(20, target));
+    now += 100; account.activeRequests = scheduler.capacity(account, descriptor); scheduler.markDemand(account);
+    scheduler.success(account, scheduler.reserve(account, descriptor)); scheduler.success(account, scheduler.reserve(account, descriptor));
+    assert.equal(scheduler.capacity(account, descriptor), Math.min(20, target));
   }
 });
 

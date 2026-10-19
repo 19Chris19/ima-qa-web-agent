@@ -14,8 +14,8 @@ async function main() {
   for (let round = 0; round < rounds; round++) {
     let now = 1000, release;
     const hold = new Promise(resolve => { release = resolve; });
-    const pool = new IMAWebAgentPool({ accounts: Array.from({ length: 5 }, (_, i) => ({ id: `mock-${i}`, maxConcurrent: 20 })),
-      elasticScheduling: { enabled: elastic, initialConcurrent: 20 } }, {
+    const pool = new IMAWebAgentPool({ accounts: Array.from({ length: 5 }, (_, i) => ({ id: `mock-${i}`, maxConcurrent: 20, principalFingerprint: 'a'.repeat(64), modelId: 'mock-model', modelType: 3 })),
+      elasticScheduling: { enabled: elastic, initialConcurrent: 20, accountLimits: Array.from({ length: 5 }, (_, i) => ({ accountId: `mock-${i}`, principalFingerprint: 'a'.repeat(64), mode: 'classic_knowledge', modelId: 'mock-model', modelType: 3, initialConcurrent: 20, validatedMaxConcurrent: 20 })) } }, {
       now: () => now, onAccountStateChange: () => { writes++; },
       clientFactory: () => ({ async *streamAsk() {
         calls++; await hold;
