@@ -1,0 +1,104 @@
+{
+  "date": "2026-10-19",
+  "providerBase": "286653e5e08679d7534172c0188831c01310668d",
+  "websiteBase": "8e1f0016a2940e56674e584e231108cb1e599b8e",
+  "stage": "local synthetic acceptance; not released",
+  "node": "22.23.3",
+  "provider": {
+    "tests": 983,
+    "pass": 981,
+    "fail": 0,
+    "skipped": 2
+  },
+  "website": {
+    "tests": 372,
+    "pass": 371,
+    "fail": 0,
+    "skipped": 1
+  },
+  "pairedActualCodeTest": {
+    "passed": true,
+    "mockUpstream": true,
+    "namedApps": 2,
+    "maxConcurrentObserved": 3,
+    "websiteCap": 2,
+    "agentCap": 1,
+    "sameSessionBindingPreserved": true,
+    "queuedCancelNoDispatch": true,
+    "sseReconnectNoResubmit": true,
+    "bffRestartHistoryUnchanged": true,
+    "sameVisitorCrossApplicationDenied": true
+  },
+  "waitingDeadline": {
+    "httpFailedReceiptVerified": true,
+    "noUpstreamCall": true,
+    "originalAcceptanceTimeSurvivesRestore": true
+  },
+  "resource": {
+    "scope": "one observation pair; scheduler-only with virtual clock; not whole-service performance",
+    "baseline": {
+      "scope": "offline scheduler-only; virtual start clock; not IMA or full-service performance",
+      "node": "v22.23.3",
+      "elastic": false,
+      "rounds": 30,
+      "tasks": 3000,
+      "maxActive": 100,
+      "simulatedStateNotifications": 9150,
+      "roundP95Ms": 4.6094170000000005,
+      "extraPeakRSSMiB": 9.171875,
+      "extraPeakHeapMiB": 0.8923416137695312,
+      "retainedHeapDeltaMiB": 0.31601715087890625,
+      "cpuUserMs": 323.61,
+      "cpuSystemMs": 19.535,
+      "realRequests": 0,
+      "productionChanged": false
+    },
+    "candidate": {
+      "scope": "offline scheduler-only; virtual start clock; not IMA or full-service performance",
+      "node": "v22.23.3",
+      "elastic": true,
+      "rounds": 30,
+      "tasks": 3000,
+      "maxActive": 100,
+      "simulatedStateNotifications": 9150,
+      "roundP95Ms": 6.90787499999999,
+      "extraPeakRSSMiB": 10.1875,
+      "extraPeakHeapMiB": 1.1560134887695312,
+      "retainedHeapDeltaMiB": 0.374786376953125,
+      "cpuUserMs": 390.847,
+      "cpuSystemMs": 26.411,
+      "realRequests": 0,
+      "productionChanged": false
+    },
+    "observedAdditionalPeakRSSMiB": 1.015625,
+    "stateNotificationsUnchanged": true
+  },
+  "packaging": {
+    "providerNewModulesIncluded": true,
+    "websiteBuild": true,
+    "websiteAssetBudgets": true,
+    "websiteReleasePrivacyCheck": true,
+    "dockerSourceLayoutOnly": true,
+    "containerImagesBuilt": false
+  },
+  "livePostcheck": {
+    "localReady": true,
+    "onlineReady": true,
+    "capacity": 5,
+    "active": 0,
+    "queued": 0
+  },
+  "productionChanged": false,
+  "realIMARequests": 0,
+  "accountCredentialsHistoryOrAirModified": false,
+  "newProductionAcceptanceGrants": 0,
+  "prCreated": false,
+  "remainingAcceptance": [
+    "real single-account five-session Provider/BFF chain",
+    "per-account/mode validation",
+    "20 per account and 100 real global concurrency",
+    "sustained full-service resource measurement",
+    "two 365-second clock tests not rerun",
+    "container image and mobile browser acceptance not run"
+  ]
+}
