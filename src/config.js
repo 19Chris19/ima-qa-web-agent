@@ -185,6 +185,8 @@ function parseElasticScheduling(env) {
   try {
     const raw = readEnv(env, 'IMA_QA_ELASTIC_ACCOUNT_LIMITS_JSON');
     input.accountLimits = raw ? JSON.parse(raw) : [];
+    const trials = readEnv(env, 'IMA_QA_ELASTIC_TRIAL_LIMITS_JSON');
+    input.trialLimits = trials ? JSON.parse(trials) : [];
     return normalizeElasticScheduling(input);
   }
   catch (error) { throw new ConfigError(error.message); }

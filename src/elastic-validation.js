@@ -3,6 +3,8 @@
 const MODES = new Set(['classic_knowledge', 'knowledge_agent', 'ima_agent', 'ima_agent_auto']);
 const fields = ['accountId', 'principalFingerprint', 'mode', 'modelId', 'modelType', 'initialConcurrent', 'validatedMaxConcurrent'];
 const invalid = () => new TypeError('Invalid elastic account validation limits');
+const validFingerprint = value => typeof value === 'string' && (/^[a-f0-9]{64}$/u.test(value)
+  || (/^[A-Za-z0-9_-]{43}$/u.test(value) && Buffer.from(value, 'base64url').toString('base64url') === value));
 
 function normalizeAccountLimits(value = [], maxPerAccount = 20, initialConcurrent = 1) {
   if (!Array.isArray(value) || value.length > 256) throw invalid();
@@ -11,7 +13,7 @@ function normalizeAccountLimits(value = [], maxPerAccount = 20, initialConcurren
     const row = input && { ...input, initialConcurrent: input.initialConcurrent ?? Math.min(initialConcurrent, input.validatedMaxConcurrent) };
     if (!row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).some(key => !fields.includes(key))
         || typeof row.accountId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(row.accountId)
-        || !/^[a-f0-9]{64}$/u.test(row.principalFingerprint || '') || !MODES.has(row.mode)
+        || !validFingerprint(row.principalFingerprint) || !MODES.has(row.mode)
         || typeof row.modelId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(row.modelId)
         || !Number.isSafeInteger(row.modelType) || row.modelType < 0 || row.modelType > 100
         || !Number.isSafeInteger(row.validatedMaxConcurrent) || row.validatedMaxConcurrent < 1 || row.validatedMaxConcurrent > maxPerAccount
@@ -38,4 +40,21 @@ function matchingLimit(account, descriptor, limits) {
   return limits.find(row => row.accountId === account.id && fields.slice(1, 5).every(key => row[key] === descriptor[key]));
 }
 
-module.exports = { normalizeAccountLimits, accountDescriptor, matchingLimit };
+// Operator-approved trials are deliberately separate from acceptance evidence.
+// Trial scope is exact and capped at five; it never creates a validated grant.
+function normalizeTrialLimits(value = [], maxPerAccount = 20, initialConcurrent = 1) {
+  const allowed = [...fields.slice(0, 5), 'maxConcurrent', 'initialConcurrent'];
+  if (!Array.isArray(value) || value.length > 256) throw invalid();
+  const rows = value.map(row => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)
+        || Object.keys(row).some(key => !allowed.includes(key))) throw invalid();
+    const { maxConcurrent, ...rest } = row;
+    return { ...rest, validatedMaxConcurrent: maxConcurrent };
+  });
+  return normalizeAccountLimits(rows, Math.min(5, maxPerAccount), initialConcurrent).map(row => {
+    const { validatedMaxConcurrent, ...rest } = row;
+    return Object.freeze({ ...rest, maxConcurrent: validatedMaxConcurrent });
+  });
+}
+
+module.exports = { normalizeAccountLimits, normalizeTrialLimits, accountDescriptor, matchingLimit };

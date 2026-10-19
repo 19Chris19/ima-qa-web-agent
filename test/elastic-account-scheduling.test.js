@@ -77,6 +77,50 @@ test('one account has five distinct live sessions with paced starts and one wake
   assert.equal(h.pool.stats().activeRequests, 0); assert.equal(h.clock.timers.size, 0);
 });
 
+test('explicit trial runs five paced sessions without claiming acceptance or leaking to other scopes', async () => {
+  const account = { id: 'trial', principalFingerprint: fingerprint, modelId: 'fixture-model', modelType: 3 };
+  const row = { accountId: account.id, principalFingerprint: fingerprint, mode: 'knowledge_agent', modelId: 'fixture-model', modelType: 3, maxConcurrent: 5, initialConcurrent: 5 };
+  const clock = new Clock(), calls = [], hold = gate();
+  const pool = new IMAWebAgentPool({ accounts: [account], elasticScheduling: { enabled: true, maxPerAccount: 5, maxGlobal: 25, trialLimits: [row] } }, {
+    now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    clientFactory: () => ({ async *streamAsk(options) { calls.push({ at: clock.now(), session: options.sessionId }); yield { type: 'delta', text: 'fixture' }; await hold.promise; yield { type: 'done' }; } }),
+  });
+  const work = [];
+  for (let i = 0; i < 5; i++) work.push(collect(pool.streamAsk({ mode: 'knowledge_agent', sessionId: `trial-${i}` })));
+  await tick(); for (let i = 1; i < 5; i++) await clock.advance(3000);
+  assert.equal(pool.accounts[0].activeRequests, 5);
+  assert.deepEqual(calls.map(row => row.at), [1000, 4000, 7000, 10000, 13000]);
+  const state = pool.elastic.snapshot(pool.accounts[0], { ...row });
+  assert.equal(state.limitBasis, 'operator_trial'); assert.equal(state.configuredMaxConcurrent, 5);
+  assert.equal(state.validatedMaxConcurrent, 1); assert.equal(pool.elastic.config.accountLimits.length, 0);
+  assert.equal(pool.accountCapacity(pool.accounts[0], { mode: 'classic_knowledge' }), 1);
+  pool.elastic.congestion(pool.accounts[0]); assert.equal(pool.accountCapacity(pool.accounts[0], { mode: 'knowledge_agent' }), 2);
+  assert.equal(pool.elastic.canStart(pool.accounts[0]), false);
+  hold.resolve(); await Promise.all(work); pool.closeScheduling(); assert.equal(clock.timers.size, 0);
+  const scheduler = new ElasticAccountScheduler({ enabled: true, trialLimits: [row] }); scheduler.sync([account]);
+  assert.equal(scheduler.ceiling(account, { ...row, modelId: 'changed-model' }), 1);
+  assert.equal(scheduler.ceiling(account, { ...row, principalFingerprint: 'b'.repeat(64) }), 1);
+  assert.equal(scheduler.ceiling({ ...account, id: 'other' }, row), 1);
+  assert.throws(() => normalizeElasticScheduling({ trialLimits: [{ ...row, maxConcurrent: 6 }] }));
+  assert.throws(() => normalizeElasticScheduling({ trialLimits: [{ ...row, validatedMaxConcurrent: 5 }] }));
+  assert.throws(() => normalizeElasticScheduling({ trialLimits: [row], accountLimits: [{ ...descriptor, accountId: 'trial', mode: 'knowledge_agent', validatedMaxConcurrent: 5 }] }));
+  assert.equal(getConfig({ IMA_QA_PROVIDER: 'ima-web-agent', IMA_WEB_AGENT_SHARED_KNOWLEDGE_BASE_ID: '123',
+    IMA_QA_ELASTIC_TRIAL_LIMITS_JSON: JSON.stringify([row]) }).webAgent.elasticScheduling.trialLimits[0].maxConcurrent, 5);
+});
+
+test('existing account-store base64url principal fingerprints match exactly without rewriting identity', () => {
+  const { createHmac } = require('node:crypto');
+  const principalFingerprint = createHmac('sha256', 'synthetic-only-key').update('synthetic-only-principal').digest('base64url');
+  const row = { ...descriptor, principalFingerprint, maxConcurrent: 5, initialConcurrent: 5 };
+  const scheduler = new ElasticAccountScheduler({ enabled: true, trialLimits: [row] });
+  const account = { id: descriptor.accountId, principalFingerprint, modelId: descriptor.modelId, modelType: descriptor.modelType };
+  scheduler.sync([account]); assert.equal(scheduler.ceiling(account, row), 5);
+  assert.equal(scheduler.config.trialLimits[0].principalFingerprint, principalFingerprint);
+  assert.equal(scheduler.ceiling(account, { ...row, principalFingerprint: principalFingerprint.toLowerCase() }), 1);
+  assert.throws(() => normalizeElasticScheduling({ trialLimits: [{ ...row, principalFingerprint: 'a'.repeat(43) }] }));
+  assert.throws(() => normalizeElasticScheduling({ trialLimits: [{ ...row, principalFingerprint: principalFingerprint + '=' }] }));
+});
+
 test('one session is serialized by the pool, another can execute concurrently', async () => {
   const h = harness();
   const one = collect(h.pool.streamAsk({ accountId: 'fixture-0', sessionId: 'same' }));
