@@ -124,3 +124,7 @@ npm test
 ```
 
 公开仓库仅交付源码、模板与合成资产；`.env`、`runtime/`、账号密钥、cookie、浏览器 profile 和真实历史始终保持私有。并发演练和真实问答探针会调用 IMA，须事先取得授权，不用于健康轮询。
+
+## Agent 接入（CLI / MCP / Codex Skill）
+
+使用 [Agent 接入指南](docs/AGENT_INTEGRATION.md) 配置独立客户端。`setup --agent codex` 注册 MCP 并安装唯一的 **ima 知识库助手** Skill；保留任务恢复、精确引用与私有导出流程。客户端尚未正式发布，验收范围见指南。

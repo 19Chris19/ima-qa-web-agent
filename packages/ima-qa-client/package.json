@@ -1,0 +1,29 @@
+{
+  "name": "ima-qa-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CLI, STDIO MCP and a single Codex skill for IMA QA Web Agent",
+  "license": "MIT",
+  "bin": {
+    "ima-qa": "bin/ima-qa.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "README.md",
+    "npm-shrinkwrap.json"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "dotenv": "16.6.1",
+    "zod": "^3.25.76"
+  }
+}
