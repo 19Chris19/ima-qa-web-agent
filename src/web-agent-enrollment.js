@@ -71,10 +71,18 @@ class WebAgentEnrollmentManager {
       throw enrollmentError('已有一个账号接入任务进行中，请先完成或取消它', 409);
     }
 
+    const matchExistingAccount = options.matchExistingAccount === true;
+    const reactivateMatchedAccount = options.reactivateMatchedAccount === true;
+    if (matchExistingAccount && (options.reauthAccountId || options.replace)) {
+      throw enrollmentError('自动匹配已有账号不能同时指定账号或替换选项', 400);
+    }
+    if (reactivateMatchedAccount && (!matchExistingAccount || options.confirmQualification !== true || options.authorizedRequestCount !== 1)) {
+      throw enrollmentError('恢复已停用账号需要明确授权一次资格验证', 400);
+    }
     const reauthAccount = options.reauthAccountId ? this.accountDirectory.getAccount(options.reauthAccountId) : null;
     if (options.reauthAccountId && !reauthAccount) throw enrollmentError('需要重新登录的账号不存在', 404);
-    const name = reauthAccount ? reauthAccount.name : cleanAccountName(options.name);
-    const id = reauthAccount ? reauthAccount.id : normalizeAccountId(options.id || name);
+    const name = matchExistingAccount ? '账号池扫码恢复' : reauthAccount ? reauthAccount.name : cleanAccountName(options.name);
+    const id = matchExistingAccount ? '' : reauthAccount ? reauthAccount.id : normalizeAccountId(options.id || name);
     const knowledgeBaseId = String(
       options.knowledgeBaseId || this.config.webAgent?.sharedKnowledgeBaseId || '',
     ).trim();
@@ -83,7 +91,7 @@ class WebAgentEnrollmentManager {
     }
     const shareUrl = this.config.webAgent?.sharedKnowledgeBaseShareUrl
       ? parseShareUrl(this.config.webAgent.sharedKnowledgeBaseShareUrl).url : '';
-    const existing = this.accountDirectory.listAccounts().find((account) =>
+    const existing = !matchExistingAccount && this.accountDirectory.listAccounts().find((account) =>
       normalizeAccountId(account.id) === id || normalizeAccountId(account.name) === normalizeAccountId(name),
     );
     if (existing && !options.replace && !reauthAccount) {
@@ -104,6 +112,8 @@ class WebAgentEnrollmentManager {
       authorizationStatus: shareUrl ? 'pending' : 'legacy_session_check',
       replace: Boolean(options.replace),
       reauthAccountId: reauthAccount?.id || '',
+      matchExistingAccount,
+      reactivateMatchedAccount,
       state: 'launching_browser',
       createdAt: this.now(),
       updatedAt: this.now(),
@@ -180,6 +190,7 @@ class WebAgentEnrollmentManager {
     if (!job || job.state !== 'identity_conflict' || !job.pendingAuth) {
       throw enrollmentError('当前任务没有待处理的身份冲突', 409);
     }
+    if (job.matchExistingAccount) throw enrollmentError('已有账号恢复未能唯一匹配，不能在此新增账号', 409);
     if (options.action !== 'add') throw enrollmentError('仅支持明确新增账号', 400);
     const name = cleanAccountName(options.name);
     job.continuing = true;
@@ -227,12 +238,40 @@ class WebAgentEnrollmentManager {
   }
 
   async _stageIdentityConflict(job, auth) {
-    if (job.reauthAccountId && !job.addIdentity &&
-        await this.accountDirectory.classifyCapturedIdentity(job.reauthAccountId, auth.headers) === 'distinct') {
-      job.pendingAuth = { ...auth, headers: { ...auth.headers } };
-      job.qr = null;
-      this._setState(job, 'identity_conflict', '扫码身份与原账号不同；原账号保持不变。可命名新增账号或取消。');
-      return true;
+    if (job.matchExistingAccount && !job.reauthAccountId && !job.addIdentity) {
+      const match = await this.accountDirectory.matchCapturedIdentity(auth.headers);
+      if (!await this._checkPending(job)) return true;
+      const existing = match.status === 'matched' ? this.accountDirectory.getAccount(match.accountId) : null;
+      if (!existing || existing.knowledgeBaseId !== job.knowledgeBaseId) {
+        job.pendingAuth = { ...auth, headers: { ...auth.headers } };
+        job.qr = null;
+        job.identityConflictActions = ['cancel'];
+        this._setState(job, 'identity_conflict', match.status === 'not_found'
+          ? '未匹配到已有账号，未修改账号池。请取消并核对。'
+          : '无法唯一确认已有账号及知识库范围，未修改账号池。请取消并核对。');
+        return true;
+      }
+      if (existing.runtime?.disabled && !['auth_failed', 'knowledge_base_unavailable', 'pending_enrollment_qualification',
+        'migration_verification_required'].includes(existing.runtime.disabledReason) && !job.reactivateMatchedAccount) {
+        job.pendingAuth = { ...auth, headers: { ...auth.headers } };
+        job.qr = null;
+        job.identityConflictActions = ['cancel'];
+        this._setState(job, 'identity_conflict', '匹配到的账号此前已停用，需明确授权恢复；尚未修改账号池。');
+        return true;
+      }
+      job.reauthAccountId = existing.id;
+      job.accountId = existing.id;
+      job.name = existing.name;
+    }
+    if (job.reauthAccountId && !job.addIdentity) {
+      const identity = await this.accountDirectory.classifyCapturedIdentity(job.reauthAccountId, auth.headers);
+      if (!await this._checkPending(job)) return true;
+      if (identity === 'distinct') {
+        job.pendingAuth = { ...auth, headers: { ...auth.headers } };
+        job.qr = null;
+        this._setState(job, 'identity_conflict', '扫码身份与原账号不同；原账号保持不变。可命名新增账号或取消。');
+        return true;
+      }
     }
     return false;
   }
@@ -241,16 +280,19 @@ class WebAgentEnrollmentManager {
     if (!await this._checkPending(job)) return;
     if (await this._stageIdentityConflict(job, auth)) return;
     this._setState(job, 'verifying', '知识库授权通过，正在检查会话能力');
+    const reauth = job.reauthAccountId && this.accountDirectory.getAccount(job.reauthAccountId);
+    const modelId = (job.matchExistingAccount && reauth?.modelId) || this.config.webAgent?.modelId || 'official_3';
+    const modelType = (job.matchExistingAccount && reauth?.modelType) || this.config.webAgent?.modelType || 3;
     const client = this.clientFactory({ id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
-      headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3 });
+      headers: auth.headers, modelId, modelType });
     await client.initSession({ signal: job.loginController.signal });
     if (!await this._checkPending(job) || job.state !== 'verifying') return;
     const capturedAccount = { id: job.accountId, name: job.name, knowledgeBaseId: job.knowledgeBaseId,
-      headers: auth.headers, modelId: this.config.webAgent?.modelId || 'official_3', modelType: this.config.webAgent?.modelType || 3,
+      headers: auth.headers, modelId, modelType,
       tokenExpiresAt: auth.tokenExpiresAt, refreshTokenExpiresAt: auth.refreshTokenExpiresAt,
       requireQualification: true,
-      source: 'admin-qr-enrollment', replace: job.replace };
-    const reauth = job.reauthAccountId && this.accountDirectory.getAccount(job.reauthAccountId);
+      source: 'admin-qr-enrollment', replace: job.replace,
+      prepareExplicitReactivation: job.matchExistingAccount && job.reactivateMatchedAccount };
     const target = !job.addIdentity && resolveAccountWriteTarget(this.accountDirectory.listAccounts(), {
       ...capturedAccount, ...(reauth ? { id: reauth.id, name: reauth.name } : {}),
     });
@@ -1478,11 +1520,11 @@ function publicJob(job, now = Date.now()) {
   return {
     taskId: job.id,
     name: job.name,
-    mode: job.reauthAccountId ? 'reauth' : 'enroll',
+    mode: job.reauthAccountId || job.matchExistingAccount ? 'reauth' : 'enroll',
     authorizationStatus: job.authorizationStatus,
     shareUrl: job.shareUrl || null,
     canContinue: ['waiting_for_membership', 'access_unverified'].includes(job.state) && !job.continuing,
-    identityConflict: job.state === 'identity_conflict' ? { actions: ['add', 'cancel'] } : null,
+    identityConflict: job.state === 'identity_conflict' ? { actions: job.identityConflictActions || ['add', 'cancel'] } : null,
     state: job.state,
     commitApplied: job.commitApplied === true,
     warning: safeEnrollmentWarning(job.warning),

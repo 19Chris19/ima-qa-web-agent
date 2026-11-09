@@ -14,6 +14,7 @@ RUN npm ci --omit=dev
 
 COPY public ./public
 COPY src ./src
+COPY vendor ./vendor
 COPY scripts ./scripts
 COPY eval/questions.jsonl ./eval/questions.jsonl
 COPY provider-a-server.js ./

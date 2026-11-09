@@ -47,6 +47,7 @@ async function page(t, options = {}) {
     url = parsed.pathname + (parsed.searchParams.size ? '?' + parsed.searchParams : '');
     const custom = await options.intercept?.(url, init, records);
     if (custom) return custom;
+    if (url.startsWith('/api/chat-capabilities')) return Response.json({enabled:false,models:[]});
     if (url === '/healthz') return Response.json({ provider: options.provider || 'ima-web-agent', model: 'synthetic' });
     if (url === '/api/capabilities') return Response.json({ features: { durable_qa_tasks_v1: options.capability !== false } });
     if (url.startsWith('/api/conversations?')) return Response.json({ conversations: [
@@ -102,7 +103,7 @@ async function page(t, options = {}) {
     if (!sequence) record.events.push(item);
     streams.get(id)?.enqueue(new TextEncoder().encode(`id: ${item.id}\r\nevent: ${event}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`));
   }
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', ...(options.presentation ? ['chat-presentation.js'] : []), 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', ...(options.presentation ? ['chat-presentation.js'] : []), 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'model-picker.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
     if (file === 'answer-renderer.js') {
       const render = w.ImaAnswerRenderer.updateAnswerElement;

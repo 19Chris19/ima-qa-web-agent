@@ -1,0 +1,15 @@
+(function(){
+ const panel=document.querySelector('#adminPanel');if(!panel)return;
+ const section=document.createElement('section');section.className='admin-card';section.hidden=true;
+ const title=document.createElement('h2');title.textContent='问答模型设置';const description=document.createElement('p');description.textContent='指定新会话的默认模型与允许使用的模型；默认使用快速模式。';
+ const refresh=document.createElement('button');refresh.type='button';refresh.textContent='核对模型目录';const content=document.createElement('div');const feedback=document.createElement('p');feedback.setAttribute('role','status');section.append(title,description,refresh,content,feedback);panel.append(section);
+ async function api(method='GET',body){const token=sessionStorage.getItem('ima-qa-admin-token')||'';const r=await fetch('/api/admin/model-policy'+(method==='POST'?'/refresh':''),{method,headers:{...(token?{'X-IMA-Admin-Token':token}:{}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});if(!r.ok)throw Error();return r.json();}
+ function render(data){section.hidden=!data.enabled;if(!data.enabled)return;content.replaceChildren();const models=new Map();for(const a of data.accounts||[])for(const m of a.models||[])models.set(m.modelRef,m);
+  const form=document.createElement('form');const select=document.createElement('select');select.setAttribute('aria-label','默认模型');const empty=document.createElement('option');empty.value='';empty.textContent='请选择默认模型';select.append(empty);
+  for(const m of models.values()){const o=document.createElement('option');o.value=m.modelRef;o.textContent=m.name;select.append(o);const label=document.createElement('label');label.style.display='block';const input=document.createElement('input');input.type='checkbox';input.value=m.modelRef;input.checked=data.policy.allowedModelRefs.includes(m.modelRef);label.append(input,document.createTextNode(m.name));form.append(label);}
+  select.value=data.policy.defaultModelRef;form.prepend(select);const save=document.createElement('button');save.type='submit';save.textContent='保存模型设置';form.append(save);form.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{await api('PUT',{defaultModelRef:select.value,allowedModelRefs:[...form.querySelectorAll('input:checked')].map(i=>i.value)});feedback.textContent='已保存。影响新提交，不改写已有回答。';}catch{feedback.textContent='未保存，请核对目录与选择。';}finally{save.disabled=false;}});content.append(form);
+  const status=document.createElement('p');status.textContent=`账号设备上下文就绪：${(data.accounts||[]).filter(a=>a.contextReady).length}/${data.accounts?.length||0}。缺少上下文的账号继续使用旧内核。`;content.append(status);
+ }
+ refresh.addEventListener('click',async()=>{refresh.disabled=true;try{render(await api('POST'));feedback.textContent='目录核对完成';}catch{feedback.textContent='目录暂不可用；当前设置保持不变';}finally{refresh.disabled=false;}});
+ const observer=new MutationObserver(()=>{if(!panel.hidden){observer.disconnect();void api().then(render).catch(()=>{});}});observer.observe(panel,{attributes:true,attributeFilter:['hidden']});if(!panel.hidden){observer.disconnect();void api().then(render).catch(()=>{});}
+})();

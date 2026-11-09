@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/19Chris19/IMApy",
+  "commit": "6b700a924da3911ff869252e7031d7b156cee7a0",
+  "version": "0.1.0-alpha.2",
+  "files": {
+    "LICENSE": "f53488aa11b5f4280a250af9d89786a0eadb9327d3f6a03d8233eb31e9def9e2",
+    "README.md": "d522b6ed4ae2702684d79a8a17093e3dea0c0738b6b8c6e351b1b3d8080c5ba9",
+    "extraction-baseline.json": "1ab43b63cb63671919765d239ae8b3c43459616c0a6c3307cd1bb0df14549c33",
+    "index.js": "9a04bf2778f3e0b438599ffe3aaf350553b404f8f4bc3d45ddf9a5a17c0175de",
+    "package.json": "0b92868b5abee175d67721ca1d936a56607eec6fb977f59dc9db38e5f7c6ded1",
+    "src/auth-refresh.js": "5499969e39cbec53a0481d4b91d916058e9072b5df6757ade80d811175b9db6c",
+    "src/chat-presentation.js": "c2a8b6713a26da03c2891867d20ac09f8fd7c2e88c23f5195580434a4b639ecd",
+    "src/general-session-checkpoint.js": "51cb0dafce05f2b95c92c7ff9dea7275faeaab0b9e9b69ef141d7630af7fca7e",
+    "src/ima-answer-profile.js": "2c50ee51585661896040469522e24e4e3d6bad13bc969bc5eac5c21568c18ee9",
+    "src/ima-knowledge-agent-contract.js": "b1ccab78493b13faff0a3e9b2d7ee37c98410f3225bc958ce36a7158b4a6d4cb",
+    "src/ima-upstream-protocol.js": "730677e5628b0231c44c086da68b24902f96a183b45babb982220e4a0ac264db",
+    "src/ima-web-protocol-client.js": "63e397af4cd5b52a6fb38720e42cd04c57f73a587edf4e851434229beb544f4c",
+    "src/knowledge-evidence.js": "4ff349e69ee7d4ae12c3fe5012868e2e89eac91f46f758d323a8bd7690a97608",
+    "src/material-web-access.js": "619ce61d17c59108a63ee4663d43a9fba063dfcb3bb9ed7c3eb92cf6ee092018",
+    "src/node-http-transport.js": "b9da79ad0e77a62a6482a07f7a3a2c84701764075e340859064e47ec513edfe8",
+    "src/operation-deadline.js": "37a1a05d005188198cb9fde7fd3cccd273ab37f77ee9e4b97ae9df1792d31d76",
+    "src/refresh-diagnostics.js": "992c3adaad94d474a1df12a828bfeacda0f5991e0d6ef6d3afdf2cadafa3e366",
+    "src/scoped-agent-checkpoint.js": "51742d596ffe6ae71d287af5f482a300f8bafb441f7fc58dd8cb12a15416e7b6",
+    "src/session-checkpoint.js": "56be8be82cdcf22c836c80a6bdf8842ad4c8b05fdc34813fce0b6f28007caddb",
+    "src/source-evidence-contract.js": "83aa2976c4884bacc7509ae4df5cfab59ea69d01b6d78c84443784097e9a6796",
+    "src/task-result-contract.js": "e293c157ac62f8cc5783dbb3adda5f057328d2d3be24501ecda8a40bd60398b1",
+    "src/upload-contract.mjs": "cd2b9828c0f3dd41a31398758e3a6ee56c625c6655c1a6162a30439db26f8f55",
+    "src/web-login-context.js": "c55fab320a59b7c689861690949588872a216ee3b4cb4520d7c667587e95021c"
+  }
+}

@@ -1134,6 +1134,8 @@ body[data-mode="admin"] :focus-visible { outline: 3px solid #167c80; outline-off
 .admin-identity-conflict h3 { margin: 0; font-size: 15px; }
 .admin-identity-conflict input, .admin-identity-conflict button { min-height: 40px; min-width: 0; font: inherit; }
 .admin-add-account, #upgradeWebMode { padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; cursor: pointer; }
+.admin-account-heading-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.admin-enrollment-form [hidden], #identityConflictAddControls[hidden] { display: none !important; }
 @media (max-width: 680px) {
   .admin-account-details { grid-template-columns: 1fr; }
   .admin-account-actions { justify-content: flex-start; max-width: none; }

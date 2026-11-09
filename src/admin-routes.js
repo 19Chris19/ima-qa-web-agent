@@ -220,6 +220,10 @@ function registerAdminRoutes(app, options = {}) {
           name: req.body?.name,
           id: req.body?.id,
           reauthAccountId: req.body?.reauthAccountId,
+          ...(req.body?.matchExistingAccount === true ? { matchExistingAccount: true,
+            reactivateMatchedAccount: req.body?.reactivateMatchedAccount === true,
+            confirmQualification: req.body?.confirmQualification === true,
+            authorizedRequestCount: req.body?.authorizedRequestCount } : {}),
           replace: Boolean(req.body?.replace),
           testQuestion: req.body?.testQuestion,
         });

@@ -200,7 +200,7 @@ async function command(message) {
       }
       directory = new Directory(options); directory.load();
       if (method === 'reconcile' && result.outcome === 'committed') await applyEffects(directory, args[0].effects || []);
-    } else if (method === 'classifyCapturedIdentity') result = directory.classifyCapturedIdentity(...args);
+    } else if (method === 'classifyCapturedIdentity' || method === 'matchCapturedIdentity') result = directory[method](...args);
     else if (method === 'saveStats') {
       mergeStats();
       for (const row of args[0]) {

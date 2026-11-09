@@ -79,6 +79,7 @@
   let exercisePollTimer = null;
   const accountActionsInFlight = new Set();
   let reauthAccountId = '';
+  let matchExistingAccount = false;
   const accountActionFeedback = new Map();
   const identityConflict = document.querySelector('#enrollmentIdentityConflict');
   const addConflictIdentityButton = document.querySelector('#addConflictIdentityButton');
@@ -113,6 +114,7 @@
   reloadButton.addEventListener('click', () => loadAdminState());
   startEnrollmentButton.addEventListener('click', openEnrollmentDialog);
   document.querySelector('#addAccountButton').addEventListener('click', openEnrollmentDialog);
+  document.querySelector('#restoreAnyAccountButton').addEventListener('click', restoreAnyAccount);
   closeEnrollmentButton.addEventListener('click', () => void closeEnrollmentDialog());
   enrollmentForm.addEventListener('submit', startEnrollment);
   focusEnrollmentWindowButton.addEventListener('click', focusEnrollmentWindow);
@@ -279,6 +281,10 @@
           name: cleanAccountName(enrollmentName.value),
           replace: replaceEnrollment.checked,
           reauthAccountId,
+          matchExistingAccount,
+          reactivateMatchedAccount: matchExistingAccount && document.querySelector('#reactivateMatchedAccount').checked,
+          confirmQualification: matchExistingAccount && document.querySelector('#reactivateMatchedAccount').checked,
+          authorizedRequestCount: matchExistingAccount && document.querySelector('#reactivateMatchedAccount').checked ? 1 : undefined,
           testQuestion: document.querySelector('#enrollmentTestQuestion')?.value,
         }),
       });
@@ -354,6 +360,13 @@
     const useVisibleBrowser = active && browserWindowAvailable;
     enrollmentState.textContent = enrollmentStateLabel(enrollment.state);
     identityConflict.hidden = enrollment.state !== 'identity_conflict';
+    const conflictActions = enrollment.identityConflict?.actions;
+    const canAddIdentity = !Array.isArray(conflictActions) || conflictActions.includes('add');
+    document.querySelector('#identityConflictAddControls').hidden = !canAddIdentity;
+    document.querySelector('#identityConflictTitle').textContent = canAddIdentity ? '扫码身份与原账号不一致' : '未能确认已有账号';
+    document.querySelector('#identityConflictDescription').textContent = canAddIdentity
+      ? '原账号身份保持不变。可将本次扫码身份接入为新账号，或取消本次接入。'
+      : '未修改账号池，请取消并核对账号后再处理。';
     enrollmentStatusText.textContent = enrollmentStatus(enrollment);
     cancelEnrollmentButton.hidden = !active;
     continueEnrollmentButton.hidden = !enrollment.canContinue || enrollment.state === 'identity_conflict';
@@ -477,7 +490,14 @@
     identityConflict.hidden = true;
     document.querySelector('#identityConflictName').value = '';
     reauthAccountId = '';
+    matchExistingAccount = false;
     enrollmentName.disabled = false;
+    enrollmentName.hidden = false;
+    document.querySelector('#enrollmentNameLabel').hidden = false;
+    document.querySelector('#replaceEnrollmentRow').hidden = false;
+    document.querySelector('#reactivateMatchedRow').hidden = true;
+    document.querySelector('#enrollmentDialogTitle').textContent = '接入 IMA 账号';
+    document.querySelector('#enrollmentDialogDescription').textContent = '将打开独立 IMA 登录窗口，不使用本机微信快捷登录';
     enrollmentForm.hidden = false;
     enrollmentProgress.hidden = true;
     enrollmentQr.removeAttribute('src');
@@ -1367,6 +1387,20 @@
 
   function maintenanceLabel(state) {
     return ({ unobserved: '尚无维护记录', idle: '等待巡检', ready: '维护就绪', checking: '检查中', refreshing: '续期中', retrying: '重试中', retry_wait: '等待重试', cooling: '冷却中', needs_login: '需人工登录', disabled: '已停用', scheduled: '已安排', unknown: '状态未知' })[state] || '状态未知';
+  }
+
+  function restoreAnyAccount() {
+    openEnrollmentDialog();
+    if (enrollment || !enrollmentDialog.open) return;
+    matchExistingAccount = true;
+    enrollmentName.disabled = true;
+    enrollmentName.hidden = true;
+    document.querySelector('#enrollmentNameLabel').hidden = true;
+    document.querySelector('#replaceEnrollmentRow').hidden = true;
+    document.querySelector('#reactivateMatchedRow').hidden = false;
+    document.querySelector('#enrollmentDialogTitle').textContent = '扫码恢复已有账号';
+    document.querySelector('#enrollmentDialogDescription').textContent = '扫码后自动识别账号池中的对应账号；无法确认时不会修改账号';
+    document.querySelector('#enrollmentTestQuestion').focus();
   }
 
   function reauthenticate(account) {

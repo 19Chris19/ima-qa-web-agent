@@ -1,5 +1,7 @@
 const chat = require('./chat-presentation');
 const crypto = require('node:crypto');
+const { ImapyKernel } = require('./imapy-kernel');
+const { createAdminAuthMiddleware } = require('./admin-routes');
 const path = require('node:path');
 const cors = require('cors');
 const express = require('express');
@@ -54,6 +56,7 @@ function createApp({
   observation = null,
   observationExporter = null,
   qualificationMonitor = null,
+  imapyTestOptions = undefined,
   healthCapabilities = {},
   airPolicyCapacity = null,
 }) {
@@ -67,6 +70,13 @@ function createApp({
   const ordinaryAuth = applicationIdentity.middleware('ordinary');
   const internalAuth = applicationIdentity.middleware('internal');
   const conversations = conversationStore || new ConversationStore({ persist: false });
+  const imapyKernel = config.qaProvider === 'ima-web-agent' && imaWebAgentClient ? new ImapyKernel({
+    pool: imaWebAgentClient, enabled: config.imapy?.enabled === true, deviceContextPath: config.imapy?.deviceContextPath || '',
+    policyPath: config.imapy?.policyPath || (config.conversations?.storePath ? config.conversations.storePath + '.model-policy.json' : ''),
+    ...(imapyTestOptions || {}),
+  }) : null;
+  if (imapyKernel) imaWebAgentClient.imapyKernel = imapyKernel;
+  app.locals.imapyKernel = imapyKernel;
   const askQueue = createAskQueue({
     maxConcurrent: config.concurrency?.maxConcurrentAsk,
     queueLimit: config.concurrency?.queueLimit,
@@ -87,6 +97,26 @@ function createApp({
   app.use(createSecurityHeadersMiddleware(config.security?.allowedOrigins));
   app.use(createCorsMiddleware(config.security?.allowedOrigins));
   app.use(express.json({ limit: '32kb' }));
+  for (const [base, auth] of [['/api/chat-capabilities', ordinaryAuth], ['/internal/provider-a/chat-capabilities', internalAuth]]) {
+    app.get(base, auth, async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      try { const owner = getConversationOwnerKey(req, res);
+        const upstream = req.query.conversationId ? conversations.getUpstream(req.query.conversationId, owner) : {};
+        res.json(imapyKernel ? await imapyKernel.capabilities({ upstream }) : { enabled: false, models: [] });
+      } catch (error) { res.status(error.statusCode || 503).json({ error: 'chat_capabilities_unavailable' }); }
+    });
+  }
+  app.post('/api/admin/model-policy/refresh', createAdminAuthMiddleware(config.security?.adminToken), async (_req, res) => {
+    try { if (!imapyKernel?.enabled) throw taskFault('model_kernel_unavailable', 409);
+      await imapyKernel.capabilities(); res.json(imapyKernel.adminStatus());
+    } catch { res.status(503).json({ error: 'model_catalog_unavailable' }); }
+  });
+  app.get('/api/admin/model-policy', createAdminAuthMiddleware(config.security?.adminToken), (_req, res) => res.json(imapyKernel?.adminStatus() || { enabled: false }));
+  app.put('/api/admin/model-policy', createAdminAuthMiddleware(config.security?.adminToken), (req, res) => {
+    try { if (!imapyKernel?.enabled) throw taskFault('model_kernel_unavailable', 409);
+      res.json({ policy: imapyKernel.setPolicy(req.body) });
+    } catch (error) { res.status(error.statusCode || 503).json({ error: error.code || 'model_policy_unavailable' }); }
+  });
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   let durableTasks = null;
@@ -103,7 +133,8 @@ function createApp({
           config, imaClient, imaWebAgentClient, localRagClient, mimoClient, isSse: true,
           history: conversations.getHistory(task.input.conversationId, task.ownerKey),
           question: task.input.question,
-          upstreamQuestion: task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
+          modelSelection: task.input.modelSelection,
+          upstreamQuestion: !task.input.modelSelection && task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
           sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
           botContract: task.input.botContract, botCompatibility, recentContextConsumer, observation: observer,
           applicationKey: task.applicationKey || task.scope,
@@ -915,11 +946,14 @@ async function handleStreamingWebAgentAsk(context) {
     let sessionAnswerProfile = upstream.sessionAnswerProfile || '';
     const sourceKinds = [];
     let terminals = 0;
+    let modelSelection; let kernelEvidence;
     const answerTextStream = createAnswerTextStream({ preserveCitations: !context.botContract });
     for await (const event of imaWebAgentClient.streamAsk({
       ...botRoutingOptions(context.botContract, context.applicationKey, context.ownerKey),
       ...(context.botContract ? { originalQuestion: question } : {}),
       question: upstreamQuestion,
+      ...(context.modelSelection ? { modelSelection: context.modelSelection, sourceIntent, requestId,
+        onKernelCheckpoint: binding => context.onUpstreamBinding?.({ accountId, ...binding }) } : {}),
       signal,
       ...(context.accountLease ? { accountLease: context.accountLease } : {}),
       ...(context.mode ? { mode: context.mode } : {}),
@@ -938,7 +972,11 @@ async function handleStreamingWebAgentAsk(context) {
         sessionAnswerProfile = event.answerProfile;
         if (sessionId) context.onUpstreamBinding?.({ accountId, sessionId, sessionAnswerProfile });
       }
-      if (event.type !== 'route') context.onUpstreamEvent?.(event);
+      if (event.type === 'selection') { modelSelection = event.modelSelection; writeSse(res, 'selection', { modelSelection }); continue; }
+      if (event.type === 'done' && context.modelSelection) {
+        citationMap = chat.mergeCitations(citationMap, event.citationMap); kernelEvidence = { webEvidence: event.webEvidence, webEvidenceStatus: event.webEvidenceStatus };
+      }
+      if (!['route', 'session', 'profile'].includes(event.type)) context.onUpstreamEvent?.(event);
       if (event.type === 'profile') {
         if (context.botContract) context.botProfile = event.answerProfile;
         continue;
@@ -1013,11 +1051,11 @@ async function handleStreamingWebAgentAsk(context) {
       sources,
       searchSummary,
       evidence,
-      citationMap, suggestions, process,
+      citationMap, suggestions, process, modelSelection, kernelEvidence,
       ownerKey,
     });
     await req.internalIdempotency?.complete(conversationId, answerForHistory);
-    writeSse(res, 'done', { searchSummary, conversationId, requestId, ...evidence, ...(!context.botContract ? { citationMap, suggestions, process } : {}) });
+    writeSse(res, 'done', { searchSummary, conversationId, requestId, ...evidence, ...(!context.botContract ? { citationMap, suggestions, process, ...(modelSelection ? { modelSelection, ...kernelEvidence } : {}) } : {}) });
     observeExecution(context, 'complete', 'success');
 
     return res.end();
@@ -1026,6 +1064,7 @@ async function handleStreamingWebAgentAsk(context) {
     writeSse(res, 'error', {
       error: signal?.aborted ? '请求处理超时，请稍后再试' : toUserSafeError(error),
       failureReason: signal?.aborted ? 'timeout' : classifyFailureReason(error),
+      ...(error.outcomeUnknown ? { outcomeUnknown: true } : {}),
       conversationId,
       requestId,
     });
@@ -1395,7 +1434,7 @@ function appendConversationTurn(conversationStore, {
   sources = [],
   searchSummary = '',
   evidence = {},
-  citationMap, suggestions, process,
+  citationMap, suggestions, process, modelSelection, kernelEvidence,
   ownerKey,
 }) {
   conversationStore.appendTurn(
@@ -1404,7 +1443,7 @@ function appendConversationTurn(conversationStore, {
     answer,
     {
       sources,
-      ...chat.metadata({ citationMap, suggestions, process }),
+      ...chat.metadata({ citationMap, suggestions, process, modelSelection, ...kernelEvidence }),
       searchSummary: searchSummary || (sources.length ? `找到 ${sources.length} 篇知识库资料` : ''),
       ...evidence,
     },

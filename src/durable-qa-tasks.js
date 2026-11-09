@@ -16,6 +16,7 @@ class DurableQATasks {
     this.controllers = new Map();
     this.activeConversations = new Map();
     this.pending = new Map();
+    this.preparedModels = new Set(); this.preparingModels = new Set();
     this.subscribers = new Map();
     this.streamBuffers = new Map();
     this.closed = false;
@@ -108,6 +109,22 @@ class DurableQATasks {
   }
 
   schedule(task) {
+    if (task.input.modelSelection && !this.preparedModels.has(task.id)) {
+      this.pending.set(task.id, task);
+      if (this.preparingModels.has(task.id)) return;
+      this.preparingModels.add(task.id);
+      const upstream = this.conversations.getUpstream(task.input.conversationId, task.ownerKey);
+      void Promise.resolve().then(async () => {
+        const kernel = this.accountPool?.imapyKernel;
+        if (!kernel) throw fault('model_kernel_unavailable');
+        await kernel.prepare(upstream);
+        kernel.validateRequest(task.input.modelSelection, upstream, task.input.source_intent === 'web_requested');
+        this.preparedModels.add(task.id);
+        if (this.available && this.store.tasks.get(task.id)?.status === 'queued') this.schedule(task);
+      }).catch(error => { if (this.available && this.store.tasks.get(task.id)?.status === 'queued') this.terminal(task.id, 'failed', safeTaskFailureReason(error.code)); })
+        .finally(() => this.preparingModels.delete(task.id));
+      return;
+    }
     if (!this.canSchedule(task)) { this.pending.set(task.id, task); return; }
     this.pending.delete(task.id);
     const controller = new AbortController();
@@ -125,19 +142,28 @@ class DurableQATasks {
       let turn;
       const bindUpstream = binding => {
         this.ensure();
-        const next = { accountId: binding.accountId || upstream.accountId || '', sessionId: binding.sessionId || upstream.sessionId || '',
+        const next = { ...(upstream.kernelVersion ? { kernelVersion: upstream.kernelVersion, kernelCheckpoint: upstream.kernelCheckpoint } : {}),
+          ...(binding.kernelVersion ? { kernelVersion: binding.kernelVersion, kernelCheckpoint: binding.kernelCheckpoint } : {}), accountId: binding.accountId || upstream.accountId || '', sessionId: binding.sessionId || upstream.sessionId || '',
           ...(binding.sessionAnswerProfile || upstream.sessionAnswerProfile
             ? { sessionAnswerProfile: binding.sessionAnswerProfile || upstream.sessionAnswerProfile } : {}) };
+        if (upstream.kernelCheckpoint && next.kernelCheckpoint && JSON.stringify(upstream.kernelCheckpoint) !== JSON.stringify(next.kernelCheckpoint) &&
+            !require('../vendor/imapy-core').isScopedAgentCheckpointTransition(upstream.kernelCheckpoint, next.kernelCheckpoint)) throw fault('kernel_session_conflict');
         if (next.sessionAnswerProfile && !['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(next.sessionAnswerProfile)) {
           throw fault('bot_evidence_invalid', 503);
         }
         if (upstream.sessionAnswerProfile && next.sessionAnswerProfile !== upstream.sessionAnswerProfile) {
           throw fault('session_profile_conflict', 409);
         }
-        if (next.accountId === upstream.accountId && next.sessionId === upstream.sessionId && next.sessionAnswerProfile === upstream.sessionAnswerProfile &&
+        if (next.accountId === upstream.accountId && next.sessionId === upstream.sessionId && next.sessionAnswerProfile === upstream.sessionAnswerProfile && JSON.stringify(next.kernelCheckpoint) === JSON.stringify(upstream.kernelCheckpoint) &&
             (!task.pairReceipt || this.store.tasks.get(task.id).pairReceipt?.accountId === next.accountId)) return;
         this.store.update(task.id, current => { current.upstreamBinding = next; current.bindingPending = true; }, true);
-        try { this.applyBinding(task.id); } catch { this.store.unavailable(); throw fault('task_store_unavailable'); }
+        // Checkpoint-only changes are already durably journaled in this task.
+        // Publish identity changes immediately; fold later checkpoints into the
+        // normal completion write rather than rewriting every conversation.
+        const identityChanged = next.accountId !== upstream.accountId || next.sessionId !== upstream.sessionId || next.kernelVersion !== upstream.kernelVersion;
+        if (!next.kernelVersion || identityChanged) {
+          try { this.applyBinding(task.id); } catch { this.store.unavailable(); throw fault('task_store_unavailable'); }
+        }
         upstream = next;
       };
       const check = () => {
@@ -177,7 +203,7 @@ class DurableQATasks {
     }).finally(() => {
       this.streamBuffers.get(task.id)?.close();
       this.streamBuffers.delete(task.id);
-      this.controllers.delete(task.id);
+      this.controllers.delete(task.id); this.preparedModels.delete(task.id);
       if (acquired) {
         this.conversations.endRequest(task.input.conversationId, task.ownerKey);
         this.activeConversations.delete(task.input.conversationId);
@@ -197,6 +223,7 @@ class DurableQATasks {
       visitorKey: task.ownerKey, laneKey: task.input.conversationId };
     if (this.accountPool?.tryAcquireSlot) {
       const accountOptions = () => ({ ...this.routingOptions(task), ...this.conversations.getUpstream(task.input.conversationId, task.ownerKey),
+        ...(task.input.modelSelection ? { modelSelection: task.input.modelSelection, sourceIntent: task.input.source_intent } : {}),
         mode: task.input.botContract ? this.conversations.require(task.input.conversationId, task.ownerKey).mode :
           task.input.retrieval_policy || this.conversations.require(task.input.conversationId, task.ownerKey).mode || this.mode, signal });
       options.isRunnable = () => this.accountPool.canAcquireSlot(accountOptions());
@@ -255,8 +282,8 @@ class DurableQATasks {
               manager.store.unavailable();
               throw fault('task_store_unavailable');
             }
-            manager.terminal(task.id, 'failed', safeTaskFailureReason(data.failureReason));
-          } else if (['conversation', 'process', 'sources', 'delta', 'suggestions'].includes(event)) {
+            manager.terminal(task.id, data.outcomeUnknown ? 'indeterminate' : 'failed', safeTaskFailureReason(data.failureReason));
+          } else if (['conversation', 'process', 'sources', 'delta', 'suggestions', 'selection'].includes(event)) {
             streamBuffer.append(event, data);
           }
         }
@@ -269,6 +296,7 @@ class DurableQATasks {
     const task = this.store.tasks.get(id);
     this.conversations.appendTaskTurn(task.input.conversationId, task.id, completion.question, completion.answer,
       completion.metadata, task.ownerKey, completion.upstream);
+    if (task.bindingPending) this.store.update(id, current => { delete current.bindingPending; delete current.upstreamBinding; }, true);
     this.publish(this.store.finish(id, 'succeeded', completion.done));
   }
 
@@ -279,6 +307,8 @@ class DurableQATasks {
   }
 
   terminal(id, status, reason) {
+    this.pending.delete(id); this.preparedModels.delete(id);
+    if (this.store.tasks.get(id)?.bindingPending) this.applyBinding(id);
     this.streamBuffers.get(id)?.flush();
     this.streamBuffers.get(id)?.close();
     this.streamBuffers.delete(id);

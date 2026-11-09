@@ -79,6 +79,7 @@ class AsyncAccountDirectory extends WebAgentAccountDirectory {
   initializeWebMode(mode) { return this._call('initializeWebMode', [mode]); }
   setWebMode(mode) { return this._call('setWebMode', [mode]); }
   classifyCapturedIdentity(...args) { return this._call('classifyCapturedIdentity', args); }
+  matchCapturedIdentity(...args) { return this._call('matchCapturedIdentity', args); }
   applyKnowledgeAgentQualification(id, proof, expected) {
     const account = this.getAccount(id);
     if (!expected || expected.account !== account || expected.events !== account?.events) return Promise.reject(conflict());

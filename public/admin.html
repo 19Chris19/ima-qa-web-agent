@@ -112,7 +112,10 @@
               <h2>账号池</h2>
               <p id="accountCountLabel">0 个账号</p>
             </div>
-            <button class="admin-add-account" id="addAccountButton" type="button">添加账号</button>
+            <div class="admin-account-heading-actions">
+              <button class="admin-add-account" id="restoreAnyAccountButton" type="button">扫码恢复已有账号</button>
+              <button class="admin-add-account" id="addAccountButton" type="button">添加账号</button>
+            </div>
           </div>
           <div class="admin-account-list" id="accountList" aria-live="polite"></div>
           <p class="admin-feedback" id="accountFeedback" role="status"></p>
@@ -145,14 +148,18 @@
           <form class="admin-enrollment-form" id="enrollmentForm">
             <p>请使用已加入目标知识库的 IMA 账号。扫码后可能执行上方声明的一次知识库问答验证。</p>
             <a id="enrollmentShareLink" target="_blank" rel="noopener noreferrer" hidden>查看目标官方知识库</a>
-            <label for="enrollmentName">账号名称</label>
+            <label id="enrollmentNameLabel" for="enrollmentName">账号名称</label>
             <input id="enrollmentName" maxlength="80" autocomplete="off" placeholder="account-c" required />
             <label for="enrollmentTestQuestion">知识库验证问题</label>
             <textarea id="enrollmentTestQuestion" maxlength="2000" required>请根据当前知识库概括主要主题，并引用相关资料</textarea>
             <p>扫码后将自动执行一次真实 IMA 问答。验证失败仍保留账号，不会发送任何机器人消息。</p>
-            <label class="admin-check-row" for="replaceEnrollment">
+            <label class="admin-check-row" id="replaceEnrollmentRow" for="replaceEnrollment">
               <input id="replaceEnrollment" type="checkbox" />
               <span>替换同名账号的登录态</span>
+            </label>
+            <label class="admin-check-row" id="reactivateMatchedRow" for="reactivateMatchedAccount" hidden>
+              <input id="reactivateMatchedAccount" type="checkbox" />
+              <span>若该账号已停用，允许它通过一次问答验证后恢复调度</span>
             </label>
             <button id="createEnrollmentButton" type="submit">打开 IMA 登录窗口</button>
           </form>
@@ -172,10 +179,12 @@
             <div class="admin-enrollment-result" id="enrollmentResult" hidden></div>
             <section id="enrollmentIdentityConflict" class="admin-identity-conflict" hidden aria-labelledby="identityConflictTitle">
               <h3 id="identityConflictTitle">扫码身份与原账号不一致</h3>
-              <p>原账号身份保持不变。可将本次扫码身份接入为新账号，或取消本次接入。</p>
-              <label for="identityConflictName">新账号名称</label>
-              <input id="identityConflictName" maxlength="80" autocomplete="off" />
-              <button id="addConflictIdentityButton" type="button">作为新账号接入</button>
+              <p id="identityConflictDescription">原账号身份保持不变。可将本次扫码身份接入为新账号，或取消本次接入。</p>
+              <div id="identityConflictAddControls">
+                <label for="identityConflictName">新账号名称</label>
+                <input id="identityConflictName" maxlength="80" autocomplete="off" />
+                <button id="addConflictIdentityButton" type="button">作为新账号接入</button>
+              </div>
             </section>
             <button id="focusEnrollmentWindowButton" type="button" hidden>打开受控登录窗口</button>
             <button id="continueEnrollmentButton" type="button" hidden>已处理，继续验证</button>
@@ -187,5 +196,6 @@
     </main>
     <script src="/answer-markdown.js" defer></script>
     <script src="/admin.js" defer></script>
-  </body>
+    <script src="/model-policy-admin.js" defer></script>
+</body>
 </html>
