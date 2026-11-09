@@ -1,0 +1,68 @@
+{
+  "asOf": "2026-11-09",
+  "result": "limited_pass",
+  "scope": "real_browser_website_bff_provider_imapy_ima",
+  "rounds": [
+    {
+      "round": 1,
+      "model": "DeepSeek-V4.1-Flash",
+      "mode": "quick",
+      "checks": {
+        "uiLabelMatches": true,
+        "bffMatches": true,
+        "providerIngressMatches": true,
+        "providerTaskMatches": true,
+        "actualImaModelMatches": true,
+        "actualImaModeMatches": true,
+        "sameQuestionThroughBffAndProvider": true,
+        "answerSelectionMatches": true,
+        "complete": true,
+        "webRemainedOff": true
+      }
+    },
+    {
+      "round": 2,
+      "model": "GLM-5.3-Flash",
+      "mode": "deep",
+      "checks": {
+        "uiLabelMatches": true,
+        "bffMatches": true,
+        "providerIngressMatches": true,
+        "providerTaskMatches": true,
+        "actualImaModelMatches": true,
+        "actualImaModeMatches": true,
+        "sameQuestionThroughBffAndProvider": true,
+        "answerSelectionMatches": true,
+        "complete": true,
+        "webRemainedOff": true
+      }
+    }
+  ],
+  "sameUpstreamSession": true,
+  "historyTurns": 2,
+  "browserNetworkPostCapturedForSecondRound": true,
+  "browserSecondPostMatchesBff": true,
+  "contextMarkerPreserved": true,
+  "followupDidNotRepeatMarker": true,
+  "accountPool": "one_independent_test_account_in_memory",
+  "actualWireCounts": {
+    "get_models": 1,
+    "get_knowledge_base_list": 2,
+    "init_session": 1,
+    "get_session": 1,
+    "qa": 2,
+    "refresh": 1
+  },
+  "automaticRetry": false,
+  "productionChanges": false,
+  "vercelTested": false,
+  "physicalPhoneTested": false,
+  "mobileViewportSimulated": {
+    "width": 390,
+    "height": 844
+  },
+  "upstreamModelVersionConfirmed": false,
+  "providerSourceCommit": "d3f327f80374cff29f4d3840968499a7a48bb2a1",
+  "websiteSourceCommit": "373419968cd39ca5a6376723796a8e13e34810d2",
+  "privateEvidenceSha256": "e09d8fa5b6b8f3e8bc54ac739b42a70a98aff0b89eb6d1662a5a661de1e66ab7"
+}
