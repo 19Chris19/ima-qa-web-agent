@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "asOf": "2026-11-09",
+  "result": "limited_pass",
+  "scope": "isolated_provider_http_task_api_and_imapy_kernel",
+  "providerSourceCommit": "21c3ec622d7acf43b8a4a73d970f2a367d9f9109",
+  "coreSourceCommit": "6b700a924da3911ff869252e7031d7b156cee7a0",
+  "independentTestAccounts": 1,
+  "knowledgeBases": 1,
+  "webSearch": false,
+  "rounds": [
+    {
+      "round": 1,
+      "model": "DeepSeek-V4.1-Flash",
+      "mode": "quick",
+      "status": "succeeded",
+      "durationMs": 6088,
+      "markerPreserved": true,
+      "sameSession": true,
+      "historyTurns": 1
+    },
+    {
+      "round": 2,
+      "model": "GLM-5.3-Flash",
+      "mode": "deep",
+      "status": "succeeded",
+      "durationMs": 9050,
+      "markerPreserved": true,
+      "sameSession": true,
+      "historyTurns": 2
+    },
+    {
+      "round": 3,
+      "model": "DeepSeek-V4.1-Flash",
+      "mode": "quick",
+      "status": "succeeded",
+      "durationMs": 7064,
+      "markerPreserved": true,
+      "sameSession": true,
+      "historyTurns": 3
+    }
+  ],
+  "checks": [
+    {
+      "round": 1,
+      "streamEqualsHistoryAndExport": true,
+      "doneCount": 1,
+      "selectionPersisted": true,
+      "firstAnswerDeltaMs": 3106,
+      "deltaEvents": 6,
+      "completed": true,
+      "upstreamModelVersionConfirmed": false
+    },
+    {
+      "round": 2,
+      "streamEqualsHistoryAndExport": true,
+      "doneCount": 1,
+      "selectionPersisted": true,
+      "firstAnswerDeltaMs": 4306,
+      "deltaEvents": 9,
+      "completed": true,
+      "upstreamModelVersionConfirmed": false
+    },
+    {
+      "round": 3,
+      "streamEqualsHistoryAndExport": true,
+      "doneCount": 1,
+      "selectionPersisted": true,
+      "firstAnswerDeltaMs": 3130,
+      "deltaEvents": 4,
+      "completed": true,
+      "upstreamModelVersionConfirmed": false
+    }
+  ],
+  "sameWireSession": true,
+  "followupsDidNotRepeatMarker": true,
+  "modelWireMatches": true,
+  "workerRestarted": true,
+  "historyPrefixUnchanged": true,
+  "networkCountsForAuthorizedTestAccount": {
+    "refresh": 1,
+    "get_knowledge_base_list": 4,
+    "get_models": 2,
+    "init_session": 1,
+    "qa": 3,
+    "get_session": 2
+  },
+  "automaticRetry": false,
+  "productionChanges": false,
+  "websiteBffRealAcceptance": false,
+  "physicalMobileAcceptance": false,
+  "upstreamModelVersionConfirmed": false,
+  "privateEvidenceSha256": "3841228c9ebfdfac2063d0881bd1407d40ad095f955913fd33928b38a1e3fef8"
+}
