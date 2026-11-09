@@ -12,3 +12,33 @@ test('late directory response cannot replace another conversation or clear draft
 });
 test('unavailable directory blocks sends; legacy and disabled kernels retain old behavior',async t=>{const f=await setup(t,{load:async()=>({enabled:true,models:[],reason:'default_not_configured'})});assert.equal(f.picker.capture(),null);assert.match(f.notices.at(-1),/默认模型/);const legacy=await setup(t,{load:async()=>({enabled:true,legacy:true,models:[],reason:'legacy_session'})});assert.equal(legacy.picker.capture(),undefined);const off=await setup(t,{load:async()=>({enabled:false,models:[]})});assert.equal(off.picker.button.hidden,true);assert.equal(off.picker.capture(),undefined);});
 test('requested model information is rendered as text with unconfirmed upstream version',async t=>{const{w}=await setup(t);w.ChatModelPicker.renderSelection(w.document.body,{name:'<img src=x onerror=1>',mode:'deep'});assert.equal(w.document.querySelector('details img'),null);assert.match(w.document.querySelector('details').textContent,/未确认/);});
+
+test('compact model list has one mode control, check state and keyboard navigation',async t=>{
+ const {w,picker}=await setup(t);picker.button.click();
+ const rows=picker.dialog.querySelectorAll('.model-picker-model');assert.equal(rows.length,2);
+ assert.equal(picker.dialog.querySelectorAll('.model-picker-option').length,2);
+ assert.equal(rows[0].getAttribute('aria-pressed'),'true');assert.equal(w.document.activeElement,rows[0]);
+ rows[0].dispatchEvent(new w.KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));assert.equal(w.document.activeElement,rows[1]);
+ rows[1].click();assert.equal(picker.dialog.open,true);assert.equal(picker.capture().modelRef,'b'.repeat(64));
+ assert.equal(picker.dialog.querySelectorAll('.model-picker-model[aria-pressed="true"]').length,1);
+ assert.equal(picker.dialog.querySelector('[data-mode="deep"]').disabled,true);
+});
+test('switching from deep to quick-only model requires an explicit valid mode, never silently downgrades',async t=>{
+ const {picker,notices}=await setup(t);picker.button.click();picker.dialog.querySelector('[data-mode="deep"]').click();
+ picker.button.click();picker.dialog.querySelectorAll('.model-picker-model')[1].click();
+ assert.equal(picker.capture(),null);assert.match(notices.at(-1),/可用模型/);
+ assert.equal(picker.dialog.querySelector('.model-picker-note').hidden,false);
+ picker.dialog.querySelector('[data-mode="quick"]').click();assert.deepEqual(JSON.parse(JSON.stringify(picker.capture())),{modelRef:'b'.repeat(64),mode:'quick'});
+});
+test('removed selection is not replaced by refreshed default and disabled choices cannot send',async t=>{
+ let changed=false;const {picker}=await setup(t,{load:async()=>({enabled:true,defaultSelection:{modelRef:'a'.repeat(64),mode:'quick'},models:changed?[]:[{modelRef:'a'.repeat(64),name:'A',modes:{quick:{webSearch:true}}}]})});
+ changed=true;await picker.refresh('',true);assert.equal(picker.capture(),null);
+});
+
+test('desktop menu anchors above its trigger and repositions when a model note changes its height',async t=>{
+ const {w,picker}=await setup(t);Object.defineProperty(picker.dialog,'offsetHeight',{get:()=>320});Object.defineProperty(picker.dialog,'offsetWidth',{get:()=>320});
+ picker.button.getBoundingClientRect=()=>({left:200,top:450,bottom:494});picker.button.click();
+ assert.equal(picker.dialog.style.top,'120px');assert.equal(picker.dialog.style.left,'200px');
+ picker.button.getBoundingClientRect=()=>({left:210,top:440,bottom:484});w.dispatchEvent(new w.Event('scroll'));
+ assert.equal(picker.dialog.style.top,'110px');assert.equal(picker.dialog.style.left,'210px');
+});
