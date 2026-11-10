@@ -3,25 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>IMA QA 账号管理</title>
+    <title>Provider A · 服务管理</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/admin.css" />
   </head>
-  <body data-mode="admin">
+  <body data-mode="admin" data-view="overview">
+    <aside class="admin-sidebar">
+      <strong class="admin-brand"><span class="brand-monogram">P<span>·</span></span><span>Provider A<small>服务管理</small></span></strong>
+      <nav id="adminNavigation" aria-label="管理导航" hidden>
+        <a href="#overviewSection" data-view="overview" aria-current="page">◫ <span>服务概览</span></a>
+        <a href="#accountsSection" data-view="accounts">▤ <span>账号池</span></a>
+        <a href="#qualificationPanel" data-view="qualification" id="qualificationNav">✓ <span>资格验证</span></a>
+        <a href="#exercisePanel" data-view="exercise" id="exerciseNav">↗ <span>演练与报告</span></a>
+        <a href="#exerciseReportsPanel" data-view="exercise" id="reportsNav" hidden>演练报告</a>
+        <a href="#diagnosticsSection" data-view="diagnostics">⌘ <span>诊断</span></a>
+        <a href="http://127.0.0.1:4610/" target="_blank" rel="noopener">◷ <span>独立状态页 ↗</span></a>
+      </nav>
+      <a class="admin-home-link" href="/">返回问答</a>
+    </aside>
     <main class="admin-shell">
       <header class="admin-topbar">
         <a class="admin-back" href="/" title="返回问答" aria-label="返回问答">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6M9 12h10" /></svg>
         </a>
         <div>
-          <h1>账号管理</h1>
-          <p>IMA Web Agent</p>
+          <p class="admin-eyebrow">PROVIDER A / OPERATIONS</p><h1 id="workspaceTitle">服务概览</h1>
+          <p id="refreshStatus" role="status">正在确认状态</p>
         </div>
-        <button class="admin-icon-button" id="reloadButton" type="button" title="刷新状态" aria-label="刷新状态">
+        <button class="admin-icon-button" id="reloadButton" type="button" title="刷新状态" aria-label="刷新状态（不续期登录）">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7" /></svg>
         </button>
       </header>
 
+      <p id="syntheticNotice" class="admin-preview-notice" hidden>合成本地体验 · 所有账号、扫码和问答均为模拟，不访问 IMA 或生产服务</p>
       <section class="admin-login" id="adminLogin">
         <form class="admin-token-form" id="adminTokenForm">
           <label for="adminTokenInput">管理员 Token</label>
@@ -34,23 +48,63 @@
       </section>
 
       <section class="admin-panel" id="adminPanel" hidden>
-        <div class="admin-summary" id="adminSummary"></div>
-        <p id="webReadinessSummary"></p>
-        <button id="upgradeWebMode" type="button" hidden>升级新会话至原生知识库 Agent</button>
+        <section id="overviewSection" data-pane="overview">
+          <div class="admin-summary" id="adminSummary"></div>
+          <p class="admin-summary-note" id="adminSummaryNote"></p>
+          <section class="admin-capacity-panel"><div class="admin-section-heading"><div><p class="admin-eyebrow">CAPACITY</p><h2>回答名额从哪里来</h2></div><span class="admin-muted">按当前网站问答路径</span></div><div id="capacityAllocation"></div><p class="admin-muted">并发是同时生成回答的问题数，不是打开网页的人数。试运行额度不等于稳定实测容量。</p></section>
+          <section class="admin-capacity-panel"><h2>真实回答观测</h2><p id="qaObservation">尚无样本，不计算成功率</p><p class="admin-muted">被动统计真实任务；刷新页面不会发问。接口可达与回答完成分别记录。</p></section>
+        </section>
 
-        <section class="admin-enroll" id="enrollPanel" aria-label="接入账号">
+        <section data-pane="accounts" class="admin-enroll" aria-label="接入账号">
           <div class="admin-section-heading">
             <div>
-              <h2>接入账号</h2>
+              <h2>接入与恢复</h2>
               <p>每次接入打开独立 IMA 浏览器，只允许待接入账号扫码登录</p>
             </div>
-            <button id="startEnrollmentButton" type="button">接入账号</button>
+            <div class="admin-toolbar"><button id="restoreAnyAccountButton" type="button">扫码恢复任意已有账号</button><button id="addAccountButton" type="button">接入新账号</button></div>
           </div>
           <p class="admin-enroll-note">每次接入使用全新的临时浏览器资料。请在弹出的 IMA 窗口内扫码并完成手机确认；服务会拦截快捷登录，只在共享知识库验证成功后保存登录态并关闭窗口。</p>
           <p class="admin-feedback" id="enrollFeedback" role="status"></p>
         </section>
 
-        <section class="admin-exercise" id="exercisePanel" aria-label="账号池并发演练" hidden>
+        <section data-pane="qualification" class="admin-qualification" id="qualificationPanel" aria-label="知识问答资格认证" hidden>
+          <div class="admin-section-heading">
+            <div>
+              <h2>知识问答资格</h2>
+              <p id="qualificationCapacityLabel">正在读取动态账号池</p>
+            </div>
+            <button id="startQualificationButton" type="button">一键认证待用账号</button>
+          </div>
+          <p class="admin-exercise-note">系统会动态选择基础健康但尚未认证的账号。每个账号最多使用 7 次真实 3DGS 问答；全部通过后才一起进入知识问答调度池，失败不会部分生效。</p>
+          <section class="admin-exercise-live" id="qualificationLive" hidden aria-live="polite">
+            <div class="admin-exercise-live-heading">
+              <strong id="qualificationLiveState">正在准备认证</strong>
+              <span id="qualificationLiveElapsed"></span>
+            </div>
+            <p id="qualificationLiveDetail"></p>
+            <div class="admin-exercise-live-metrics" id="qualificationLiveMetrics"></div>
+          </section>
+          <button id="cancelQualificationButton" type="button" hidden>取消当前资格任务</button><div id="qualificationReports"></div><p class="admin-feedback" id="qualificationFeedback" role="status"></p>
+        </section>
+
+        <dialog class="admin-exercise-confirm-dialog" id="qualificationConfirmDialog" aria-labelledby="qualificationConfirmTitle">
+          <section class="admin-dialog-shell">
+            <header class="admin-dialog-header">
+              <div>
+                <h2 id="qualificationConfirmTitle">授权真实问答额度</h2>
+                <p>只认证 3DGS 知识问答能力，不发送微信群消息。</p>
+              </div>
+            </header>
+            <p class="admin-exercise-confirm-copy" id="qualificationConfirmText"></p>
+            <p class="admin-exercise-confirm-note">运行期间普通 Provider 问答会暂停。任一目标失败，本批账号资格保持不变。</p>
+            <div class="admin-exercise-confirm-actions">
+              <button id="cancelQualificationConfirmButton" type="button">取消</button>
+              <button id="confirmQualificationButton" type="button">确认额度并开始</button>
+            </div>
+          </section>
+        </dialog>
+
+        <section data-pane="exercise" class="admin-exercise" id="exercisePanel" aria-label="账号池并发演练" hidden>
           <div class="admin-section-heading">
             <div>
               <h2>并发演练</h2>
@@ -106,19 +160,18 @@
           </section>
         </dialog>
 
-        <section class="admin-accounts" id="accountsPanel" aria-label="账号列表">
+        <section data-pane="accounts" class="admin-accounts" id="accountsSection" aria-label="账号列表">
           <div class="admin-section-heading">
             <div>
               <h2>账号池</h2>
-              <p id="accountCountLabel">0 个账号</p>
+              <p id="accountCountLabel">0 个账号</p></div><div class="admin-toolbar"><label class="sr-only" for="accountSearch">搜索账号</label><input type="search" id="accountSearch" placeholder="搜索账号"/><label class="sr-only" for="accountFilter">筛选状态</label><select id="accountFilter"><option value="all">全部状态</option><option value="ready">可服务</option><option value="attention">待处理</option><option value="expired">需登录</option><option value="disabled">已停用</option></select>
             </div>
-            <button class="admin-add-account" id="addAccountButton" type="button">添加账号</button>
           </div>
-          <div class="admin-account-list" id="accountList" aria-live="polite"></div>
+          <div class="admin-account-list" id="accountList"></div>
           <p class="admin-feedback" id="accountFeedback" role="status"></p>
         </section>
 
-        <section class="admin-exercise-reports" id="exerciseReportsPanel" aria-label="演练报告" hidden>
+        <section data-pane="exercise" class="admin-exercise-reports" id="exerciseReportsPanel" aria-label="演练报告" hidden>
           <div class="admin-section-heading">
             <div>
               <h2>演练报告</h2>
@@ -128,7 +181,16 @@
           <div class="admin-exercise-report-list" id="exerciseReportList"></div>
           <div class="admin-exercise-report-detail" id="exerciseReportDetail"></div>
         </section>
+        <section data-pane="diagnostics" id="diagnosticsSection" class="admin-capacity-panel"><p class="admin-eyebrow">DIAGNOSTICS</p><h2>状态依据与诊断</h2><div id="operationsDiagnostics"></div><p class="admin-muted">登录健康、知识库资格、当前策略资格和持久化结果分别判断。未知不等于失败；旧证明不代替当前可用性。</p><a href="/admin-legacy.html">旧版管理入口（保留兼容） ↗</a></section>
       </section>
+
+      <dialog class="admin-account-drawer" id="accountDrawer" aria-labelledby="accountDrawerTitle">
+        <header class="admin-dialog-header">
+          <h2 id="accountDrawerTitle">账号详情</h2>
+          <button class="admin-icon-button" id="closeAccountDrawer" type="button" title="关闭详情" aria-label="关闭详情">×</button>
+        </header>
+        <div id="accountDrawerContent"></div>
+      </dialog>
 
       <dialog class="admin-enrollment-dialog" id="enrollmentDialog" aria-labelledby="enrollmentDialogTitle">
         <section class="admin-dialog-shell">
@@ -143,17 +205,14 @@
           </header>
 
           <form class="admin-enrollment-form" id="enrollmentForm">
-            <p>请使用已加入目标知识库的 IMA 账号。扫码后可能执行上方声明的一次知识库问答验证。</p>
-            <a id="enrollmentShareLink" target="_blank" rel="noopener noreferrer" hidden>查看目标官方知识库</a>
             <label for="enrollmentName">账号名称</label>
             <input id="enrollmentName" maxlength="80" autocomplete="off" placeholder="account-c" required />
-            <label for="enrollmentTestQuestion">知识库验证问题</label>
-            <textarea id="enrollmentTestQuestion" maxlength="2000" required>请根据当前知识库概括主要主题，并引用相关资料</textarea>
-            <p>扫码后将自动执行一次真实 IMA 问答。验证失败仍保留账号，不会发送任何机器人消息。</p>
             <label class="admin-check-row" for="replaceEnrollment">
               <input id="replaceEnrollment" type="checkbox" />
               <span>替换同名账号的登录态</span>
             </label>
+            <label class="admin-check-row" id="reactivateMatchedRow" hidden><input type="checkbox" id="reactivateMatchedAccount"/><span>资格通过后恢复匹配账号调度（最多 1 次真实问答）</span></label>
+            <p id="enrollmentQualificationNotice" hidden></p>
             <button id="createEnrollmentButton" type="submit">打开 IMA 登录窗口</button>
           </form>
 
@@ -163,6 +222,10 @@
               <strong id="enrollmentState">正在启动登录窗口</strong>
             </div>
             <p id="enrollmentStatusText"></p>
+            <p id="enrollmentQualificationStatus" hidden></p>
+            <a id="enrollmentShareLink" target="_blank" rel="noopener noreferrer" hidden>前往 IMA 官网授权</a>
+            <button id="continueMembershipButton" type="button" hidden>已完成授权，继续验证</button>
+            <button id="retryEnrollmentQualificationButton" type="button" hidden>重试本账号资格验证</button>
             <img class="admin-enrollment-qr" id="enrollmentQr" alt="IMA 登录二维码" hidden />
             <p class="admin-enrollment-qr-note" id="enrollmentQrNote" hidden>请只使用待接入账号扫描此二维码。若已弹出 IMA 登录窗口，请以窗口内的二维码为准。</p>
             <section class="admin-enrollment-diagnostic" id="enrollmentDiagnostic" hidden aria-live="polite">
@@ -172,13 +235,12 @@
             <div class="admin-enrollment-result" id="enrollmentResult" hidden></div>
             <section id="enrollmentIdentityConflict" class="admin-identity-conflict" hidden aria-labelledby="identityConflictTitle">
               <h3 id="identityConflictTitle">扫码身份与原账号不一致</h3>
-              <p>原账号身份保持不变。可将本次扫码身份接入为新账号，或取消本次接入。</p>
+              <p>原账号保持不变。可将本次身份命名新增，或取消本次接入。</p>
               <label for="identityConflictName">新账号名称</label>
               <input id="identityConflictName" maxlength="80" autocomplete="off" />
-              <button id="addConflictIdentityButton" type="button">作为新账号接入</button>
+              <button id="addConflictIdentityButton" type="button">确认新增此身份</button>
             </section>
             <button id="focusEnrollmentWindowButton" type="button" hidden>打开受控登录窗口</button>
-            <button id="continueEnrollmentButton" type="button" hidden>已处理，继续验证</button>
             <button id="cancelEnrollmentButton" type="button">取消接入</button>
           </section>
           <p class="admin-feedback" id="enrollmentDialogFeedback" role="status"></p>
@@ -186,6 +248,7 @@
       </dialog>
     </main>
     <script src="/answer-markdown.js" defer></script>
+    <script src="/admin-poller.js" defer></script>
     <script src="/admin.js" defer></script>
   </body>
 </html>

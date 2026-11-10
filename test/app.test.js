@@ -1515,7 +1515,7 @@ test('admin enrollment routes require a token and keep QR screenshots private', 
     const createdPayload = await created.json();
     assert.equal(created.status, 201);
     assert.equal(createdPayload.enrollment.taskId, 'enrollment-1');
-    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false, reauthAccountId: undefined, testQuestion: undefined });
+    assert.deepEqual(calls[0].input, { name: 'account-c', id: undefined, replace: false, reauthAccountId: undefined, testQuestion: undefined, matchExistingAccount: false, autoMatchExistingAccount: true, reactivateMatchedAccount: false, confirmQualification: false, authorizedRequestCount: undefined });
 
     const qr = await fetch(`${baseUrl}/api/admin/enrollments/enrollment-1/qr`, {
       headers: { Authorization: 'Bearer admin-token' },

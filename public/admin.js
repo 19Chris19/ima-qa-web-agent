@@ -9,8 +9,10 @@
   const accountList = document.querySelector('#accountList');
   const accountCountLabel = document.querySelector('#accountCountLabel');
   const enrollFeedback = document.querySelector('#enrollFeedback');
-  const startEnrollmentButton = document.querySelector('#startEnrollmentButton');
+  const addAccountButton = document.querySelector('#addAccountButton');
   const enrollmentDialog = document.querySelector('#enrollmentDialog');
+  const enrollmentDialogTitle = document.querySelector('#enrollmentDialogTitle');
+  const enrollmentDialogDescription = document.querySelector('#enrollmentDialogDescription');
   const closeEnrollmentButton = document.querySelector('#closeEnrollmentButton');
   const enrollmentForm = document.querySelector('#enrollmentForm');
   const enrollmentName = document.querySelector('#enrollmentName');
@@ -19,6 +21,11 @@
   const enrollmentProgress = document.querySelector('#enrollmentProgress');
   const enrollmentState = document.querySelector('#enrollmentState');
   const enrollmentStatusText = document.querySelector('#enrollmentStatusText');
+  const enrollmentQualificationNotice = document.querySelector('#enrollmentQualificationNotice');
+  const enrollmentQualificationStatus = document.querySelector('#enrollmentQualificationStatus');
+  const enrollmentShareLink = document.querySelector('#enrollmentShareLink');
+  const continueMembershipButton = document.querySelector('#continueMembershipButton');
+  const retryEnrollmentQualificationButton = document.querySelector('#retryEnrollmentQualificationButton');
   const enrollmentQr = document.querySelector('#enrollmentQr');
   const enrollmentQrNote = document.querySelector('#enrollmentQrNote');
   const enrollmentDiagnostic = document.querySelector('#enrollmentDiagnostic');
@@ -27,7 +34,6 @@
   const enrollmentResult = document.querySelector('#enrollmentResult');
   const focusEnrollmentWindowButton = document.querySelector('#focusEnrollmentWindowButton');
   const cancelEnrollmentButton = document.querySelector('#cancelEnrollmentButton');
-  const continueEnrollmentButton = document.querySelector('#continueEnrollmentButton');
   const enrollmentDialogFeedback = document.querySelector('#enrollmentDialogFeedback');
   const exercisePanel = document.querySelector('#exercisePanel');
   const exerciseCapacityLabel = document.querySelector('#exerciseCapacityLabel');
@@ -53,56 +59,126 @@
   const exerciseReportList = document.querySelector('#exerciseReportList');
   const exerciseReportDetail = document.querySelector('#exerciseReportDetail');
   const accountFeedback = document.querySelector('#accountFeedback');
+  const adminSummaryNote = document.querySelector('#adminSummaryNote');
+  const qualificationPanel = document.querySelector('#qualificationPanel');
+  const qualificationCapacityLabel = document.querySelector('#qualificationCapacityLabel');
+  const startQualificationButton = document.querySelector('#startQualificationButton');
+  const qualificationConfirmDialog = document.querySelector('#qualificationConfirmDialog');
+  const qualificationConfirmText = document.querySelector('#qualificationConfirmText');
+  const confirmQualificationButton = document.querySelector('#confirmQualificationButton');
+  const cancelQualificationConfirmButton = document.querySelector('#cancelQualificationConfirmButton');
+  const qualificationLive = document.querySelector('#qualificationLive');
+  const qualificationLiveState = document.querySelector('#qualificationLiveState');
+  const qualificationLiveElapsed = document.querySelector('#qualificationLiveElapsed');
+  const qualificationLiveDetail = document.querySelector('#qualificationLiveDetail');
+  const qualificationLiveMetrics = document.querySelector('#qualificationLiveMetrics');
+  const qualificationFeedback = document.querySelector('#qualificationFeedback');
 
   const tokenStorageKey = 'ima-qa-admin-token';
   let token = sessionStorage.getItem(tokenStorageKey) || '';
   let bootstrap = null;
+  let operations = null;
+  let operationsReceivedAt = 0;
+  let operationsSignature = "";
+  let matchExistingAccount = false;
   let accounts = [];
-  let readiness = null;
-  const upgradeWebMode = document.querySelector('#upgradeWebMode');
-  upgradeWebMode?.addEventListener('click', async () => {
-    if (!await confirmWebAction('升级原生知识库 Agent', '新会话需要账号通过问答验证。已有会话不变，是否继续？')) return;
-    upgradeWebMode.disabled = true;
-    try {
-      await request('/api/admin/web-mode', { method: 'POST', body: JSON.stringify({ mode: 'knowledge_agent' }) });
-      await loadAdminState();
-    } catch (error) { setFeedback(enrollFeedback, error.message, true); }
-    finally { upgradeWebMode.disabled = false; }
-  });
+  let eligibilitySnapshot = null;
   let enrollment = null;
   let enrollmentPollTimer = null;
+  let enrollmentPollSequence = 0;
   let enrollmentQrUrl = '';
   let completedEnrollmentTaskId = '';
+  let enrollmentReauthAccountId = '';
   let exercise = null;
   let activeExercise = null;
   let exerciseReports = [];
   let exercisePollTimer = null;
+  let qualification = null;
+  let activeQualification = null;
+  let qualificationPollTimer = null;
+  let qualificationTarget = null;
+  let qualificationStarting = false;
+  let observedQualificationRunId = '';
+  let observedQualificationResult = null;
+  let membershipContinuing = false;
   const accountActionsInFlight = new Set();
-  let reauthAccountId = '';
   const accountActionFeedback = new Map();
+  const accountDrawer = document.querySelector('#accountDrawer');
+  const accountDrawerContent = document.querySelector('#accountDrawerContent');
   const identityConflict = document.querySelector('#enrollmentIdentityConflict');
+  const identityConflictName = document.querySelector('#identityConflictName');
   const addConflictIdentityButton = document.querySelector('#addConflictIdentityButton');
-  addConflictIdentityButton.addEventListener('click', async () => {
-    if (addConflictIdentityButton.disabled || enrollment?.state !== 'identity_conflict') return;
-    const name = cleanAccountName(document.querySelector('#identityConflictName').value);
-    if (!name || name === cleanAccountName(enrollmentName.value) || accounts.some(account => cleanAccountName(account.name) === name)) {
-      setFeedback(enrollmentDialogFeedback, '请输入与现有账号不同的新账号名称', true);
-      return;
-    }
-    addConflictIdentityButton.disabled = true;
-    stopEnrollmentPolling();
-    try {
-      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}/identity`, {
-        method: 'POST', body: JSON.stringify({ action: 'add', name }),
-      });
-      enrollment = payload.enrollment;
-      renderEnrollment();
-      if (enrollment.state === 'completed') await finishCompletedEnrollment(enrollment);
-      else if (isActiveEnrollment()) await refreshEnrollment();
-    } catch (error) {
-      setFeedback(enrollmentDialogFeedback, error.message || '新身份接入失败，原账号保持不变', true);
-    } finally { addConflictIdentityButton.disabled = false; }
+  let selectedAccountId = '';
+  let drawerTrigger = null;
+  let identityAdditionInFlight = false;
+  let enrollmentCancellationInFlight = false;
+  let enrollmentRevision = 0;
+
+  document.querySelector('#closeAccountDrawer').addEventListener('click', () => accountDrawer.close());
+  accountDrawer.addEventListener('cancel', event => {
+    event.preventDefault();
+    accountDrawer.close();
   });
+  accountDrawer.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const focusable = [...accountDrawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), summary, [tabindex="0"]')];
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last?.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first?.focus();
+    }
+  });
+  accountDrawer.addEventListener('close', () => {
+    accountList.querySelectorAll('.selected').forEach(row => row.classList.remove('selected'));
+    const trigger = [...accountList.querySelectorAll('[data-account-id]')]
+      .find(button => button.dataset.accountId === selectedAccountId);
+    accountCountLabel.tabIndex = -1;
+    (panel.hidden ? tokenInput : trigger || (drawerTrigger?.isConnected && drawerTrigger) || accountCountLabel).focus();
+  });
+  document.addEventListener('click', event => {
+    accountList.querySelectorAll('details[open]').forEach(menu => {
+      if (!menu.contains(event.target)) menu.open = false;
+    });
+  });
+  document.querySelector('#adminNavigation').addEventListener('click', event => {
+    const link = event.target.closest('a');
+    if (!link || !link.dataset.view) return;
+    event.preventDefault();
+    window.history.replaceState(null, '', link.getAttribute('href'));
+    window.scrollTo({top:0,behavior:'instant'});
+    document.body.dataset.view = link.dataset.view;
+    document.querySelector('#workspaceTitle').textContent = link.textContent.replace(/[◫▤✓↗⌘]/g, '').trim();
+    if (link.dataset.view === 'qualification') void loadQualificationReports();
+    document.querySelectorAll('#adminNavigation a').forEach(item => item.removeAttribute('aria-current'));
+    link.setAttribute('aria-current', 'page');
+  });
+  addAccountButton.addEventListener('click', () => openEnrollmentDialog());
+  document.querySelector('#restoreAnyAccountButton').addEventListener('click', () => {
+    openEnrollmentDialog();
+    if (!enrollmentDialog.open || isActiveEnrollment()) return;
+    matchExistingAccount = true;
+    enrollmentName.hidden = true; enrollmentName.required = false;
+    enrollmentName.previousElementSibling.hidden = true;
+    replaceEnrollment.parentElement.hidden = true;
+    document.querySelector('#reactivateMatchedRow').hidden = false;
+    enrollmentDialogTitle.textContent = '扫码恢复任意已有账号';
+    enrollmentDialogDescription.textContent = '无需预选原账号；扫码后只更新身份匹配的已有账号，不改名、不换绑历史。';
+    enrollmentQualificationNotice.textContent = '勾选恢复调度时最多授权 1 次真实资格问答；不勾选只更新登录态。';
+    createEnrollmentButton.focus();
+  });
+  document.querySelector('#accountSearch').addEventListener('input', renderAccounts);
+  document.querySelector('#accountFilter').addEventListener('change', renderAccounts);
+  document.querySelector('#cancelQualificationButton').addEventListener('click', async () => {
+    const id = activeQualification?.runId || activeQualification?.id; if (!id) return;
+    if (!window.confirm('停止后续资格请求？已发出的请求不代表上游已取消。')) return;
+    try { await request(`/api/admin/qualifications/${encodeURIComponent(id)}`, { method: 'DELETE' }); await pollQualification(); }
+    catch (error) { setFeedback(qualificationFeedback, qualificationErrorText(error), true); }
+  });
+  continueMembershipButton.addEventListener('click', () => void continueMembership());
+  retryEnrollmentQualificationButton.addEventListener('click', () => openQualificationConfirmation(enrollment?.account));
+  addConflictIdentityButton.addEventListener('click', () => void resolveConflictIdentity());
 
   tokenInput.value = token;
   tokenForm.addEventListener('submit', async (event) => {
@@ -111,20 +187,10 @@
     await loadAdminState();
   });
   reloadButton.addEventListener('click', () => loadAdminState());
-  startEnrollmentButton.addEventListener('click', openEnrollmentDialog);
-  document.querySelector('#addAccountButton').addEventListener('click', openEnrollmentDialog);
   closeEnrollmentButton.addEventListener('click', () => void closeEnrollmentDialog());
   enrollmentForm.addEventListener('submit', startEnrollment);
   focusEnrollmentWindowButton.addEventListener('click', focusEnrollmentWindow);
   cancelEnrollmentButton.addEventListener('click', cancelEnrollment);
-  continueEnrollmentButton.addEventListener('click', async () => {
-    continueEnrollmentButton.disabled = true;
-    try {
-      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}/continue`, { method: 'POST' });
-      enrollment = payload.enrollment; renderEnrollment();
-    } catch { setFeedback(enrollmentDialogFeedback, '暂时无法继续验证，请检查网络后重试', true); }
-    finally { continueEnrollmentButton.disabled = false; }
-  });
   exerciseProfile.addEventListener('change', () => void loadExerciseTemplates());
   loadExerciseTemplatesButton.addEventListener('click', () => void loadExerciseTemplates());
   expandExerciseScriptButton.addEventListener('click', () => setDisclosureState(exerciseScript, true));
@@ -133,6 +199,9 @@
   cancelExerciseButton.addEventListener('click', () => void cancelExercise());
   confirmExerciseButton.addEventListener('click', () => void confirmExerciseStart());
   cancelExerciseConfirmButton.addEventListener('click', () => dismissExerciseConfirmation());
+  startQualificationButton.addEventListener('click', () => openQualificationConfirmation());
+  confirmQualificationButton.addEventListener('click', () => void confirmQualificationStart());
+  cancelQualificationConfirmButton.addEventListener('click', () => qualificationConfirmDialog.close());
   enrollmentDialog.addEventListener('cancel', (event) => {
     event.preventDefault();
     if (isActiveEnrollment()) {
@@ -142,33 +211,75 @@
     void closeEnrollmentDialog();
   });
 
+  const operationsPoller = typeof AdminPoller === 'function' ? new AdminPoller({
+    read: signal => request('/api/admin/overview', { signal }),
+    accept: payload => acceptOperations(payload.overview),
+    fail: () => { document.querySelector('#refreshStatus').textContent = '读取中断；超过 15 秒将显示未知'; },
+  }) : null;
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void operationsPoller?.refresh(); });
+  window.addEventListener('pagehide', () => operationsPoller?.close());
+  let staleTimer;
+  const checkStaleness = () => {
+    if (operations && Date.now() - Date.parse(operations.observedAt) > 15000) {
+      document.querySelector('#refreshStatus').textContent = '状态已过期 · 当前状态未知';
+      document.querySelector('#overviewSection').classList.add('operations-stale');
+      for (const el of summary.querySelectorAll('strong')) el.textContent = '—';
+    }
+  };
+  staleTimer = window.setInterval(checkStaleness, 1000);
+  window.addEventListener('pageshow', event => { if (event.persisted) { void operationsPoller?.start(); staleTimer = window.setInterval(checkStaleness, 1000); } });
+  window.addEventListener('pagehide', () => window.clearInterval(staleTimer));
   void loadAdminState();
 
   async function loadAdminState() {
     setFeedback(loginFeedback, '');
     reloadButton.disabled = true;
     try {
-      const [bootstrapPayload, accountPayload] = await Promise.all([
+      const [bootstrapPayload, accountPayload, eligibilityPayload] = await Promise.all([
         request('/api/admin/bootstrap'),
         request('/api/admin/accounts?details=1'),
+        request('/api/admin/v2/accounts/eligibility').catch(() => null),
       ]);
       bootstrap = bootstrapPayload;
-      accounts = Array.isArray(accountPayload.accounts) ? accountPayload.accounts : [];
-      readiness = accountPayload.readiness;
-      if (upgradeWebMode) upgradeWebMode.hidden = !readiness || readiness.mode === 'knowledge_agent';
-      const readinessSummary = document.querySelector('#webReadinessSummary');
-      if (readinessSummary) readinessSummary.textContent = readiness
-        ? `知识库问答 · 待验证 ${readiness.pending ?? '未知'}` : '知识库问答';
+      document.querySelector('#syntheticNotice').hidden = bootstrap.provider !== 'synthetic-preview';
+      eligibilitySnapshot = eligibilityPayload;
+      const eligibilityById = new Map((eligibilitySnapshot?.accounts || []).map((account) => [account.id, account]));
+      accounts = Array.isArray(accountPayload.accounts)
+        ? accountPayload.accounts.map((account) => {
+          const strategyEligibility = eligibilityById.get(account.id) || null;
+          const basicHealth = strategyEligibility?.basic_health;
+          return {
+            ...account,
+            serviceStatus: strategyEligibility?.strategies?.knowledge_agent
+              ? knowledgeServiceState(strategyEligibility.strategies.knowledge_agent)
+              : account.serviceStatus || 'pending',
+            ...(basicHealth ? { availabilityStatus: {
+              passed: 'ready', failed: 'unavailable', pending: 'needs_check',
+            }[basicHealth.check_status] || 'needs_check' } : {}),
+            ...(basicHealth ? { health: { ...account.health, ...basicHealth } } : {}),
+            strategyEligibility,
+          };
+        })
+        : [];
       sessionStorage.setItem(tokenStorageKey, token);
       login.hidden = true;
       panel.hidden = false;
-      renderSummary(accountPayload.summary, accountPayload.queue);
-      startEnrollmentButton.disabled = false;
-      startEnrollmentButton.title = bootstrap?.enrollment?.supportsAdminPageQr
+      document.querySelector('#adminNavigation').hidden = false;
+      renderSummary(accountPayload.summary, accountPayload.queue, eligibilitySnapshot);
+      if (operationsPoller) await operationsPoller.refresh();
+      addAccountButton.disabled = !bootstrap?.enrollment?.supportsAdminPageQr;
+      addAccountButton.title = bootstrap?.enrollment?.supportsAdminPageQr
         ? ''
         : '当前服务未启用页面二维码接入';
       renderAccounts();
+      qualification = bootstrap?.qualification || null;
+      document.querySelector('#qualificationNav').hidden = !qualification;
+      activeQualification = qualification?.active || null;
+      renderQualification();
+      if (activeQualification) pollQualification();
       exercise = bootstrap?.exercise || null;
+      document.querySelector('#exerciseNav').hidden = !exercise;
+      document.querySelector('#reportsNav').hidden = !exercise;
       renderExerciseShell();
       if (exercise) {
         await refreshExerciseReports();
@@ -181,19 +292,26 @@
         }
       }
     } catch (error) {
+      if (error.statusCode !== 401 && error.statusCode !== 403) {
+        document.querySelector('#refreshStatus').textContent = '状态暂时无法确认；保留当前操作，稍后重试';
+        return;
+      }
       sessionStorage.removeItem(tokenStorageKey);
       token = '';
       tokenInput.value = '';
       login.hidden = false;
       panel.hidden = true;
+      document.querySelector('#adminNavigation').hidden = true;
+      if (accountDrawer.open) accountDrawer.close();
       stopExercisePolling();
+      stopQualificationPolling();
       setFeedback(loginFeedback, error.message || '无法读取账号状态', true);
     } finally {
       reloadButton.disabled = false;
     }
   }
 
-  async function request(url, options = {}, { allowUnsuccessfulResult = false } = {}) {
+  async function request(url, options = {}) {
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -203,21 +321,93 @@
       },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || (!allowUnsuccessfulResult && payload.success === false)) {
-      throw new Error(payload.error || `请求失败 (${response.status})`);
+    if (!response.ok || payload.success === false) {
+      const error = new Error(payload.error || `请求失败 (${response.status})`);
+      error.code = payload.code || '';
+      error.statusCode = response.status;
+      throw error;
     }
     return payload;
   }
 
-  function renderSummary(pool, queue) {
-    const total = Number(pool?.totalAccounts || accounts.length || 0);
-    summary.replaceChildren(
-      createMetric('账号总数', total),
-      createMetric('知识库已合格', accounts.filter(account => managementView(account).knowledge.qualified === true).length),
-      createMetric('当前可调度', readiness?.schedulable ?? accounts.filter(account => managementView(account).schedulable === true).length),
-      createMetric('需重新登录', accounts.filter(account => managementView(account).knowledge.state === 'needs_login').length),
-      createMetric('问答并发', readiness?.capacity ?? queue?.maxConcurrent ?? '未知'),
-    );
+  function renderSummary() {
+    if (operations) return renderOperations();
+    summary.replaceChildren(...['可服务账号','同时回答上限','正在回答','排队等待'].map(x => createMetric(x, '—')));
+    adminSummaryNote.textContent = '正在等待运行中 Provider 的一致快照；不使用历史资格推算当前容量。';
+  }
+
+  function acceptOperations(value) {
+    if (value?.schema !== 'provider_operations_v1' || !Number.isFinite(Date.parse(value.observedAt)) || Date.now()-Date.parse(value.observedAt)>15000) throw Error('stale_operations');
+    operations=value; operationsReceivedAt=Date.now();
+    const byId=new Map(value.rows.map(x=>[x.id,x]));
+    if(value.eligibility) eligibilitySnapshot=value.eligibility;
+    const eligibilityById=new Map((value.eligibility?.accounts||[]).map(a=>[a.id,a]));
+    const previous=new Map(accounts.map(a=>[a.id,a]));
+    accounts=(value.accounts||accounts).map(a=>({...previous.get(a.id),...a, strategyEligibility:eligibilityById.get(a.id)||previous.get(a.id)?.strategyEligibility, events:a.events||previous.get(a.id)?.events, operations:byId.get(a.id), serviceStatus:byId.get(a.id)?.ready?'ready':a.serviceStatus}));
+    renderOperations();
+    if (accountDrawer.open) {
+      const selected=accounts.find(a=>a.id===selectedAccountId);
+      if(!selected) accountDrawer.close();
+      else if(!accountDrawerContent.contains(document.activeElement)) {
+        const scroll=accountDrawer.scrollTop, opened=[...accountDrawerContent.querySelectorAll('details')].map(x=>x.open);
+        renderAccountDetails(selected); [...accountDrawerContent.querySelectorAll('details')].forEach((x,i)=>x.open=opened[i]||false); accountDrawer.scrollTop=scroll;
+      }
+    }
+    for(const row of accountList.querySelectorAll('tbody tr[data-account-id]')) {
+      const r=byId.get(row.dataset.accountId),cells=row.querySelectorAll('td');if(!r||cells.length<4)continue;
+      cells[1].textContent={valid:'有效',expired:'已过期',unknown:'未确认'}[r.login]||'未确认';cells[2].textContent=r.ready?'可服务':r.reason;cells[3].textContent=r.ready?`${r.limit??'—'} 路 · ${basisLabel(r.basis)}`:'不计入容量';
+    }
+    const signature=JSON.stringify(value.rows);
+    if(signature!==operationsSignature && !accountList.contains(document.activeElement) && !accountList.querySelector('details[open]')) {
+      operationsSignature=signature; renderAccounts();
+    }
+  }
+  function renderOperations() {
+    const v=operations, labels={normal:'服务正常',busy:'名额已满 · 正在排队',degraded:'部分容量可用',outage:'暂不可服务',maintenance:'维护中',unknown:'状态未知'};
+    document.querySelector('#overviewSection').classList.remove('operations-stale');
+    document.querySelector('#refreshStatus').textContent=`${labels[v.state]||'未知'} · 每 5 秒刷新 · ${new Date(v.observedAt).toLocaleTimeString('zh-CN')}`;
+    summary.replaceChildren(createMetric('可服务账号',`${v.ready} / ${v.total}`),createMetric('同时回答上限',v.capacity??'—'),createMetric('正在回答',v.active??'—'),createMetric('排队等待',v.queued??'—'));
+    const trials=v.rows.filter(x=>x.ready&&x.basis==='operator_trial');
+    adminSummaryNote.textContent=`空闲 ${v.free??'—'} 路 · 排队上限 ${v.queueLimit??'—'} · ${trials.length?'含试运行额度，尚非稳定并发验收':'按当前调度限制'}${v.warnings.length?' · '+v.warnings.join('；'):''}`;
+    const allocation=document.querySelector('#capacityAllocation');allocation.replaceChildren();
+    for(const r of v.rows.filter(x=>x.ready)) {
+      const group=document.createElement('div'); group.className='allocation-group';
+      const label=document.createElement('p');label.textContent=`${r.name} · ${r.limit??'—'} 路 · ${basisLabel(r.basis)}`;
+      const slots=document.createElement('div');slots.className='capacity-slots';
+      for(let i=0;i<Math.min(30,r.limit||0);i++){const slot=document.createElement('span');slot.className=i<(r.active||0)?'occupied':'';slots.append(slot);}
+      group.append(label,slots);allocation.append(group);
+    }
+    if(!allocation.childElementCount)allocation.textContent='没有已确认的可服务容量';
+    const m=v.metrics;
+    document.querySelector('#qaObservation').textContent=m?.samples?`最近一小时（最多 512 个）样本 ${m.samples} · 成功 ${(m.successRate*100).toFixed(1)}% · 完成 P95 ${m.durationP95Ms??'—'} ms · 首段 P95 ${m.firstDeltaP95Ms??'—'} ms`:'尚无样本，不计算成功率或回答延迟';
+    const d=document.querySelector('#operationsDiagnostics');d.replaceChildren();
+    for(const [key,label] of Object.entries({registered:'登记账号数',accountCapacity:'当前账号容量',readinessCapacity:'网站就绪容量',dispatchCeiling:'队列派发上限',globalCeiling:'全局配置上限'})) {
+      const p=document.createElement('p');p.textContent=`${label}：${v.diagnostics?.[key]??'未知'}`;d.append(p);
+    }
+    const privacy=document.createElement('p');privacy.textContent='自动刷新不检查账号、不续期、不验证资格、不发问。统计在线访客数：未提供。';d.append(privacy);
+  }
+  function basisLabel(value) { return {validated:'实测验证',operator_trial:'试运行',default:'默认限制',unverified:'依据待核对'}[value]||'未知'; }
+  function qualificationFailureLabel(report) {
+    if (report?.failureStage === 'qualification_commit' || report?.failureCategory === 'local_persistence_failed') return '资格保存失败；不等同于上游回答失败';
+    if (report?.failureCategory === 'local_generation_conflict') return '本地账号状态冲突，资格未提交';
+    if (report?.warnings?.includes('pool_sync_failed')) return '资格已保存，调度同步需要核对';
+    return report?.failureCategory || '无已报告错误';
+  }
+  async function loadQualificationReports() {
+    const container=document.querySelector('#qualificationReports');
+    try {
+      const result=await request('/api/admin/qualifications/reports');container.replaceChildren();
+      for(const report of (result.reports||[])) {
+        const row=document.createElement('div');row.className='qualification-report';
+        const label=document.createElement('p');label.textContent=`${report.status||'未知'} · 已用 ${report.usedRequests??'—'} / ${report.authorizedRequests??'—'} 次 · ${qualificationFailureLabel(report)}`;
+        row.append(label,createAction('查看资格报告',async()=>{
+          try{const r=await request(`/api/admin/qualifications/reports/${encodeURIComponent(report.id||report.runId)}`);
+            const detail=document.createElement('pre');detail.textContent=JSON.stringify(r.report,null,2);row.append(detail);}
+          catch(error){setFeedback(qualificationFeedback,qualificationErrorText(error),true);}
+        }));container.append(row);
+      }
+      if(!container.childElementCount)container.textContent='暂无已保存的资格报告';
+    }catch(error){container.textContent='资格报告暂时无法读取';}
   }
 
   function createMetric(label, value) {
@@ -231,11 +421,158 @@
     return item;
   }
 
-  function openEnrollmentDialog() {
-    if (!bootstrap?.enrollment?.supportsAdminPageQr) {
-      setFeedback(enrollFeedback, '扫码助手未就绪。维护电脑运行 onboard repair --env <私有配置文件>；Linux 服务器请使用 onboard tunnel 和 onboard enroll。详见 Agent 部署说明。', true);
+  function renderQualification() {
+    qualificationPanel.hidden = !qualification;
+    if (!qualification) return;
+    const targets = Number(qualification.targetAccountCount || 0);
+    const budget = Number(qualification.authorizedRequestCount || 0);
+    const knowledgeAgentCapacity = Number(eligibilitySnapshot?.summary?.strategies?.knowledge_agent?.capacity
+      ?? qualification.knowledgeAgentAvailable ?? 0);
+    const currentProfileCapacity = Number(eligibilitySnapshot?.summary?.active_profile_capacity
+      ?? qualification.generalAutoAvailable ?? 0);
+    const selectedProfile = profileLabel(eligibilitySnapshot?.active_profile?.name || 'ima_agent_auto');
+    qualificationCapacityLabel.textContent = `网站当前容量 ${operations?.capacity ?? "待确认"} 路；历史资格折算 ${knowledgeAgentCapacity} 路（可含过期账号）；当前「${selectedProfile}」模式容量 ${currentProfileCapacity} 路；待认证 ${targets} 个账号`;
+    startQualificationButton.disabled = Boolean(activeQualification) || targets < 1;
+    startQualificationButton.textContent = targets > 0
+      ? `认证 ${targets} 个账号（最多 ${budget} 次）`
+      : '没有待认证账号';
+    document.querySelector('#cancelQualificationButton').hidden = !activeQualification;
+    qualificationLive.hidden = !activeQualification;
+    if (!activeQualification) return;
+    const phase = {
+      smoke: '正在执行冒烟检查',
+      matrix: '正在执行六模式认证',
+      applying: '正在原子写入资格',
+      completed: '认证任务已结束',
+    }[activeQualification.phase] || '正在认证';
+    qualificationLiveState.textContent = phase;
+    qualificationLiveElapsed.textContent = `已运行 ${formatDuration(Date.now() - Number(activeQualification.startedAt || Date.now()))}`;
+    qualificationLiveDetail.textContent = `普通 Provider 问答已暂停；不会调用 Bot、Android 或微信发送。${qualificationOutcomeNote(activeQualification)}`;
+    qualificationLiveMetrics.replaceChildren(
+      createMetric('已用额度', Number(activeQualification.usedRequests || 0)),
+      createMetric('授权额度', Number(activeQualification.authorizedRequests || 0)),
+      createMetric('模式通过', Number(activeQualification.completedModes || 0)),
+      createMetric('账号通过', Number(activeQualification.passedTargets || 0)),
+      createMetric('账号失败', Number(activeQualification.failedTargets || 0)),
+    );
+  }
+
+  function enrollmentQualificationBudget() {
+    const contract = bootstrap?.enrollment?.qualification;
+    return contract?.required === true && contract.automatic === true
+      && Number.isSafeInteger(contract.requestsPerTarget) && contract.requestsPerTarget > 0
+      ? contract.requestsPerTarget : null;
+  }
+
+  function openQualificationConfirmation(account = null) {
+    if (qualificationStarting || activeQualification) return;
+    qualificationTarget = null;
+    if (account?.id) {
+      const webVerify = !enrollmentQualificationBudget() && bootstrap?.webVerification?.available === true;
+      const budget = enrollmentQualificationBudget() || (webVerify ? 1 : null);
+      if (!budget) return;
+      qualificationTarget = { id: account.id, budget, webVerify };
+      qualificationConfirmText.textContent = `仅验证账号 ${account.name}，授权最多 ${budget} 次真实问答验证；不会复验其他账号。只有服务端确认成功后，待接入资格账号才会自动启用。`;
+      qualificationConfirmDialog.showModal();
       return;
     }
+    if (!qualification || activeQualification || Number(qualification.targetAccountCount || 0) < 1) return;
+    qualificationConfirmText.textContent = `本次将认证 ${qualification.targetAccountCount} 个账号，授权最多 ${qualification.authorizedRequestCount} 次真实 3DGS 问答。只有整批通过才会生效。`;
+    qualificationConfirmDialog.showModal();
+  }
+
+  async function confirmQualificationStart() {
+    if (qualificationStarting || activeQualification || (!qualificationTarget && !qualification)) return;
+    const target = qualificationTarget;
+    if (target && target.budget !== (enrollmentQualificationBudget() || (target.webVerify && bootstrap?.webVerification?.available ? 1 : null))) return;
+    qualificationStarting = true;
+    qualificationConfirmDialog.close();
+    confirmQualificationButton.disabled = true;
+    startQualificationButton.disabled = true;
+    setFeedback(qualificationFeedback, '正在启动真实知识问答资格认证…');
+    try {
+      const payload = await request(target ? `/api/admin/accounts/${encodeURIComponent(target.id)}/${target.webVerify ? 'verify' : 'qualification'}` : '/api/admin/qualifications', {
+        method: 'POST',
+        body: JSON.stringify(target ? { confirm: true, authorizedRequestCount: target.budget } : {
+          confirm: true,
+          authorizedRequestCount: qualification.authorizedRequestCount,
+          candidateSetDigest: qualification.candidateSetDigest,
+        }),
+      });
+      if (target?.webVerify) {
+        setFeedback(accountFeedback, payload.success ? '本账号资格验证完成；请核对保存与派发状态' : '本账号资格验证未通过；未自动重试', !payload.success);
+        await loadAdminState(); return;
+      }
+      activeQualification = target ? payload.qualification : payload.run;
+      observedQualificationRunId = activeQualification?.runId || activeQualification?.id || '';
+      observedQualificationResult = activeQualification;
+      if (target && enrollmentDialog.open && !isActiveEnrollment()) dismissEnrollmentDialog();
+      renderQualification();
+      pollQualification();
+    } catch (error) {
+      setFeedback(qualificationFeedback, qualificationErrorText(error), true);
+      if (target && enrollmentDialog.open) setFeedback(enrollmentDialogFeedback, qualificationErrorText(error), true);
+      startQualificationButton.disabled = false;
+    } finally {
+      qualificationStarting = false;
+      qualificationTarget = null;
+      confirmQualificationButton.disabled = false;
+    }
+  }
+
+  async function pollQualification() {
+    stopQualificationPolling();
+    if (document.hidden) { qualificationPollTimer = window.setTimeout(() => void pollQualification(), 5000); return; }
+    try {
+      const payload = await request('/api/admin/qualifications/active');
+      activeQualification = payload.run || null;
+      if (activeQualification) {
+        observedQualificationRunId ||= activeQualification.runId || activeQualification.id || '';
+        if ((activeQualification.runId || activeQualification.id) === observedQualificationRunId) observedQualificationResult = activeQualification;
+        renderQualification();
+        qualificationPollTimer = window.setTimeout(() => void pollQualification(), 900);
+        return;
+      }
+      const refreshed = await request('/api/admin/qualifications/bootstrap');
+      const reports = await request('/api/admin/qualifications/reports');
+      const storedReport = Array.isArray(reports.reports)
+        ? reports.reports.find(item => item.id === observedQualificationRunId) : null;
+      const report = storedReport || observedQualificationResult;
+      qualification = refreshed.qualification;
+      renderQualification();
+      setFeedback(qualificationFeedback, report
+        ? `资格报告：${report.status || '状态未知'}；已用 ${report.usedRequests ?? '未知'} / 授权 ${report.authorizedRequests ?? '未知'} 次${report.failureCategory ? `；失败类别：${report.failureCategory}` : ''}${qualificationOutcomeNote(report)}${storedReport ? '' : '；尚未取得持久化报告，以最后一次观察为准。'}`
+        : '资格任务已结束，尚未取得对应报告；请以账号池实际资格为准。');
+      observedQualificationRunId = '';
+      observedQualificationResult = null;
+      await loadAdminState();
+    } catch (error) {
+      setFeedback(qualificationFeedback, qualificationErrorText(error), true);
+    }
+  }
+
+  function stopQualificationPolling() {
+    if (qualificationPollTimer) {
+      window.clearTimeout(qualificationPollTimer);
+      qualificationPollTimer = null;
+    }
+  }
+
+  function qualificationErrorText(error) {
+    return {
+      qualification_authorization_invalid: '账号集合或授权额度已变化，请刷新后重新确认。',
+      provider_requests_not_drained: '仍有 Provider 问答在处理，请等待归零后重试。',
+      provider_maintenance_conflict: '另一个维护任务正在运行，请等待完成。',
+      qualification_no_candidates: '当前没有需要认证的账号。',
+    }[error?.message] || error?.message || '资格认证失败';
+  }
+
+  function openEnrollmentDialog(account = null) {
+    if (!bootstrap?.enrollment?.supportsAdminPageQr) {
+      setFeedback(enrollFeedback, '当前服务未启用页面二维码接入', true);
+      return;
+    }
+    if (accountDrawer.open) accountDrawer.close();
     const activeEnrollment = bootstrap?.enrollment?.activeEnrollment;
     if (activeEnrollment && isActiveEnrollmentState(activeEnrollment.state)) {
       enrollment = activeEnrollment;
@@ -244,13 +581,25 @@
       renderEnrollment();
     } else {
       resetEnrollmentDialog();
+      if (account) {
+        enrollmentReauthAccountId = account.id;
+        enrollmentDialogTitle.textContent = `重新登录 ${account.name}`;
+        enrollmentDialogDescription.textContent = '新登录态验证通过且确认属于原 IMA 身份后，才会原位替换旧凭据';
+        enrollmentName.value = account.name;
+        enrollmentName.disabled = true;
+        replaceEnrollment.checked = true;
+        replaceEnrollment.disabled = true;
+        createEnrollmentButton.textContent = '打开重新登录窗口';
+      }
     }
-    const shareLink = document.querySelector('#enrollmentShareLink');
-    const shareUrl = bootstrap?.enrollment?.shareUrl;
-    shareLink.hidden = !shareUrl;
-    if (shareUrl && /^https:\/\/ima\.qq\.com\/wiki\/?\?shareId=[a-f0-9]{64}$/i.test(shareUrl)) shareLink.href = shareUrl;
-    else shareLink.hidden = true;
     enrollmentDialog.showModal();
+    const budget = enrollmentQualificationBudget();
+    enrollmentQualificationNotice.hidden = bootstrap?.enrollment?.qualification?.required !== true;
+    enrollmentQualificationNotice.textContent = budget
+      ? `授权后将自动进行最多${budget}次真实问答验证，仅验证本次账号。点击接入表示同意。`
+      : '资格验证授权配置不可用，请刷新后重试。';
+    createEnrollmentButton.disabled = !enrollmentQualificationNotice.hidden && !budget;
+    if (budget) createEnrollmentButton.textContent = '同意并接入';
     if (enrollment) {
       void refreshEnrollment();
     } else {
@@ -268,18 +617,25 @@
 
   async function startEnrollment(event) {
     event.preventDefault();
+    if (createEnrollmentButton.disabled) return;
+    const budget = enrollmentQualificationBudget();
+    if (bootstrap?.enrollment?.qualification?.required === true && !budget) return;
     setFeedback(enrollmentDialogFeedback, '');
     createEnrollmentButton.disabled = true;
     try {
       const preflight = await request('/api/admin/enrollment-preflight', { method: 'POST' });
-      if (!preflight.enrollment?.ready) throw new Error('扫码助手离线或版本不兼容。请在维护电脑运行 onboard repair --env <私有配置文件>，检查后重试；不会修改已有账号。');
+      if (!preflight.enrollment?.ready) throw new Error('扫码通路未就绪；未创建接入任务，请先检查维护助手');
       const payload = await request('/api/admin/enrollments', {
         method: 'POST',
         body: JSON.stringify({
-          name: cleanAccountName(enrollmentName.value),
-          replace: replaceEnrollment.checked,
-          reauthAccountId,
-          testQuestion: document.querySelector('#enrollmentTestQuestion')?.value,
+          ...(matchExistingAccount ? { matchExistingAccount: true, reactivateMatchedAccount: document.querySelector('#reactivateMatchedAccount').checked,
+            confirmQualification: document.querySelector('#reactivateMatchedAccount').checked, authorizedRequestCount: document.querySelector('#reactivateMatchedAccount').checked ? 1 : undefined } : budget ? { confirmQualification: true, authorizedRequestCount: budget } : {}),
+          ...(matchExistingAccount ? {} : enrollmentReauthAccountId
+            ? { reauthAccountId: enrollmentReauthAccountId }
+            : {
+                name: cleanAccountName(enrollmentName.value),
+                replace: replaceEnrollment.checked,
+              }),
         }),
       });
       enrollment = payload.enrollment;
@@ -296,22 +652,35 @@
   }
 
   async function refreshEnrollment() {
-    if (!enrollment?.taskId) {
+    stopEnrollmentPolling();
+    if (document.hidden) { enrollmentPollTimer = window.setTimeout(() => void refreshEnrollment(), 5000); return; }
+    if (!enrollment?.taskId || identityAdditionInFlight || enrollmentCancellationInFlight) {
       return;
     }
+    const taskId = enrollment.taskId;
+    const revision = enrollmentRevision;
+    const sequence = ++enrollmentPollSequence;
     try {
-      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(enrollment.taskId)}`);
+      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(taskId)}`);
+      if (revision !== enrollmentRevision || sequence !== enrollmentPollSequence || enrollment?.taskId !== taskId) return;
+      if (payload.enrollment?.taskId !== taskId) throw new Error('接入响应不匹配，请刷新任务状态');
       enrollment = payload.enrollment;
+      if (!isActiveEnrollment()) {
+        enrollmentRevision++;
+        renderEnrollment();
+        if (enrollment.state === 'completed') await finishCompletedEnrollment(enrollment);
+        return;
+      }
       renderEnrollment();
       if (enrollment.qrAvailable) {
         await refreshEnrollmentQr();
       }
+      if (sequence !== enrollmentPollSequence || enrollment?.taskId !== taskId || revision !== enrollmentRevision) return;
       if (isActiveEnrollment()) {
         enrollmentPollTimer = window.setTimeout(() => void refreshEnrollment(), 1200);
-      } else if (enrollment.state === 'completed') {
-        await finishCompletedEnrollment(enrollment);
       }
     } catch (error) {
+      if (revision !== enrollmentRevision || sequence !== enrollmentPollSequence || enrollment?.taskId !== taskId) return;
       setFeedback(enrollmentDialogFeedback, error.message || '无法读取接入状态', true);
       stopEnrollmentPolling();
     }
@@ -324,9 +693,8 @@
     }
     completedEnrollmentTaskId = taskId;
     stopEnrollmentPolling();
-    const accountName = String(completedEnrollment?.account?.name || '新账号');
     dismissEnrollmentDialog();
-    setFeedback(enrollFeedback, `账号 ${accountName}：${enrollmentStatus(completedEnrollment)}。`);
+    setFeedback(enrollFeedback, enrollmentCompletionText(completedEnrollment));
     await loadAdminState();
   }
 
@@ -354,23 +722,101 @@
     const useVisibleBrowser = active && browserWindowAvailable;
     enrollmentState.textContent = enrollmentStateLabel(enrollment.state);
     identityConflict.hidden = enrollment.state !== 'identity_conflict';
+    const canAddIdentity = !matchExistingAccount && (enrollment.identityConflict?.actions || ['add']).includes('add');
+    identityConflictName.hidden = !canAddIdentity; addConflictIdentityButton.hidden = !canAddIdentity;
+    document.querySelector('#identityConflictTitle').textContent = canAddIdentity ? '扫码身份与原账号不一致' : '未能确认已有账号；原账号池未修改';
+    addConflictIdentityButton.disabled = !canAddConflictIdentity() || identityAdditionInFlight || enrollmentCancellationInFlight;
+    identityConflictName.disabled = identityAdditionInFlight || enrollmentCancellationInFlight;
     enrollmentStatusText.textContent = enrollmentStatus(enrollment);
+    const evidence = enrollment.qualification;
+    enrollmentQualificationStatus.hidden = !evidence;
+    const qualificationStatus = { pending: '等待验证', running: '正在验证', succeeded: '验证成功', failed: '验证失败', cancelled: '验证已取消' };
+    enrollmentQualificationStatus.textContent = evidence
+      ? `资格验证：${qualificationStatus[evidence.status] || '状态未知'}；已用 ${evidence.usedRequests ?? '未知'} / 授权 ${evidence.authorizedRequestCount ?? '未知'} 次${evidence.failureCategory ? `；失败类别：${evidence.failureCategory}` : ''}${qualificationOutcomeNote(evidence)}` : '';
+    continueMembershipButton.hidden = enrollment.canContinue !== true;
+    continueMembershipButton.disabled = membershipContinuing;
+    enrollmentShareLink.hidden = true;
+    enrollmentShareLink.removeAttribute('href');
+    try {
+      const url = new URL(enrollment.shareUrl);
+      if (url.protocol === 'https:' && url.hostname === 'ima.qq.com' && !url.username && !url.password && !url.port) {
+        enrollmentShareLink.href = url.href;
+        enrollmentShareLink.hidden = false;
+      }
+    } catch {}
+    retryEnrollmentQualificationButton.hidden = enrollment.state !== 'failed'
+      || !enrollment.account?.id || evidence?.status !== 'failed' || !enrollmentQualificationBudget();
     cancelEnrollmentButton.hidden = !active;
-    continueEnrollmentButton.hidden = !enrollment.canContinue || enrollment.state === 'identity_conflict';
     enrollmentQr.hidden = !enrollment.qrAvailable || useVisibleBrowser || enrollment.state === 'identity_conflict';
-    enrollmentQrNote.hidden = !enrollment.qrAvailable || useVisibleBrowser || enrollment.state === 'identity_conflict';
+    enrollmentQrNote.hidden = enrollmentQr.hidden;
     enrollmentResult.hidden = !enrollment.account;
     renderEnrollmentDiagnostic(enrollment.diagnostics);
     focusEnrollmentWindowButton.hidden = !active || (!browserWindowAvailable && !enrollment.diagnostics?.browserFallbackAvailable);
     focusEnrollmentWindowButton.textContent = browserWindowAvailable ? '定位受控登录窗口' : '打开受控登录窗口';
     enrollmentResult.textContent = enrollment.account
-      ? `账号 ${enrollment.account.name} 已接入，当前状态：${statusLabel(enrollment.account.status)}。`
+      ? `账号 ${enrollment.account.name} ${enrollment.state === 'completed' ? '已接入' : '流程尚未完成'}，当前状态：${statusLabel(enrollment.account.status)}。`
       : '';
     if (enrollment.error && enrollment.state !== 'cancelled') {
       setFeedback(enrollmentDialogFeedback, enrollment.error, true);
     }
     if (!active && enrollment.state === 'completed') {
-      setFeedback(enrollmentDialogFeedback, enrollment.warning ? enrollmentStatus(enrollment) : '接入完成，账号池已刷新。');
+      setFeedback(enrollmentDialogFeedback, enrollmentCompletionText(enrollment));
+    }
+  }
+
+  function enrollmentCompletionText(job) {
+    const accountName = String(job?.account?.name || '新账号');
+    const status = job?.account?.status === 'disabled'
+      ? '接入流程完成，账号已停用；' : '已接入账号池；';
+    const fallback = job?.account?.status === 'disabled'
+      ? '仍保持停用；启用需另行确认。' : '知识问答资格以独立认证结果为准。';
+    return `账号 ${accountName} ${status}${job?.detail || fallback}${qualificationOutcomeNote(job?.qualification)}`;
+  }
+
+  function qualificationOutcomeNote(evidence) {
+    if (!evidence) return '';
+    const warnings = Array.isArray(evidence.warnings) ? evidence.warnings : [];
+    const syncPending = warnings.includes('pool_sync_failed') || warnings.includes('capacity_sync_failed');
+    const notes = [];
+    if (evidence.commitApplied === true) {
+      notes.push(syncPending ? '资格已保存，调度同步需处理' : '资格已保存；能否问答以当前调度资格为准');
+    } else {
+      if (evidence.commitApplied === false) notes.push('资格尚未确认保存');
+      if (syncPending) notes.push('调度同步需处理');
+    }
+    if (evidence.reportPersisted === false || warnings.includes('report_persistence_failed')) {
+      notes.push('报告未持久化，刷新后可能不可见；无需仅因此重试，不会自动重新发起问答验证');
+    }
+    return notes.length ? `；${notes.join('；')}。` : '';
+  }
+
+  async function continueMembership() {
+    if (!enrollment?.taskId || enrollment.canContinue !== true || membershipContinuing || enrollmentCancellationInFlight) return;
+    const taskId = enrollment.taskId;
+    const revision = ++enrollmentRevision;
+    membershipContinuing = true;
+    stopEnrollmentPolling();
+    renderEnrollment();
+    try {
+      const pending = request(`/api/admin/enrollments/${encodeURIComponent(taskId)}/continue`, { method: 'POST' });
+      // Continue may await all seven probes; observe the job while the POST is pending.
+      void refreshEnrollment();
+      const payload = await pending;
+      if (revision !== enrollmentRevision || enrollment?.taskId !== taskId || !isActiveEnrollment()) return;
+      if (payload.enrollment?.taskId !== taskId) throw new Error('接入响应不匹配，请刷新任务状态');
+      enrollmentRevision++;
+      stopEnrollmentPolling();
+      enrollment = payload.enrollment;
+      renderEnrollment();
+      if (enrollment.state === 'completed') await finishCompletedEnrollment(enrollment);
+      else if (isActiveEnrollment()) await refreshEnrollment();
+    } catch (error) {
+      if (revision === enrollmentRevision && enrollment?.taskId === taskId && isActiveEnrollment()) {
+        setFeedback(enrollmentDialogFeedback, error.message || '无法继续验证', true);
+      }
+    } finally {
+      membershipContinuing = false;
+      continueMembershipButton.disabled = false;
     }
   }
 
@@ -421,27 +867,31 @@
   }
 
   async function cancelEnrollment(options = {}) {
+    if (enrollmentCancellationInFlight) return;
     if (!enrollment?.taskId || !isActiveEnrollment()) {
       dismissEnrollmentDialog();
       return;
     }
     const taskId = enrollment.taskId;
     const closeDialog = Boolean(options.closeDialog);
+    enrollmentCancellationInFlight = true;
+    enrollmentRevision++;
+    stopEnrollmentPolling();
     cancelEnrollmentButton.disabled = true;
-    if (closeDialog) {
-      dismissEnrollmentDialog();
-      setFeedback(enrollFeedback, '正在取消未完成的账号接入任务。');
-    }
+    renderEnrollment();
     try {
       const payload = await request(`/api/admin/enrollments/${encodeURIComponent(taskId)}`, {
         method: 'DELETE',
       });
+      if (payload.enrollment?.taskId !== taskId) throw new Error('取消响应不匹配，请刷新任务状态');
       enrollment = payload.enrollment;
       if (enrollment.state === 'completed') {
         await finishCompletedEnrollment(enrollment);
         return;
       }
+      if (enrollment.state !== 'cancelled') throw new Error('任务尚未确认取消，请核对当前状态');
       if (closeDialog) {
+        dismissEnrollmentDialog();
         setFeedback(enrollFeedback, '未完成的账号接入已取消。');
         await loadAdminState();
       } else {
@@ -451,12 +901,58 @@
         dismissEnrollmentDialog();
       }
     } catch (error) {
-      setFeedback(closeDialog ? enrollFeedback : enrollmentDialogFeedback, error.message || '无法取消接入', true);
-      if (closeDialog) {
-        await loadAdminState();
+      setFeedback(enrollmentDialogFeedback, error.message || '无法取消接入，请重试', true);
+    } finally {
+      enrollmentCancellationInFlight = false;
+      cancelEnrollmentButton.disabled = false;
+      renderEnrollment();
+      if (isActiveEnrollment() && !identityAdditionInFlight) {
+        enrollmentPollTimer = window.setTimeout(() => void refreshEnrollment(), 1200);
+      }
+    }
+  }
+
+  function canAddConflictIdentity() {
+    return enrollment?.state === 'identity_conflict'
+      && Array.isArray(enrollment.identityConflict?.actions)
+      && enrollment.identityConflict.actions.includes('add');
+  }
+
+  async function resolveConflictIdentity() {
+    if (matchExistingAccount || (enrollment?.identityConflict?.actions && !enrollment.identityConflict.actions.includes('add'))) return;
+    if (!canAddConflictIdentity() || identityAdditionInFlight || enrollmentCancellationInFlight) return;
+    const name = cleanAccountName(identityConflictName.value);
+    if (!name || name === cleanAccountName(enrollment.name)
+        || accounts.some(account => [account.name, account.id].some(value => cleanAccountName(value) === name))) {
+      setFeedback(enrollmentDialogFeedback, '请输入与现有账号不同的新账号名称', true);
+      return;
+    }
+    identityAdditionInFlight = true;
+    const revision = ++enrollmentRevision;
+    const taskId = enrollment.taskId;
+    stopEnrollmentPolling();
+    setFeedback(enrollmentDialogFeedback, '正在提交新增身份决定...');
+    renderEnrollment();
+    try {
+      const payload = await request(`/api/admin/enrollments/${encodeURIComponent(taskId)}/identity`, {
+        method: 'POST', body: JSON.stringify({ action: 'add', name }),
+      });
+      if (revision !== enrollmentRevision || enrollment?.taskId !== taskId || !isActiveEnrollment()) return;
+      if (payload.enrollment?.taskId !== taskId) throw new Error('接入响应不匹配，请刷新任务状态');
+      enrollment = payload.enrollment;
+      setFeedback(enrollmentDialogFeedback, '');
+      renderEnrollment();
+      if (enrollment.state === 'completed') await finishCompletedEnrollment(enrollment);
+    } catch (error) {
+      if (revision === enrollmentRevision && enrollment?.taskId === taskId && isActiveEnrollment()) {
+        setFeedback(enrollmentDialogFeedback, error.message || '新增身份失败，请重试或取消', true);
       }
     } finally {
-      cancelEnrollmentButton.disabled = false;
+      identityAdditionInFlight = false;
+      renderEnrollment();
+      if (revision === enrollmentRevision && isActiveEnrollment()) {
+        enrollmentPollTimer = window.setTimeout(() => void refreshEnrollment(), 1200);
+      }
     }
   }
 
@@ -469,15 +965,24 @@
   }
 
   function resetEnrollmentDialog() {
+    matchExistingAccount=false;
+    document.querySelector('#reactivateMatchedRow').hidden=true;
+    document.querySelector('#reactivateMatchedAccount').checked=false;
+    enrollmentName.hidden=false; enrollmentName.required=true;
+    enrollmentName.previousElementSibling.hidden=false;
+    replaceEnrollment.parentElement.hidden=false;
+    enrollmentRevision++;
     stopEnrollmentPolling();
     revokeEnrollmentQr();
     enrollment = null;
+    enrollmentReauthAccountId = '';
     completedEnrollmentTaskId = '';
     enrollmentForm.reset();
-    identityConflict.hidden = true;
-    document.querySelector('#identityConflictName').value = '';
-    reauthAccountId = '';
+    enrollmentDialogTitle.textContent = '接入 IMA 账号';
+    enrollmentDialogDescription.textContent = '将打开独立 IMA 登录窗口，不使用本机微信快捷登录';
     enrollmentName.disabled = false;
+    replaceEnrollment.disabled = false;
+    createEnrollmentButton.textContent = '打开 IMA 登录窗口';
     enrollmentForm.hidden = false;
     enrollmentProgress.hidden = true;
     enrollmentQr.removeAttribute('src');
@@ -488,6 +993,8 @@
     enrollmentDiagnosticText.textContent = '';
     enrollmentResult.hidden = true;
     enrollmentResult.textContent = '';
+    identityConflict.hidden = true;
+    identityConflictName.value = '';
     setFeedback(enrollmentDialogFeedback, '');
   }
 
@@ -510,7 +1017,7 @@
   }
 
   function isActiveEnrollmentState(state) {
-    return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'waiting_for_membership', 'access_unverified', 'identity_conflict'].includes(state);
+    return ['launching_browser', 'loading_ima', 'opening_login', 'waiting_for_qr', 'waiting_for_scan', 'browser_fallback', 'verifying', 'qualifying', 'identity_conflict', 'waiting_for_membership', 'access_unverified'].includes(state);
   }
 
   function enrollmentStateLabel(state) {
@@ -522,9 +1029,10 @@
       waiting_for_scan: '等待扫码登录',
       browser_fallback: '可在受控窗口继续登录',
       verifying: '正在验证共享知识库',
-      waiting_for_membership: '等待加入知识库或批准',
-      access_unverified: '无法确认访问权限',
-      identity_conflict: '身份不一致，等待选择',
+      qualifying: '正在进行真实问答资格验证',
+      identity_conflict: '等待确认新身份',
+      waiting_for_membership: '等待知识库授权',
+      access_unverified: '知识库权限尚未确认',
       completed: '账号接入完成',
       failed: '账号接入失败',
       cancelled: '已取消接入',
@@ -532,11 +1040,11 @@
   }
 
   function enrollmentStatus(current) {
-    if (current.commitApplied && current.warning === 'post_commit_update_failed') {
-      return '资格已提交，后续状态更新失败；提交未撤销，请核对账号当前状态。';
-    }
     if (current.state === 'identity_conflict') {
-      return current.detail || '本次扫码身份尚未保存为账号，原账号保持不变。请填写新名称接入，或取消。';
+      return current.detail || '本次扫码身份不同，尚未新增账号，等待明确决定。';
+    }
+    if (['waiting_for_membership', 'access_unverified'].includes(current.state)) {
+      return current.detail || '共享知识库访问权限尚未确认；账号尚未保存。';
     }
     if (current.state === 'waiting_for_scan') {
       const expiry = new Date(current.expiresAt);
@@ -564,6 +1072,7 @@
     if (current.state === 'verifying') {
       return '已检测到登录态，正在验证该账号是否可访问当前共享知识库。';
     }
+    if (current.state === 'qualifying') return '正在验证本次账号的真实问答资格，尚未完成接入。';
     if (current.state === 'completed') {
       return '登录态已加密保存，临时二维码和浏览器资料已清理。';
     }
@@ -893,6 +1402,7 @@
 
   async function pollExercise() {
     stopExercisePolling();
+    if (document.hidden) { exercisePollTimer = window.setTimeout(() => void pollExercise(), 5000); return; }
     try {
       const payload = await request('/api/admin/exercises/active');
       activeExercise = payload.run || null;
@@ -1294,118 +1804,150 @@
   }
 
   function renderAccounts() {
+    const search=document.querySelector('#accountSearch').value.trim().toLowerCase(),filter=document.querySelector('#accountFilter').value;
+    const filtered=accounts.filter(a=> {
+      const r=a.operations;
+      return (!search||`${a.name} ${a.id}`.toLowerCase().includes(search)) && (filter==='all'||filter==='ready'&&r?.ready||filter==='attention'&&!r?.ready||filter==='expired'&&r?.login==='expired'||filter==='disabled'&&a.status==='disabled');
+    });
+    accountCountLabel.textContent=`${accounts.length} 个账号 · 显示 ${filtered.length} 个`;
     accountList.replaceChildren();
-    accountCountLabel.textContent = `${accounts.length} 个账号`;
-    if (!accounts.length) {
-      const empty = document.createElement('p');
-      empty.className = 'admin-empty';
-      empty.textContent = '暂无已接入账号';
-      accountList.appendChild(empty);
-      return;
+    const table=document.createElement('table');table.className='admin-account-table';
+    const head=document.createElement('thead');head.innerHTML='<tr><th>账号</th><th>登录</th><th>网站问答</th><th>允许并发</th><th>下一步</th><th><span class="sr-only">操作</span></th></tr>';table.append(head);
+    const body=document.createElement('tbody');table.append(body);
+    for(const a of filtered) {
+      const r=a.operations;const row=document.createElement('tr');row.dataset.accountId=a.id;
+      const add=(label,node)=>{const td=document.createElement('td');td.dataset.label=label;if(node instanceof Node)td.append(node);else td.textContent=node;row.append(td);return td;};
+      const name=createAction(a.name,()=>openAccountDrawer(a,name));name.dataset.accountId=a.id;name.className='account-name-button';
+      add('账号',name);add('登录',r?({valid:'有效',expired:'已过期',unknown:'未确认'}[r.login]):'未确认');
+      add('网站问答',r?.ready?'可服务':r?.reason||'正在确认');
+      add('允许并发',r?.ready?`${r.limit??'—'} 路 · ${basisLabel(r.basis)}`:'不计入容量');
+      const next=createAction(r?.login==='expired'?'扫码恢复':'查看详情',()=>r?.login==='expired'?document.querySelector('#restoreAnyAccountButton').click():openAccountDrawer(a,next));
+      add('下一步',next);add('操作',createAccountMenu(a));
+      if(a.id===selectedAccountId&&accountDrawer.open)row.classList.add('selected');body.append(row);
+      const feedback=accountActionFeedback.get(a.id);if(feedback?.message){const note=document.createElement('tr');const td=document.createElement('td');td.colSpan=6;td.textContent=feedback.message;note.append(td);body.append(note);}
     }
-    for (const account of accounts) {
-      const view = managementView(account);
-      const row = document.createElement('article');
-      row.className = 'admin-account-row';
-      const content = document.createElement('div');
-      const heading = document.createElement('div');
-      heading.className = 'admin-account-heading';
-      const name = document.createElement('h3');
-      name.className = 'admin-account-name';
-      name.textContent = account.name;
-      heading.append(name, stateBadge(view.knowledge.state, true));
-      const details = document.createElement('div');
-      details.className = 'admin-account-details';
-      renderAccountDetails(account, details);
-      content.append(heading, details);
-      const actions = createAccountActions(account, view);
-      row.append(content, actions);
-      const feedback = accountActionFeedback.get(account.id);
-      if (feedback) {
-        const result = document.createElement('p');
-        result.className = `admin-feedback${feedback.isError ? ' error' : ''}`;
-        result.textContent = feedback.message;
-        result.setAttribute('role', 'status');
-        row.append(result);
-      }
-      accountList.append(row);
-    }
+    if(filtered.length)accountList.append(table);else{const p=document.createElement('p');p.className='admin-empty';p.textContent='没有符合条件的账号';accountList.append(p);}
   }
 
-  // Readiness is qualification evidence, never inferred from web/session health.
   function managementView(account) {
-    const fallback = readiness?.accounts?.find(item => item.id === account.id) || {};
     const management = account.management || {};
-    const knowledge = management.knowledge || fallback;
-    const states = ['ready', 'pending', 'needs_login', 'disabled', 'verifying', 'busy', 'cooling'];
-    return {
-      knowledge: { ...knowledge, state: states.includes(knowledge.state) ? knowledge.state : 'pending' },
-      web: management.web || { state: 'unknown' },
-      session: management.session || { state: 'unknown' },
-      maintenance: management.maintenance || {},
-      schedulable: management.schedulable ?? fallback.schedulable,
+    const eligibility = account.strategyEligibility || {};
+    const decision = value => value ? { qualified: value.qualified, schedulable: value.schedulable,
+      availableNow: value.available_now, reasonCode: value.reason_code,
+      proofState: value.proof_state, verifiedAt: value.verified_at } : {};
+    const knowledge = { ...decision(eligibility.strategies?.knowledge_agent), ...management.knowledge };
+    const activeProfile = management.activeProfile || {
+      name: eligibilitySnapshot?.active_profile?.name,
+      generation: eligibilitySnapshot?.active_profile?.generation,
+      ready: eligibilitySnapshot?.active_profile?.ready,
+      profileReasonCode: eligibilitySnapshot?.active_profile?.reason_code,
+      ...decision(eligibility.active_profile),
     };
+    return { knowledge, activeProfile, schedulable: management.schedulable
+      ?? (activeProfile.ready === false ? false : activeProfile.ready === true ? activeProfile.schedulable : undefined),
+    web: management.web || {}, session: management.session || {}, maintenance: management.maintenance || {} };
   }
 
-  function stateBadge(state, knowledge = false) {
+  function booleanLabel(value) { return value === true ? '是' : value === false ? '否' : '未知'; }
+
+  function proofLabel(value) {
+    return { qualified: '有效', expiring: '临近到期', expired: '已过期', stale: '代际失效',
+      binding_changed: '绑定已变化', invalid: '无效', missing: '缺少证明', not_required: '无需独立证明' }[value] || value || '未知';
+  }
+
+  function reasonLabel(value) {
+    return value ? `${eligibilityReasonLabel(value)} (${value})` : '未知';
+  }
+
+  function stateBadge(state, label) {
     const badge = document.createElement('span');
-    const labels = knowledge
-      ? { ready: '可用于问答', pending: '待验证', needs_login: '需重新登录', disabled: '已停用', verifying: '验证中', busy: '忙碌', cooling: '冷却中' }
-      : { ready: '可用', unavailable: '不可用', unknown: '未验证' };
-    badge.className = `admin-state ${Object.hasOwn(labels, state) ? state : 'unknown'}`;
-    badge.textContent = labels[state] || (knowledge ? '待验证' : '未验证');
+    badge.className = `admin-state ${['ready', 'pending', 'unavailable'].includes(state) ? state : 'unknown'}`;
+    badge.textContent = label || { ready: '可用', unavailable: '不可用' }[state] || '未知';
     return badge;
   }
 
-  function maintenanceDate(value, unknown = '未提供') {
-    if (!value) return unknown;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return unknown;
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return `${date.toLocaleString('zh-CN', { hour12: false, timeZoneName: 'short' })} (${zone})`;
+  function maintenanceDate(value, missing = '未知') {
+    if (value == null || value === '') return missing;
+    if (Number.isNaN(new Date(value).getTime())) return '未知';
+    return new Date(value).toLocaleString('zh-CN', { hour12: false, timeZoneName: 'short' });
   }
 
   function maintenanceLabel(state) {
-    return ({ unobserved: '尚无维护记录', idle: '等待巡检', ready: '维护就绪', checking: '检查中', refreshing: '续期中', retrying: '重试中', retry_wait: '等待重试', cooling: '冷却中', needs_login: '需人工登录', disabled: '已停用', scheduled: '已安排', unknown: '状态未知' })[state] || '状态未知';
+    return { unobserved: '尚无维护记录', idle: '等待巡检', ready: '维护就绪', checking: '检查中',
+      refreshing: '续期中', retrying: '重试中', retry_wait: '等待重试', cooling: '冷却中',
+      needs_login: '需人工登录', disabled: '已停用', scheduled: '已安排' }[state] || '状态未知';
   }
 
-  function reauthenticate(account) {
-    openEnrollmentDialog();
-    if (enrollment) return;
-    reauthAccountId = account.id;
-    enrollmentName.value = account.name;
-    enrollmentName.disabled = true;
-  }
-
-  function createAccountActions(account, view) {
-    const actions = document.createElement('div');
-    actions.className = 'admin-account-actions';
-    actions.setAttribute('role', 'group');
-    actions.setAttribute('aria-label', `${account.name}的操作`);
+  function createAccountMenu(account) {
+    const menu = document.createElement('details');
+    menu.className = 'admin-more';
+    const trigger = document.createElement('summary');
+    trigger.textContent = '⋯';
+    trigger.title = `${account.name}：更多操作`;
+    trigger.setAttribute('aria-label', trigger.title);
+    trigger.setAttribute('aria-expanded', 'false');
+    const items = document.createElement('div');
+    items.className = 'admin-more-items';
+    items.setAttribute('role', 'group');
+    items.setAttribute('aria-label', `${account.name}的操作`);
     const busy = accountActionsInFlight.has(account.id);
-    const add = (label, handler, disabled = busy) =>
-      actions.append(createAction(label, handler, disabled));
-    if (view.knowledge.state === 'needs_login') {
-      add('重新登录', () => reauthenticate(account));
-    }
-    if (account.enrollmentQualificationRequired && !account.identityDuplicate) {
-      add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
-    }
-    add('检查', () => runAccountAction(account, 'check'));
-    add('刷新', () => runAccountAction(account, 'refresh'));
-    if (!account.enrollmentQualificationRequired) {
-      add('验证问答能力', () => verifyAccount(account), busy || view.knowledge.state === 'verifying');
-    }
-    if (view.knowledge.state !== 'needs_login') add('重新登录', () => reauthenticate(account));
-    const canEnable = account.status === 'disabled' && !account.enrollmentQualificationRequired;
-    if (!account.identityDuplicate) add(canEnable ? '启用' : '停用', () => runAccountAction(account, canEnable ? 'enable' : 'disable'));
+    const add = (label, action, disabled = busy) => items.append(createAction(label, () => {
+      menu.open = false; trigger.focus(); action();
+    }, disabled));
+    add('检查登录状态', () => runAccountAction(account, 'check'));
+    add('续期登录', () => { if (window.confirm('为此账号请求一次登录续期？这不是刷新页面状态。')) void runAccountAction(account, 'refresh'); });
+    add('扫码恢复任意已有账号', () => document.querySelector('#restoreAnyAccountButton').click(), busy || !bootstrap?.enrollment?.supportsAdminPageQr);
+    if (enrollmentQualificationBudget() || bootstrap?.webVerification?.available) add('验证本账号资格', () => openQualificationConfirmation(account), busy || Boolean(activeQualification) || qualificationStarting);
+    if (account.management?.knowledge?.state === 'verifying') add('取消本账号验证', async () => {
+      if (!window.confirm('停止本次资格验证？不会自动重新提问。')) return;
+      try { await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify/cancel`, {method:'POST'}); await loadAdminState(); }
+      catch(error) { setFeedback(accountFeedback, error.message, true); }
+    });
+    const pendingAdmission = account.status === 'disabled' && account.runtime?.disabledReason === 'pending_enrollment_qualification';
+    if (!account.identityDuplicate && !pendingAdmission) add(account.status === 'disabled' ? '启用' : '停用',
+      () => runAccountAction(account, account.status === 'disabled' ? 'enable' : 'disable'));
+    if (pendingAdmission) add('保持停用（需资格通过）', () => {}, true);
     add('删除', () => deleteAccount(account));
-    return actions;
+    menu.append(trigger, items);
+    menu.addEventListener('toggle', () => {
+      trigger.setAttribute('aria-expanded', String(menu.open));
+      if (menu.open) accountList.querySelectorAll('details[open]').forEach(other => { if (other !== menu) other.open = false; });
+    });
+    menu.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.open = false; trigger.focus(); }
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault(); menu.open = true;
+        const buttons = [...items.querySelectorAll('button:not(:disabled)')];
+        const index = buttons.indexOf(document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' || (event.key === 'ArrowUp' && index < 0)
+          ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next]?.focus();
+      }
+    });
+    menu.addEventListener('focusout', event => { if (!menu.contains(event.relatedTarget)) menu.open = false; });
+    return menu;
   }
 
-  function renderAccountDetails(account, container) {
+  function openAccountDrawer(account, trigger) {
+    selectedAccountId = account.id;
+    drawerTrigger = trigger;
+    renderAccountDetails(account);
+    accountList.querySelectorAll('tbody tr').forEach(row => row.classList.toggle('selected', row.contains(trigger)));
+    if (!accountDrawer.open) accountDrawer.showModal();
+    document.querySelector('#closeAccountDrawer').focus();
+  }
+
+  function renderAccountDetails(account) {
     const view = managementView(account);
+    const knowledge = view.knowledge;
+    const profile = view.activeProfile;
     const maintenance = view.maintenance;
+    document.querySelector('#accountDrawerTitle').textContent = account.name;
+    accountDrawerContent.replaceChildren();
+    const primary = document.createElement('p');
+    primary.className = `admin-account-primary ${accountHealthTone(account)}`;
+    primary.textContent = account.operations?.reason || accountPrimaryMessage(account);
+    accountDrawerContent.append(primary);
     const addSection = (title, entries) => {
       const section = document.createElement('section');
       const heading = document.createElement('h3'); heading.textContent = title;
@@ -1416,124 +1958,78 @@
         if (value instanceof Node) detail.append(value); else detail.textContent = value;
         list.append(term, detail);
       }
-      section.append(heading, list); container.append(section);
+      section.append(heading, list); accountDrawerContent.append(section);
     };
-    addSection('服务能力', [
-      ['知识库问答', stateBadge(view.knowledge.state, true)],
-      ['资格证据', view.knowledge.qualified === true ? '已合格' : '尚无合格证据'],
-      ['上次资格验证', maintenanceDate(view.knowledge.verifiedAt)],
-      ['通用联网', stateBadge(view.web.state)], ['会话健康', stateBadge(view.session.state)],
-      ['当前可调度', view.schedulable === true ? '是' : view.schedulable === false ? '否' : '未知'],
+    if (account.operations) addSection('当前网站派发', [['状态', account.operations.reason], ['允许并发', String(account.operations.limit ?? '未知')], ['额度依据', basisLabel(account.operations.basis)], ['占用', String(account.operations.active ?? '未知')]]);
+    addSection('Knowledge Agent 资格', [
+      ['当前资格', booleanLabel(knowledge.qualified)],
+      ['严格验证', booleanLabel(knowledge.strictQualified)],
+      ['证明状态', proofLabel(knowledge.proofState)],
+      ['资格原因', reasonLabel(knowledge.reasonCode)],
+      ['原始验证时间', maintenanceDate(knowledge.verifiedAt)],
+      ['策略可调度容量', booleanLabel(knowledge.schedulable)],
+      ['策略即时可用', booleanLabel(knowledge.availableNow)],
+    ]);
+    addSection('当前模式', [
+      ['模式', profileLabel(profile.name)], ['配置代次', String(profile.generation ?? '未知')],
+      ['模式就绪', booleanLabel(profile.ready)], ['模式原因', reasonLabel(profile.profileReasonCode)],
+      ['当前模式资格', booleanLabel(profile.qualified)], ['证明状态', proofLabel(profile.proofState)],
+      ['资格原因', reasonLabel(profile.reasonCode)], ['原始验证时间', maintenanceDate(profile.verifiedAt)],
+      ['可调度容量', booleanLabel(view.schedulable)], ['即时可用', booleanLabel(profile.ready === false ? false : profile.availableNow)],
     ]);
     addSection('登录与维护', [
+      ['通用联网', stateBadge(view.web.state)], ['会话健康', stateBadge(view.session.state)],
       ['维护状态', maintenanceLabel(maintenance.state)],
-      ['上次检查', maintenanceDate(maintenance.lastCheckAt)],
-      ['下次自动检查', maintenanceDate(maintenance.nextCheckAt)],
-      ['下次重试', maintenanceDate(maintenance.nextRetryAt)],
-      ['可续期时间', maintenanceDate(maintenance.refreshEligibleAt)],
-      ['访问令牌到期', maintenanceDate(maintenance.tokenExpiresAt, '未知（上游未提供）')],
-      ['续期凭证到期', maintenanceDate(maintenance.refreshTokenExpiresAt, '未知（上游未提供）')],
+      ['上次检查', maintenanceDate(maintenance.lastCheckAt)], ['下次自动检查', maintenanceDate(maintenance.nextCheckAt, '未安排')],
+      ['下次重试', maintenanceDate(maintenance.nextRetryAt, '未安排')], ['可续期时间', maintenanceDate(maintenance.refreshEligibleAt)],
+      ['访问令牌到期', maintenanceDate(maintenance.tokenExpiresAt, '上游未提供')], ['续期凭证到期', maintenanceDate(maintenance.refreshTokenExpiresAt, '上游未提供')],
       ['上次成功续期', maintenanceDate(maintenance.lastSuccessfulRefreshAt)],
     ]);
     addSection('账号记录', [
       ['账号 ID', account.id], ['身份核验', account.identityDuplicate ? '身份重复' : account.identityVerified ? '已确认' : '未确认'],
-      ['处理中请求', String(account.activeRequests || 0)], ['最近记录', accountMeta(account) || '暂无记录'],
+      ['处理中请求', String(account.activeRequests || 0)],
     ]);
+    const facts = document.createElement('div');
+    facts.className = 'admin-account-facts';
+    facts.append(createAccountFact('基础检查', statusLabel(account.availabilityStatus), accountHealthTone(account)));
+    accountDrawerContent.append(facts, createAccountHistory(account));
   }
 
-  async function verifyAccount(account) {
-    if (accountActionsInFlight.has(account.id)) return;
-    const question = await confirmWebAction('验证问答能力', '将执行一次真实知识库问答，不发送机器人消息。', '请根据当前知识库概括主要主题，并引用相关资料');
-    if (!question?.trim()) return;
-    accountActionsInFlight.add(account.id);
-    accountActionFeedback.set(account.id, { message: '正在验证问答能力...', isError: false });
-    renderAccounts();
-    try {
-      const result = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify`,
-        { method: 'POST', body: JSON.stringify({ question }) }, { allowUnsuccessfulResult: true });
-      const messages = { ok: '验证成功，可用于知识库问答', probe_evidence_insufficient: '回答或知识库来源不足，账号保留待验证', probe_timeout: '验证超时，请稍后手动重试', probe_cancelled: '验证已取消', account_store_generation_conflict: '账号状态发生变化，请重新验证', pool_sync_failed: '验证已保存，调度同步失败，账号暂时隔离', auth_expired: '登录已过期，请重新登录', auth_rejected: '登录被拒绝，请重新登录', upstream_temporary: '上游暂时不可用，请稍后重试' };
-      accountActionFeedback.set(account.id, { message: result.commitApplied && result.warning === 'post_commit_update_failed'
-        ? '资格已提交，后续状态更新失败；提交未撤销，请核对账号当前状态'
-        : result.warning === 'pool_sync_failed'
-        ? result.commitApplied ? '资格已提交，但调度同步失败；账号本机隔离，取消不会撤销提交'
-          : '资格未提交，调度同步失败；账号本机隔离，登录态已保存'
-        : result.success && result.activated === false
-        ? '问答资格已验证，账号仍保持停用；登录态已保存'
-        : messages[result.code] || `验证未完成（${result.code}）`, isError: !result.success });
-    } catch (error) { accountActionFeedback.set(account.id, { message: error.message, isError: true }); }
-    finally {
-      accountActionsInFlight.delete(account.id);
-      await loadAdminState();
-      renderAccounts();
-    }
-  }
-
-  function confirmWebAction(title, notice, initialQuestion) {
-    if (document.querySelector('#webActionDialog')) return Promise.resolve(null);
-    return new Promise(resolve => {
-      const dialog = document.createElement('dialog');
-      dialog.id = 'webActionDialog';
-      dialog.className = 'admin-enrollment-dialog';
-      const form = document.createElement('form');
-      form.className = 'admin-enrollment-form';
-      const heading = document.createElement('h2');
-      heading.textContent = title;
-      const text = document.createElement('p');
-      text.textContent = notice;
-      form.append(heading, text);
-      let input;
-      if (initialQuestion) {
-        const label = document.createElement('label');
-        label.textContent = '知识库测试问题';
-        input = document.createElement('textarea');
-        input.id = 'webActionQuestion';
-        label.htmlFor = input.id;
-        input.value = initialQuestion;
-        input.maxLength = 1200;
-        input.required = true;
-        form.append(label, input);
-      }
-      const cancel = createAction('取消', () => finish(null));
-      const submit = document.createElement('button');
-      submit.type = 'submit';
-      submit.textContent = '确认';
-      form.append(cancel, submit);
-      const finish = value => { dialog.close(); dialog.remove(); resolve(value); };
-      form.addEventListener('submit', event => { event.preventDefault(); finish(input ? input.value.trim() : true); });
-      dialog.addEventListener('cancel', event => { event.preventDefault(); finish(null); });
-      dialog.append(form);
-      document.body.append(dialog);
-      dialog.showModal();
-    });
-  }
-
-  function createAction(label, handler, disabled = false) {
+  function createAction(label, handler, disabled = false, variant = '') {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
     button.disabled = Boolean(disabled);
+    if (variant) button.dataset.variant = variant;
     button.addEventListener('click', handler);
     return button;
   }
 
   async function runAccountAction(account, action) {
-    if (accountActionsInFlight.has(account.id)) {
-      return;
-    }
+    if (accountActionsInFlight.has(account.id)) return;
     accountActionsInFlight.add(account.id);
-    accountActionFeedback.set(account.id, { message: `${accountActionLabel(action)}中...`, isError: false });
+    accountActionFeedback.set(account.id, { message: `${accountActionLabel(action)}中...`, tone: 'neutral' });
     renderAccounts();
     try {
       const payload = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/${action}`, { method: 'POST', body: '{}' });
       accountActionFeedback.set(account.id, {
         message: payload.operation?.message || `${accountActionLabel(action)}成功`,
-        isError: false,
+        tone: 'success',
       });
       await loadAdminState();
     } catch (error) {
-      accountActionFeedback.set(account.id, { message: error.message || '账号操作失败', isError: true });
-      setFeedback(accountFeedback, error.message || '账号操作失败', true);
-      await loadAdminState();
+      const message = error.message || '账号操作失败';
+      const tone = error.code === 'upstream_temporary' ? 'warning' : 'danger';
+      try {
+        await loadAdminState();
+      } catch {
+        // loadAdminState already renders the authentication or transport failure.
+      }
+      accountActionFeedback.set(account.id, {
+        message: `${accountActionLabel(action)}未完成：${message}`,
+        tone,
+      });
+      setFeedback(accountFeedback, message, tone === 'danger');
     } finally {
       accountActionsInFlight.delete(account.id);
       renderAccounts();
@@ -1546,7 +2042,7 @@
     }
     if (accountActionsInFlight.has(account.id)) return;
     accountActionsInFlight.add(account.id);
-    accountActionFeedback.set(account.id, { message: '删除中...', isError: false });
+    accountActionFeedback.set(account.id, { message: '删除中...', tone: 'neutral' });
     renderAccounts();
     try {
       const payload = await request(`/api/admin/accounts/${encodeURIComponent(account.id)}`, { method: 'DELETE' });
@@ -1554,7 +2050,7 @@
       setFeedback(accountFeedback, payload.operation?.message || '账号已从本机账号池删除。');
       await loadAdminState();
     } catch (error) {
-      accountActionFeedback.set(account.id, { message: error.message || '删除失败', isError: true });
+      accountActionFeedback.set(account.id, { message: error.message || '删除失败', tone: 'danger' });
       setFeedback(accountFeedback, error.message || '删除失败', true);
     } finally {
       accountActionsInFlight.delete(account.id);
@@ -1562,54 +2058,251 @@
     }
   }
 
-  function accountMeta(account) {
-    const items = [];
-    const health = account.health || {};
+  function accountPrimaryMessage(account) {
     if (account.identityDuplicate) {
-      items.push('与另一条记录是同一 IMA 登录身份，已自动停用，不计入并发');
-    } else if (account.identityVerified) {
-      items.push('IMA 登录身份已校验');
+      return '与另一条记录属于同一 IMA 身份，已自动停用且不计入并发。';
     }
+    const knowledge = account.strategyEligibility?.strategies?.knowledge_agent;
+    if (knowledge) {
+      if (knowledge.schedulable) return knowledge.available_now
+        ? '知识库问答可调度。登录和通用联网状态见下方独立项目。'
+        : `知识库问答资格有效，当前${knowledge.reason_code === 'account_busy' ? '忙碌' : '冷却中'}。`;
+      if (knowledge.reason_code === 'account_disabled') return '账号已停用，暂不参与知识库问答调度。';
+      return `知识库问答待验证：${eligibilityReasonLabel(knowledge.reason_code)}。`;
+    }
+    const health = account.health || {};
+    const code = accountHealthCode(account);
+    const messages = {
+      auth_expired: '登录凭据已失效，需要重新登录。',
+      auth_rejected: 'IMA 拒绝了当前登录态，需要重新登录。',
+      upstream_temporary: 'IMA 服务或网络暂不可用，稍后重新检查。',
+      knowledge_base_unavailable: '登录有效，但共享知识库暂不可用。',
+      web_context_missing: '本机 IMA 联网上下文尚未就绪。',
+      account_not_checked: '尚未完成一次有效检查。',
+    };
+    if (messages[code]) return messages[code];
+    const eligibility = account.strategyEligibility;
+    if (account.availabilityStatus === 'ready' && eligibility?.active_profile) {
+      const active = eligibility.active_profile;
+      if (active.schedulable && active.available_now) {
+        return `基础检查通过，且符合当前「${profileLabel(eligibilitySnapshot?.active_profile?.name)}」模式，可调度。`;
+      }
+      if (active.reason_code === 'profile_qualification_missing'
+          && eligibility.strategies?.knowledge_agent?.schedulable) {
+        return `基础检查通过；当前「${profileLabel(eligibilitySnapshot?.active_profile?.name)}」模式缺少资格证明，但已有 3DGS Knowledge Agent 资格，不需要重复做知识 Agent 认证。`;
+      }
+      return `基础检查通过，但当前模式不可立即调度：${eligibilityReasonLabel(active.reason_code)}。`;
+    }
+    if (account.availabilityStatus === 'ready' && account.schedulerStatus === 'available') {
+      return '基础检查通过；当前运行池显示可用，分策略资格详情不可读取。';
+    }
+    if (account.availabilityStatus === 'ready') {
+      return '基础检查通过，当前未进入可领取状态。';
+    }
+    return health.last_check_message || '账号状态尚未确认。';
+  }
+
+  function createAccountFact(label, value, tone = 'neutral') {
+    const item = document.createElement('div');
+    item.className = `admin-account-fact ${tone}`;
+    const key = document.createElement('span');
+    key.textContent = label;
+    const text = document.createElement('strong');
+    text.textContent = value;
+    item.append(key, text);
+    return item;
+  }
+
+  function createAccountHistory(account) {
+    const health = account.health || {};
+    const history = document.createElement('details');
+    history.className = 'admin-account-history';
+    const summary = document.createElement('summary');
+    summary.textContent = '凭据与检查记录';
+    const list = document.createElement('dl');
+    const items = [
+      ['IMA 身份', account.identityVerified ? '已校验' : '未校验'],
+      ['当前模式资格', account.strategyEligibility?.active_profile
+        ? `${eligibilityReasonLabel(account.strategyEligibility.active_profile.reason_code)}${account.strategyEligibility.active_profile.verified_at ? ` · ${formatDate(account.strategyEligibility.active_profile.verified_at)}` : ''}`
+        : '当前服务未提供分策略详情'],
+      ['3DGS Knowledge Agent', strategyStatusDescription(account.strategyEligibility?.strategies?.knowledge_agent)],
+      ['刷新能力', health.refreshable ? '可刷新' : '不可刷新'],
+      ['最近检查', health.last_check_at
+        ? `${formatDate(health.last_check_at)} · ${health.last_check_message || '已完成'}`
+        : '尚未检查'],
+      ['最近刷新', health.last_refresh_at
+        ? `${formatDate(health.last_refresh_at)} · ${healthCodeLabel(health.last_refresh_code)}`
+        : '尚未刷新'],
+      ['访问令牌', maintenanceDate(account.tokenExpiresAt, '上游未提供')],
+      ['刷新令牌', maintenanceDate(account.refreshTokenExpiresAt, '上游未提供')],
+    ];
     if (Number(account.activeRequests || 0)) {
-      items.push(`处理中 ${account.activeRequests}`);
+      items.push(['处理中', `${account.activeRequests} 个请求`]);
     }
     if (Number(account.cooldownSecondsRemaining || 0)) {
-      items.push(`冷却 ${account.cooldownSecondsRemaining} 秒`);
-    }
-    if (account.schedulerStatus === 'busy') {
-      items.push('本机调度：处理中');
-    } else if (account.schedulerStatus === 'cooling_down') {
-      items.push('本机调度：冷却中');
-    }
-    items.push(`本机可调度记录：${health.local_schedulable === true ? '是' : health.local_schedulable === false ? '否' : '未知'}`);
-    items.push(`会话：${healthFlagLabel(health.session_valid)}`);
-    items.push(`刷新：${health.refreshable === true ? '可刷新' : health.refreshable === false ? '不可刷新' : '未知'}`);
-    items.push(`知识库访问记录：${health.last_check_code === 'web_context_missing' ? '未确认' : healthFlagLabel(health.knowledge_ready)}`);
-    items.push(`Web：${healthFlagLabel(health.web_ready)}`);
-    if (health.last_check_at) {
-      items.push(`上次检查 ${maintenanceDate(health.last_check_at)}：${health.last_check_message || '已完成'}`);
-    }
-    if (health.last_refresh_at) {
-      items.push(`上次刷新 ${maintenanceDate(health.last_refresh_at)}${health.last_refresh_code === 'ok' ? '' : `：${health.last_refresh_code || '失败'}`}`);
-    }
-    if (account.tokenExpiresAt) {
-      items.push(`访问令牌 ${maintenanceDate(account.tokenExpiresAt)}`);
-    }
-    if (account.refreshTokenExpiresAt) {
-      items.push(`刷新令牌 ${maintenanceDate(account.refreshTokenExpiresAt)}`);
+      items.push(['冷却', `${account.cooldownSecondsRemaining} 秒`]);
     }
     if (account.lastError) {
-      items.push(account.lastError);
+      items.push(['最近运行异常', account.lastError]);
     }
-    return items.join(' · ') || '尚未使用';
+    for (const [label, value] of items) {
+      const term = document.createElement('dt');
+      term.textContent = label;
+      const detail = document.createElement('dd');
+      detail.textContent = value;
+      list.append(term, detail);
+    }
+    history.append(summary, list);
+    return history;
+  }
+
+  function accountHealthCode(account) {
+    const health = account.health || {};
+    if (['auth_expired', 'auth_rejected'].includes(health.last_refresh_code)) {
+      return health.last_refresh_code;
+    }
+    return health.last_check_code || 'account_not_checked';
+  }
+
+  function accountHealthTone(account) {
+    if (account.serviceStatus === 'ready') return 'success';
+    if (account.serviceStatus === 'busy' || account.serviceStatus === 'cooling') return 'warning';
+    const code = accountHealthCode(account);
+    if (['auth_expired', 'auth_rejected', 'knowledge_base_unavailable'].includes(code)) return 'danger';
+    if (['upstream_temporary', 'web_context_missing', 'account_not_checked'].includes(code)) return 'warning';
+    return account.availabilityStatus === 'ready' ? 'success' : 'neutral';
+  }
+
+  function accountNeedsReauth(account) {
+    return account.identityVerified
+      && ['auth_expired', 'auth_rejected'].includes(accountHealthCode(account));
+  }
+
+  function healthFlagTone(value) {
+    return value === true ? 'success' : value === false ? 'danger' : 'neutral';
+  }
+
+  function schedulerStatusLabel(account) {
+    return {
+      available: '可接单',
+      busy: '处理中',
+      cooling_down: '冷却中',
+      unavailable: account.health?.local_schedulable ? '待入池' : '不可接单',
+    }[account.schedulerStatus] || '未知';
+  }
+
+  function schedulerStatusTone(account) {
+    if (account.schedulerStatus === 'available') return 'success';
+    if (['busy', 'cooling_down'].includes(account.schedulerStatus)) return 'warning';
+    return account.health?.local_schedulable ? 'neutral' : 'danger';
+  }
+
+  function healthCodeLabel(code) {
+    return {
+      ok: '成功',
+      auth_expired: '登录态已过期',
+      auth_rejected: '登录态被拒绝',
+      upstream_temporary: 'IMA 服务或网络暂不可用',
+      knowledge_base_unavailable: '知识库不可用',
+      web_context_missing: '联网能力未就绪',
+    }[code] || code || '结果未知';
   }
 
   function statusLabel(status) {
     return {
-      ready: '已验证可用',
+      ready: '基础检查通过',
       needs_check: '待检查',
       unavailable: '不可用',
+      disabled: '已停用',
     }[status] || '未知';
+  }
+
+  function knowledgeServiceState(decision) {
+    if (decision.reason_code === 'account_disabled') return 'disabled';
+    if (decision.reason_code === 'account_busy') return 'busy';
+    if (decision.reason_code === 'account_cooling_down') return 'cooling';
+    return decision.available_now ? 'ready' : 'pending';
+  }
+
+  function knowledgeServiceLabel(state) {
+    return { ready: '知识库可问答', busy: '处理中', cooling: '冷却中',
+      disabled: '已停用', pending: '知识库待验证' }[state] || '状态待确认';
+  }
+
+  function profileLabel(profile) {
+    return {
+      ima_agent_auto: 'IMA Agent 自动',
+      ima_agent: 'IMA Agent',
+      classic_knowledge: '经典知识库',
+    }[profile] || profile || '未选择';
+  }
+
+  function eligibilityReasonLabel(code) {
+    return {
+      ready: '模式已就绪',
+      eligibility_unobserved: '尚无资格观察记录',
+      schedulable: '资格有效',
+      profile_not_ready: '当前回答模式未就绪',
+      answer_profile_capability_drift: '当前模式能力与运行时协议不匹配',
+      answer_profile_blocked: '当前回答模式被安全门禁暂停',
+      answer_profile_not_ready: '当前回答模式尚未就绪',
+      account_disabled: '账号已停用',
+      account_missing: '账号记录不存在',
+      account_not_in_pool: '账号尚未同步到运行池',
+      account_busy: '账号正在处理请求',
+      account_cooling_down: '账号处于冷却期',
+      routing_lane_mismatch: '账号分流车道不匹配此策略',
+      retrieval_policy_proof_missing: '缺少该检索策略的资格证明',
+      retrieval_policy_proof_stale: '该策略证明与当前能力版本不匹配',
+      retrieval_policy_answer_basis_invalid: '该策略证明的回答依据不符合要求',
+      profile_qualification_missing: '缺少当前回答模式资格证明',
+      profile_qualification_stale: '模式证明与当前能力版本不匹配',
+      profile_qualification_invalid: '模式证明无效或回答依据不匹配',
+      knowledge_agent_proof_missing: '尚未取得知识 Agent 资格',
+      knowledge_agent_proof_invalid: '知识 Agent 资格证明无效',
+      knowledge_agent_proof_binding_changed: '账号或知识库绑定已变化',
+      knowledge_agent_proof_expired: '知识 Agent 资格已过期',
+      knowledge_agent_proof_expiring_runtime_allowed: '资格临近到期；当前运行策略仍允许使用',
+      knowledge_agent_proof_expired_runtime_allowed: '证明已过期；当前兼容策略仍允许调度',
+    }[code] || '状态待确认';
+  }
+
+  function strategyStatusDescription(strategy) {
+    if (!strategy) return '没有此策略的资格记录';
+    const label = strategy.schedulable
+      ? strategy.available_now ? '可调度' : eligibilityReasonLabel(strategy.reason_code)
+      : eligibilityReasonLabel(strategy.reason_code);
+    const proof = strategy.proof_state === 'expired'
+      ? '证明时间已过期'
+      : strategy.proof_state === 'expiring'
+        ? '证明临近到期'
+        : strategy.proof_state === 'qualified'
+          ? '证明有效'
+          : strategy.proof_state === 'not_required'
+            ? '无需单独证明'
+            : strategy.proof_state === 'missing'
+              ? '尚无证明'
+              : '证明状态需核对';
+    return `${label} · ${proof}${strategy.verified_at ? ` · ${formatDate(strategy.verified_at)}` : ''}`;
+  }
+
+  function currentProfileStatusLabel(account) {
+    if (account.management?.activeProfile?.ready === false) {
+      return eligibilityReasonLabel(account.management.activeProfile.profileReasonCode);
+    }
+    const active = account.strategyEligibility?.active_profile;
+    if (!active) return schedulerStatusLabel(account);
+    if (active.available_now) return '可调度';
+    return eligibilityReasonLabel(active.reason_code);
+  }
+
+  function currentProfileStatusTone(account) {
+    const active = account.strategyEligibility?.active_profile;
+    if (!active) return schedulerStatusTone(account);
+    if (active.available_now) return 'success';
+    if (active.schedulable || ['account_busy', 'account_cooling_down', 'profile_qualification_missing',
+      'profile_qualification_stale', 'profile_qualification_invalid'].includes(active.reason_code)) return 'warning';
+    return 'neutral';
   }
 
   function healthFlagLabel(value) {
@@ -1617,7 +2310,7 @@
   }
 
   function accountActionLabel(action) {
-    return { check: '检查', refresh: '刷新', enable: '启用', disable: '停用', delete: '删除' }[action] || '操作';
+    return { check: '检查', refresh: '刷新', enable: '启用', disable: '停用' }[action] || '操作';
   }
 
   function formatDate(value) {
@@ -1631,7 +2324,8 @@
   }
 
   function cleanAccountName(value) {
-    return String(value || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 80);
+    return String(value || '').normalize('NFC').trim().replace(/\s+/g, ' ')
+      .replace(/[^\p{L}\p{M}\p{N} _-]+/gu, '-').slice(0, 80);
   }
 
 })();

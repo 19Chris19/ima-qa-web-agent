@@ -6,12 +6,11 @@ const crypto = require('node:crypto');
 const { WebAgentAccountDirectory } = require('./web-agent-account-directory');
 const { AirAccountDirectory } = require('./air/account-directory');
 const { commitStoreAsync, conflict, atomicPrivateWriteAsync, reconfirmStoreAsync } = require('./generation-store');
+const { persistenceDiagnostic } = require('./account-persistence-diagnostic');
 
 const Directory = workerData.air ? AirAccountDirectory : WebAgentAccountDirectory;
 const options = workerData.options;
 const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const safeError = error => ({ code: /^[a-z_]+$/.test(error.code || '') ? error.code : 'account_store_operation_failed',
-  statusCode: Number.isInteger(error.statusCode) ? error.statusCode : 503 });
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const mutations = new Set(['beginWebQualification', 'commitWebQualification', 'setMaxConcurrent',
@@ -20,6 +19,7 @@ const mutations = new Set(['beginWebQualification', 'commitWebQualification', 's
   'disableRuntimeEnvExport', 'setRoutingLane', 'applyKnowledgeAgentQualification', 'recordKnowledgeAgentQualifications']);
 let directory, stats = new Map(), revision = 0;
 let prepared;
+let phase = 'dispatch';
 const statsFile = `${options.storePath}.runtime-stats.json`;
 const metrics = { commits: 0, statsCommits: 0, bytes: 0, commitMs: 0 };
 
@@ -101,12 +101,14 @@ async function applyEffects(target, effects) {
 
 // Each operation gets its own draft; all disk side effects follow one CAS commit.
 async function transact(id, method, args, expectedGeneration, expectedDigest) {
+  phase = 'store_read';
   const before = validateStore();
   if (digest(before) !== expectedDigest) throw conflict();
   const next = new Directory(options);
   let dirty = false;
   const effects = [];
   next._writeStore = () => { next.store.updatedAt = next.now(); dirty = true; };
+  phase = 'draft_load';
   next.load();
   if (Number(next.store.generation || 0) !== expectedGeneration) throw conflict();
   // Nested mutation methods may reload. The transaction has already read disk.
@@ -124,6 +126,7 @@ async function transact(id, method, args, expectedGeneration, expectedDigest) {
     effects.push({ kind: 'remove', file }); return true;
   };
   let result;
+  phase = 'apply_operation';
   if (method === 'initializeWebMode' || method === 'setWebMode') {
     const mode = args[0];
     if (mode && !['classic_knowledge', 'knowledge_agent'].includes(mode)) throw Error('invalid_web_mode');
@@ -171,10 +174,12 @@ async function transact(id, method, args, expectedGeneration, expectedDigest) {
     parentPort.postMessage({ id, prepared: receipt });
     prepared = { id, receipt };
     const start = performance.now();
+    phase = 'store_commit';
     next.store = await commitStoreAsync(options.storePath, next.store);
     metrics.commits++; metrics.bytes += Buffer.byteLength(JSON.stringify(next.store));
     metrics.commitMs += performance.now() - start;
   }
+  phase = 'runtime_export';
   await applyEffects(next, effects);
   directory = new Directory(options); directory.store = next.store;
   revision++;
@@ -183,15 +188,18 @@ async function transact(id, method, args, expectedGeneration, expectedDigest) {
 
 async function command(message) {
   const { id, method, args = [], expectedGeneration, expectedDigest } = message;
+  phase = 'dispatch';
   try {
     let result;
     if (method === 'init') {
+      phase = 'store_read';
       fs.mkdirSync(path.dirname(options.storePath), { recursive: true, mode: 0o700 });
       validateStore(!args[0]?.readOnly && !workerData.wasExisting);
       directory = new Directory(options);
       if (args[0]?.readOnly) directory._writeStore = () => { throw Error('commit_outcome_unknown'); };
       directory.load(); loadStats();
     } else if (method === 'reload' || method === 'reconcile') {
+      phase = 'reconcile';
       validateStore();
       const disk = JSON.parse(fs.readFileSync(options.storePath, 'utf8'));
       if (method === 'reconcile') {
@@ -200,8 +208,11 @@ async function command(message) {
       }
       directory = new Directory(options); directory.load();
       if (method === 'reconcile' && result.outcome === 'committed') await applyEffects(directory, args[0].effects || []);
-    } else if (method === 'classifyCapturedIdentity') result = directory.classifyCapturedIdentity(...args);
+    } else if (method === 'classifyCapturedIdentity' || method === 'matchCapturedIdentity') {
+      phase = 'identity_lookup'; result = directory[method](...args);
+    }
     else if (method === 'saveStats') {
+      phase = 'statistics';
       mergeStats();
       for (const row of args[0]) {
         if (stats.get(row.id)?.principalFingerprint !== row.principalFingerprint) continue;
@@ -213,10 +224,11 @@ async function command(message) {
     } else if (method === 'close') {
       parentPort.postMessage({ id, ok: true, result: null }); parentPort.close(); return;
     } else result = await transact(id, method, args, expectedGeneration, expectedDigest);
+    phase = 'snapshot';
     parentPort.postMessage({ id, ok: true, result, snapshot: snapshot(), revision });
   } catch (error) {
     if (prepared?.id === id && !['account_store_generation_conflict', 'account_store_locked'].includes(error.code)) error.code = 'account_store_commit_failed';
-    parentPort.postMessage({ id, ok: false, error: safeError(error) });
+    parentPort.postMessage({ id, ok: false, error: persistenceDiagnostic(error, { operation: method, phase }) });
   }
 }
 let serial = Promise.resolve();

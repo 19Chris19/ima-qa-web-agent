@@ -1,3 +1,4 @@
+const { buildOperationsOverview } = require('./operations-overview');
 const { normalizeAccountId, resolveAccountWriteTarget } = require('./web-agent-account-directory');
 const { accountManagementView } = require('./account-management-view');
 const {
@@ -62,6 +63,27 @@ function registerAdminRoutes(app, options = {}) {
     catch (error) { sendAdminError(res, error); }
   });
 
+  app.get('/api/admin/overview', auth, (_req, res) => {
+    const readiness = webReadiness?.snapshot() || null;
+    const pool = options.imaWebAgentClient;
+    const maintenance = Boolean(accountPoolExerciseManager?.isMaintenanceActive?.()
+      || app.locals.knowledgeAgentQualificationManager?.isMaintenanceActive?.());
+    const limits = (pool?.accounts || []).map(account => ({ id: account.id,
+      ...pool.elastic?.snapshot(account, { mode: readiness?.mode }) }));
+    const management = buildManagementSnapshot({ accountDirectory, pool, readiness, includeEvents: false });
+    const eligibility = options.airPolicyCapacity?.eligibilitySnapshot?.() || null;
+    const directoryReady = accountDirectory.persistenceReady;
+    const poolReady = pool?.persistenceReady?.();
+    const persistenceReady = directoryReady === false || poolReady === false ? false
+      : directoryReady === true || poolReady === true ? true : null;
+    const overview = buildOperationsOverview({ management, readiness, queue: options.askQueue?.stats?.(), limits, maintenance,
+      persistence: { ready: persistenceReady,
+        statisticsReady: accountDirectory.statisticsReady !== false,
+        pendingWrites: accountDirectory.queue?.length ?? 0 }, metrics: app.locals.operationsMetrics?.snapshot() || null });
+    res.set?.('Cache-Control', 'no-store, private');
+    res.json({ success: true, overview: { ...overview, accounts: management.accounts, eligibility } });
+  });
+
   app.get('/api/admin/accounts', auth, (req, res) => {
     res.json({
       success: true,
@@ -100,6 +122,7 @@ function registerAdminRoutes(app, options = {}) {
     res.json({
       success: true,
       provider: options.config?.qaProvider || 'ima-web-agent',
+      webVerification: { available: Boolean(webReadiness), authorizedRequestCount: 1 },
       sharedKnowledgeBaseId: sharedKnowledgeBaseId || null,
       enrollment: {
         authorizationProtocol: 'shared_library_membership_v1',
@@ -220,6 +243,12 @@ function registerAdminRoutes(app, options = {}) {
           name: req.body?.name,
           id: req.body?.id,
           reauthAccountId: req.body?.reauthAccountId,
+          matchExistingAccount: req.body?.matchExistingAccount === true,
+          autoMatchExistingAccount: !req.body?.reauthAccountId && !req.body?.replace
+            && req.body?.matchExistingAccount !== true && req.body?.autoMatchExistingAccount !== false,
+          reactivateMatchedAccount: req.body?.reactivateMatchedAccount === true,
+          confirmQualification: req.body?.confirmQualification === true,
+          authorizedRequestCount: req.body?.authorizedRequestCount,
           replace: Boolean(req.body?.replace),
           testQuestion: req.body?.testQuestion,
         });
@@ -431,6 +460,7 @@ function buildManagementSnapshot({ accountDirectory, pool, readiness, includeEve
     const poolAccount = poolAccounts.get(account.id) || null;
     return {
       ...account,
+      activeRequests: poolAccount?.activeRequests ?? account.activeRequests ?? null,
       schedulerStatus: poolAccount?.status || 'unavailable',
       poolSynchronized: Boolean(poolAccount),
       availabilityStatus: account.health?.status || 'needs_check',

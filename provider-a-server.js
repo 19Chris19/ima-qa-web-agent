@@ -116,6 +116,7 @@ async function main({ config: suppliedConfig, envLoad: suppliedEnvLoad } = {}) {
   });
   registerAdminRoutes(app, {
     config,
+    airPolicyCapacity: airPolicies,
     accountDirectory,
     imaWebAgentClient,
     askQueue: app.locals.imaQaAskQueue,

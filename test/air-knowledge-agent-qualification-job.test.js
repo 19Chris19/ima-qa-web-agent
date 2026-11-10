@@ -287,3 +287,14 @@ test('qualification rejects non-drained queue before invoking any runner', async
     authorizedRequestCount: bootstrap.authorizedRequestCount }), { code: 'provider_requests_not_drained' });
   assert.equal(calls, 0);
 });
+
+for (const [code, category] of [['account_store_operation_failed','local_persistence_failed'],['account_store_generation_conflict','local_generation_conflict'],['ENOSPC','local_persistence_failed']]) {
+  test(`successful synthetic answers followed by ${code} report local commit failure, not upstream rejection`,async()=>{
+    const fixture=createFixture({accountCount:1,qualifiedCount:0});
+    fixture.directory.recordKnowledgeAgentQualifications=()=>{throw Object.assign(new Error('synthetic storage fault'),{code});};
+    const b=fixture.manager.getBootstrap();const run=await fixture.manager.start({confirm:true,candidateSetDigest:b.candidateSetDigest,authorizedRequestCount:b.authorizedRequestCount});
+    const report=await fixture.manager.waitFor(run.runId);
+    assert.equal(report.status,'failed');assert.equal(report.usedRequests,7);assert.equal(report.commitApplied,false);
+    assert.equal(report.failureCategory,category);assert.equal(report.failureStage,'qualification_commit');assert.equal(fixture.directory.applied.length,0);
+  });
+}

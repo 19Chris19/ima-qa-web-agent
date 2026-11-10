@@ -53,7 +53,7 @@ test('actual management and identity route responses interoperate with the admin
   assert.equal(management.maintenance.lastSuccessfulRefreshAt, '2026-10-06T00:00:00Z');
   assert.equal(management.maintenance.expiryKnown, false);
 
-  const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../public/admin.html'), 'utf8'), {
+  const dom = new JSDOM(fs.readFileSync(path.join(__dirname, '../public/admin-legacy.html'), 'utf8'), {
     url: 'https://synthetic.test/admin', runScripts: 'outside-only', pretendToBeVisual: true,
   });
   t.after(() => dom.window.close());
@@ -74,7 +74,7 @@ test('actual management and identity route responses interoperate with the admin
     else throw new Error(`Unexpected request: ${url}`);
     return { ok: true, json: async () => result };
   };
-  window.eval(fs.readFileSync(path.join(__dirname, '../public/admin.js'), 'utf8'));
+  window.eval(fs.readFileSync(path.join(__dirname, '../public/admin-legacy.js'), 'utf8'));
   await tick();
   assert.ok(calls.every(call => call.method === 'GET'));
   assert.equal(resolutions.length, 0);

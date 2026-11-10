@@ -8,6 +8,9 @@ const lockfile = require('proper-lockfile');
 const { AsyncAccountDirectory } = require('../src/async-account-directory');
 const { WebAgentAccountDirectory } = require('../src/web-agent-account-directory');
 const { IMAWebAgentPool } = require('../src/ima-web-agent-pool');
+const { WebAgentEnrollmentManager } = require('../src/web-agent-enrollment');
+const { createAirEnrollmentHooks } = require('../src/air/enrollment-hooks');
+const { KnowledgeAgentQualificationManager, KnowledgeAgentQualificationReportStore } = require('../src/air/knowledge-agent-qualification-job');
 const { WebReadiness } = require('../src/web-readiness');
 const input = { id: 'synthetic', name: 'synthetic', knowledgeBaseId: '123', requireQualification: false,
   headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=fake; IMA-REFRESH-TOKEN=fake' } };
@@ -34,6 +37,121 @@ function faultFactory(fault, extra = {}) {
 }
 const observation = (totalRequests = 0, lastUsedAt = 0) => ({ id: 'synthetic', activeRequests: 0,
   totalRequests, lastUsedAt, cooldownUntil: 0, consecutiveErrors: 0, disabled: false, disabledReason: '', lastError: '' });
+
+test('failed account operation identifies its stage without leaking data or changing disk', async t => {
+  const diagnostics = [];
+  const { directory: d, options } = await fixture(t, { onDiagnostic: row => diagnostics.push(row) });
+  const before = fs.readFileSync(options.storePath);
+  await assert.rejects(d.recordEvent('synthetic-missing', 'synthetic-event', 'synthetic-secret'),
+    { code: 'account_not_found', statusCode: 404 });
+  const failure = diagnostics.find(row => row.component === 'account_store_operation');
+  assert.deepEqual(failure, { component: 'account_store_operation', operation: 'recordEvent',
+    code: 'account_not_found', statusCode: 404, phase: 'apply_operation', reason: 'account_missing', prepared: false });
+  assert.doesNotMatch(JSON.stringify(diagnostics), /synthetic-missing|synthetic-event|synthetic-secret/);
+  assert.deepEqual(fs.readFileSync(options.storePath), before);
+  assert.equal(d.persistenceReady, true);
+  await d.recordEvent('synthetic', 'synthetic-ok', 'offline-only');
+});
+
+test('duplicate enrollment names return a precise conflict without saving or fencing other accounts', async t => {
+  const diagnostics = [];
+  const { directory: d, options } = await fixture(t, { onDiagnostic: row => diagnostics.push(row) });
+  const before = fs.readFileSync(options.storePath);
+  await assert.rejects(d.upsertCapturedAccount({ ...input,
+    headers: { 'x-ima-cookie': 'IMA-UID=synthetic-other; IMA-TOKEN=synthetic-secret' } }),
+  { code: 'account_name_conflict', statusCode: 409 });
+  assert.equal(diagnostics.at(-1).phase, 'apply_operation');
+  assert.doesNotMatch(JSON.stringify(diagnostics), /synthetic-secret|synthetic-other/);
+  assert.deepEqual(fs.readFileSync(options.storePath), before);
+  assert.equal(d.persistenceReady, true);
+});
+
+test('asynchronous identity match identifies only the existing account without writing', async t => {
+  const { directory: d, options } = await fixture(t);
+  const before = fs.readFileSync(options.storePath);
+  const commits = d.metrics.commits;
+  assert.deepEqual(await d.matchCapturedIdentity(input.headers), { status: 'matched', accountId: 'synthetic' });
+  assert.deepEqual(await d.matchCapturedIdentity({ 'x-ima-cookie': 'IMA-UID=someone-else; IMA-TOKEN=fake' }), { status: 'not_found' });
+  assert.deepEqual(fs.readFileSync(options.storePath), before);
+  assert.equal(d.metrics.commits, commits);
+});
+
+test('ordinary enrollment auto-matches through the async worker and serializes exactly one matching replacement', async t => {
+  const { directory: d } = await fixture(t);
+  const second = { ...input, id: 'second', name: 'second', headers: { 'x-ima-cookie':
+    'IMA-UID=second; IMA-TOKEN=old-fake; IMA-REFRESH-TOKEN=old-fake' } };
+  await d.addCapturedAccount(second);
+  const firstBefore = structuredClone(d.getAccount('synthetic'));
+  const secondSecret = structuredClone(d.getAccount('second').secret);
+  let auth = null, wake, verified = [], replaced = [];
+  const context = { pages: () => [{ goto: async () => {}, evaluate: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+    screenshot: async () => Buffer.from('synthetic') }], close: async () => {} };
+  const manager = new WebAgentEnrollmentManager({ accountDirectory: d,
+    pool: { syncAccounts() {}, withCredentialReplacement: async (id, callback) => { replaced.push(id); await callback(); } },
+    config: { webAgent: { browserPath: process.execPath, sharedKnowledgeBaseId: '123', enrollmentTimeoutMs: 30000 } },
+    browserLauncher: async () => context, captureAuth: async () => auth,
+    clientFactory: () => ({ initSession: async () => {} }), sleep: () => new Promise(resolve => { wake = resolve; }),
+    onEnrolled: async id => { verified.push(id); return { success: true }; },
+  });
+  t.after(async () => manager.shutdown());
+  const task = await manager.start({ autoMatchExistingAccount: true, name: 'unselected-synthetic-account' });
+  for (let i = 0; i < 100 && !wake; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(wake);
+  auth = { headers: { 'x-ima-cookie': 'IMA-UID=second; IMA-TOKEN=new-fake; IMA-REFRESH-TOKEN=new-fake' } };
+  wake();
+  for (let i = 0; i < 400 && manager.get(task.taskId).state !== 'completed'; i++) {
+    if (manager.get(task.taskId).state === 'failed') break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(manager.get(task.taskId).state, 'completed');
+  assert.deepEqual(verified, ['second']); assert.deepEqual(replaced, ['second']);
+  assert.deepEqual(d.getAccount('synthetic'), firstBefore);
+  assert.notDeepEqual(d.getAccount('second').secret, secondSecret);
+  assert.equal(d.listAccounts().length, 2);
+});
+
+test('Air compatibility activates the explicitly restored account only after one successful simulated qualification', async t => {
+  const { directory: d } = await fixture(t, { air: true });
+  await d.setDisabled('synthetic', true, 'disabled_by_admin');
+  const pool = { syncAccounts() {}, withCredentialReplacement: async (_id, callback) => callback(),
+    stats: () => ({ availableAccounts: 0 }), policyCapacitySnapshot: () => ({}) };
+  let used = 0;
+  const qualification = new KnowledgeAgentQualificationManager({ accountDirectory: d, pool,
+    askQueue: { stats: () => ({ activeRequests: 0, queuedRequests: 0 }) },
+    questionBank: { knowledge: 'Synthetic only' }, reportStore: new KnowledgeAgentQualificationReportStore({ persist: false }),
+    basicRunner: async ({ beforeRequest, onRequest, onObservation }) => {
+      assert.equal(d.getAccount('synthetic').runtime.disabled, true);
+      assert.equal(d.getAccount('synthetic').runtime.disabledReason, 'pending_enrollment_qualification');
+      beforeRequest(); onRequest(); used++; onObservation({ phase: 'smoke', passed: true });
+      return { passed: true, requests: 1, terminals: 1, passedModes: 1,
+        knowledgeSources: 1, webSources: 0, unknownSources: 0, totalMs: 1 };
+    },
+  });
+  let auth = null, wake;
+  const context = { pages: () => [{ goto: async () => {}, evaluate: async () => ({ x: 0, y: 0, width: 10, height: 10 }),
+    screenshot: async () => Buffer.from('synthetic') }], close: async () => {} };
+  const manager = new WebAgentEnrollmentManager({ accountDirectory: d, pool,
+    config: { webAgent: { browserPath: process.execPath, sharedKnowledgeBaseId: '123', enrollmentTimeoutMs: 30000 } },
+    browserLauncher: async () => context, captureAuth: async () => auth, ...createAirEnrollmentHooks(qualification),
+    clientFactory: () => ({ initSession: async () => {} }), sleep: () => new Promise(resolve => { wake = resolve; }),
+  });
+  t.after(async () => manager.shutdown());
+  const task = await manager.start({ matchExistingAccount: true, reactivateMatchedAccount: true,
+    confirmQualification: true, authorizedRequestCount: 1 });
+  for (let i = 0; i < 100 && !wake; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.ok(wake);
+  auth = { headers: { 'x-ima-cookie': 'IMA-UID=synthetic; IMA-TOKEN=new-fake; IMA-REFRESH-TOKEN=new-fake' } };
+  wake();
+  for (let i = 0; i < 400 && manager.get(task.taskId).state !== 'completed'; i++) {
+    if (manager.get(task.taskId).state === 'failed') break;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  assert.equal(manager.get(task.taskId).state, 'completed');
+  assert.equal(manager.get(task.taskId).commitApplied, true);
+  assert.equal(used, 1);
+  assert.equal(d.getAccount('synthetic').runtime.disabled, false);
+  assert.equal(d.getAccount('synthetic').runtime.enrollmentQualificationRequired, false);
+});
 
 test('critical transactions serialize drafts, preserve encryption and acknowledge only committed generations', async t => {
   const { directory: d, options } = await fixture(t);

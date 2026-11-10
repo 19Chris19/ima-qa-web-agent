@@ -103,6 +103,242 @@ function syntheticAuth(uid = 'synthetic-distinct') {
   return { headers: { 'x-ima-cookie': `IMA-UID=${uid}; IMA-TOKEN=synthetic-new-token; IMA-REFRESH-TOKEN=synthetic-refresh`, 'x-ima-bkn': '123' } };
 }
 
+test('Chinese enrollment names retain their identity and never collide with the legacy dash name', async () => {
+  for (const name of ['新账号甲', '新账号乙']) {
+    const { manager, accountDirectory, state } = makeManager();
+    accountDirectory.upsertCapturedAccount({ id: 'legacy', name: '-', knowledgeBaseId: 'web-kb-id',
+      headers: syntheticAuth('synthetic-legacy').headers });
+    const legacy = structuredClone(accountDirectory.getAccount('legacy'));
+    try {
+      const job = await manager.start({ name });
+      assert.equal(job.name, name);
+      await waitFor(() => Boolean(state.wake)); state.auth = syntheticAuth(); state.wake();
+      await waitFor(() => ['completed', 'failed'].includes(manager.get(job.taskId).state));
+      assert.equal(manager.get(job.taskId).state, 'completed');
+      assert.equal(accountDirectory.listAccounts().length, 2);
+      assert.equal(accountDirectory.listAccounts().filter(x => x.name === name).length, 1);
+      assert.deepEqual(accountDirectory.getAccount('legacy'), legacy);
+    } finally { await manager.shutdown(); }
+  }
+});
+
+test('an exact Chinese name collision is rejected before browser launch in legacy mode', async () => {
+  const { manager, accountDirectory, state } = makeManager();
+  accountDirectory.upsertCapturedAccount({ id: 'existing-chinese', name: '同名账号', knowledgeBaseId: 'web-kb-id',
+    headers: syntheticAuth('synthetic-original').headers });
+  const before = fs.readFileSync(accountDirectory.storePath);
+  try {
+    await assert.rejects(manager.start({ name: '同名账号' }), { statusCode: 409 });
+    assert.equal(manager.getActive(), null); assert.equal(state.initCalls, 0);
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), before);
+  } finally { await manager.shutdown(); }
+});
+
+test('different Unicode names sharing an ASCII suffix receive distinct stable account ids', async () => {
+  const { manager, accountDirectory, state } = makeManager();
+  try {
+    const ids = [];
+    for (const [name, uid] of [['测试A', 'synthetic-a'], ['维护A', 'synthetic-b']]) {
+      state.auth = null; state.wake = null;
+      const job = await manager.start({ name, autoMatchExistingAccount: true });
+      await waitFor(() => Boolean(state.wake)); state.auth = syntheticAuth(uid); state.wake();
+      await waitFor(() => ['completed', 'failed'].includes(manager.get(job.taskId).state));
+      assert.equal(manager.get(job.taskId).state, 'completed');
+      const account = accountDirectory.listAccounts().find(x => x.name === name);
+      assert.ok(account); ids.push(account.id);
+      assert.equal(manager.get(job.taskId).account.id, account.id);
+    }
+    assert.equal(new Set(ids).size, 2); assert.equal(accountDirectory.listAccounts().length, 2);
+  } finally { await manager.shutdown(); }
+});
+
+test('ordinary enrollment recognizes an existing identity without operator-selected account or duplicate insert', async () => {
+  const verified = [], replaced = [];
+  const setup = makeManager({ onEnrolled: async id => { verified.push(id); return { success: true }; } });
+  const { manager, accountDirectory, state } = setup;
+  setup.manager.pool.withCredentialReplacement = async (id, action) => { replaced.push(id); await action(); };
+  accountDirectory.upsertCapturedAccount({ id: 'original', name: 'original', knowledgeBaseId: 'web-kb-id',
+    headers: syntheticAuth('synthetic-original').headers, maxConcurrent: 2, modelId: 'retained-model', modelType: 7 });
+  const before = structuredClone(accountDirectory.getAccount('original'));
+  try {
+    const { taskId } = await manager.start({ name: 'different-display-name', autoMatchExistingAccount: true });
+    await waitFor(() => Boolean(state.wake));
+    state.auth = syntheticAuth('synthetic-original');
+    state.auth.headers['x-ima-cookie'] += '; EXTRA=synthetic-new-value'; state.wake();
+    await waitFor(() => ['completed', 'failed'].includes(manager.get(taskId).state));
+    assert.equal(manager.get(taskId).state, 'completed');
+    assert.equal(manager.get(taskId).mode, 'reauth');
+    assert.deepEqual(replaced, ['original']); assert.deepEqual(verified, ['original']);
+    assert.equal(accountDirectory.listAccounts().length, 1);
+    const after = accountDirectory.getAccount('original');
+    assert.notDeepEqual(after.secret, before.secret);
+    assert.equal(after.name, before.name); assert.equal(after.id, before.id);
+    assert.equal(after.maxConcurrent, 2); assert.equal(after.modelId, 'retained-model'); assert.equal(after.modelType, 7);
+    assert.equal(state.initCalls, 1);
+  } finally { await manager.shutdown(); }
+});
+
+test('automatic enrollment adds a genuinely new identity once', async () => {
+  let verified = 0;
+  const { manager, accountDirectory, state } = makeManager({ onEnrolled: async () => { verified++; return { success: true }; } });
+  try {
+    const { taskId } = await manager.start({ name: 'new-synthetic', autoMatchExistingAccount: true });
+    await waitFor(() => Boolean(state.wake)); state.auth = syntheticAuth(); state.wake();
+    await waitFor(() => ['completed', 'failed'].includes(manager.get(taskId).state));
+    assert.equal(manager.get(taskId).state, 'completed');
+    assert.equal(accountDirectory.listAccounts().length, 1); assert.equal(verified, 1);
+  } finally { await manager.shutdown(); }
+});
+
+test('automatic enrollment never resolves identity ambiguity by account name, library, or disabled-state bypass', async () => {
+  for (const scenario of ['name-collision', 'library-mismatch', 'disabled', 'unverified-existing']) {
+    const { manager, accountDirectory, state } = makeManager({ onEnrolled: async () => assert.fail('must not verify') });
+    accountDirectory.upsertCapturedAccount({ id: 'original', name: 'original',
+      knowledgeBaseId: scenario === 'library-mismatch' ? 'different-library' : 'web-kb-id',
+      headers: syntheticAuth('synthetic-original').headers });
+    if (scenario === 'disabled') accountDirectory.setDisabled('original', true, 'disabled_by_admin');
+    if (scenario === 'unverified-existing') accountDirectory.getAccount('original').principalFingerprint = '';
+    const before = fs.readFileSync(accountDirectory.storePath);
+    try {
+      const { taskId } = await manager.start({ name: scenario === 'name-collision' ? 'original' : 'new-synthetic',
+        autoMatchExistingAccount: true });
+      await waitFor(() => Boolean(state.wake));
+      state.auth = syntheticAuth(scenario === 'name-collision' ? 'synthetic-new' : 'synthetic-original'); state.wake();
+      await waitFor(() => manager.get(taskId).state === 'identity_conflict');
+      assert.deepEqual(manager.get(taskId).identityConflict.actions, ['cancel']);
+      await assert.rejects(manager.resolveIdentityConflict(taskId, { action: 'add', name: 'override' }), { statusCode: 409 });
+      assert.deepEqual(fs.readFileSync(accountDirectory.storePath), before); assert.equal(state.initCalls, 0);
+    } finally { await manager.shutdown(); }
+  }
+});
+
+test('local account-save failures do not tell the user to rescan or blame IMA access', async () => {
+  const { manager, state, accountDirectory } = makeManager();
+  const before = accountDirectory.listAccounts();
+  accountDirectory.upsertCapturedAccount = () => { throw Object.assign(new Error('synthetic-private-detail'),
+    { code: 'account_store_operation_failed', statusCode: 503 }); };
+  try {
+    const job = await manager.start({ name: 'synthetic-local-failure' });
+    await waitFor(() => Boolean(state.wake));
+    state.auth = syntheticAuth(); state.wake();
+    await waitFor(() => manager.get(job.taskId).state === 'failed');
+    const failure = manager.get(job.taskId).diagnostics.lastFailure;
+    assert.equal(failure.code, 'account_store_operation_failed');
+    assert.equal(failure.retryable, false);
+    assert.match(failure.message, /本机账号保存操作失败/);
+    assert.doesNotMatch(failure.message, /synthetic-private-detail|加入当前共享知识库后重新接入/);
+    assert.deepEqual(accountDirectory.listAccounts(), before);
+  } finally { await manager.shutdown(); }
+});
+
+test('restore any existing account matches the captured identity and preserves the other account', async () => {
+  let qualified = [];
+  const { manager, accountDirectory, state } = makeManager({ onEnrolled: async (id) => {
+    qualified.push(id); return { success: true };
+  } });
+  accountDirectory.upsertCapturedAccount({ id: 'first', name: 'first', knowledgeBaseId: 'web-kb-id', headers: syntheticAuth('first').headers });
+  const oldSecond = syntheticAuth('second');
+  oldSecond.headers['x-ima-cookie'] = oldSecond.headers['x-ima-cookie'].replace('synthetic-new-token', 'synthetic-old-token');
+  accountDirectory.upsertCapturedAccount({ id: 'second', name: 'second', knowledgeBaseId: 'web-kb-id', headers: oldSecond.headers,
+    modelId: 'synthetic-retained-model', modelType: 7, maxConcurrent: 2 });
+  const first = structuredClone(accountDirectory.getAccount('first'));
+  const oldSecret = structuredClone(accountDirectory.getAccount('second').secret);
+  try {
+    const { taskId } = await manager.start({ matchExistingAccount: true });
+    await waitFor(() => Boolean(state.wake));
+    state.auth = syntheticAuth('second'); state.wake();
+    await waitFor(() => manager.get(taskId).state === 'completed');
+    assert.deepEqual(qualified, ['second']);
+    assert.equal(accountDirectory.listAccounts().length, 2);
+    assert.deepEqual(accountDirectory.getAccount('first'), first);
+    assert.notDeepEqual(accountDirectory.getAccount('second').secret, oldSecret);
+    assert.equal(accountDirectory.getAccount('second').modelId, 'synthetic-retained-model');
+    assert.equal(accountDirectory.getAccount('second').modelType, 7);
+    assert.equal(accountDirectory.getAccount('second').maxConcurrent, 2);
+    assert.equal(state.initCalls, 1);
+    assert.doesNotMatch(JSON.stringify(manager.get(taskId)), /synthetic-new-token|synthetic-refresh|principalFingerprint|x-ima/);
+  } finally { await manager.shutdown(); }
+});
+
+test('restore any account fails closed when identity is absent, ambiguous, or bound to another library', async () => {
+  for (const scenario of ['unknown', 'unverified-existing', 'duplicate-identity', 'library-mismatch', 'previously-disabled']) {
+    const { manager, accountDirectory, state } = makeManager();
+    accountDirectory.upsertCapturedAccount({ id: 'first', name: 'first', knowledgeBaseId: 'web-kb-id', headers: syntheticAuth('first').headers });
+    accountDirectory.upsertCapturedAccount({ id: 'second', name: 'second', knowledgeBaseId: scenario === 'library-mismatch' ? 'other-kb' : 'web-kb-id', headers: syntheticAuth('second').headers });
+    if (scenario === 'unverified-existing') accountDirectory.getAccount('first').principalFingerprint = '';
+    if (scenario === 'duplicate-identity') accountDirectory.getAccount('first').principalFingerprint = accountDirectory.getAccount('second').principalFingerprint;
+    if (scenario === 'previously-disabled') accountDirectory.setDisabled('second', true, 'disabled_by_admin');
+    const before = fs.readFileSync(accountDirectory.storePath);
+    try {
+      const { taskId } = await manager.start({ matchExistingAccount: true });
+      await waitFor(() => Boolean(state.wake));
+      state.auth = syntheticAuth(scenario === 'unknown' ? 'unknown' : 'second'); state.wake();
+      await waitFor(() => manager.get(taskId).state === 'identity_conflict');
+      assert.deepEqual(manager.get(taskId).identityConflict.actions, ['cancel']);
+      await assert.rejects(manager.resolveIdentityConflict(taskId, { action: 'add', name: 'new' }), { statusCode: 409 });
+      assert.equal(state.initCalls, 0);
+      assert.deepEqual(fs.readFileSync(accountDirectory.storePath), before);
+      assert.equal(accountDirectory.listAccounts().length, 2);
+    } finally { await manager.shutdown(); }
+  }
+});
+
+test('cancelling while identity matching is pending cannot reopen a login task or write credentials', async () => {
+  const { manager, accountDirectory, state } = makeManager();
+  accountDirectory.upsertCapturedAccount({ id: 'first', name: 'first', knowledgeBaseId: 'web-kb-id', headers: syntheticAuth('first').headers });
+  const before = fs.readFileSync(accountDirectory.storePath);
+  let releaseMatch;
+  accountDirectory.matchCapturedIdentity = () => new Promise(resolve => { releaseMatch = resolve; });
+  try {
+    const { taskId } = await manager.start({ matchExistingAccount: true });
+    await waitFor(() => Boolean(state.wake));
+    state.auth = syntheticAuth('first'); state.wake();
+    await waitFor(() => Boolean(releaseMatch));
+    await manager.cancel(taskId);
+    releaseMatch({ status: 'matched', accountId: 'first' });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal(manager.get(taskId).state, 'cancelled');
+    assert.equal(state.initCalls, 0);
+    assert.deepEqual(fs.readFileSync(accountDirectory.storePath), before);
+  } finally { await manager.shutdown(); }
+});
+
+test('restore any account cannot be combined with a selected target or replace flag', async () => {
+  const { manager } = makeManager();
+  try {
+    await assert.rejects(manager.start({ matchExistingAccount: true, reauthAccountId: 'first' }), { statusCode: 400 });
+    await assert.rejects(manager.start({ matchExistingAccount: true, replace: true }), { statusCode: 400 });
+    await assert.rejects(manager.start({ reactivateMatchedAccount: true, confirmQualification: true, authorizedRequestCount: 1 }), { statusCode: 400 });
+    await assert.rejects(manager.start({ matchExistingAccount: true, reactivateMatchedAccount: true }), { statusCode: 400 });
+    await assert.rejects(manager.start({ matchExistingAccount: true, reactivateMatchedAccount: true, confirmQualification: true, authorizedRequestCount: 2 }), { statusCode: 400 });
+  } finally { await manager.shutdown(); }
+});
+
+test('explicitly restoring a disabled matched account keeps it isolated pending its one qualification', async () => {
+  let accountDirectory, calls = 0;
+  const setup = makeManager({ onEnrolled: async id => {
+    calls++;
+    const runtime = accountDirectory.getAccount(id).runtime;
+    assert.equal(runtime.disabled, true);
+    assert.equal(runtime.disabledReason, 'pending_enrollment_qualification');
+    assert.equal(runtime.enrollmentQualificationRequired, true);
+    return { success: false };
+  } });
+  accountDirectory = setup.accountDirectory;
+  accountDirectory.upsertCapturedAccount({ id: 'first', name: 'first', knowledgeBaseId: 'web-kb-id', headers: syntheticAuth('first').headers });
+  accountDirectory.setDisabled('first', true, 'disabled_by_admin');
+  try {
+    const { taskId } = await setup.manager.start({ matchExistingAccount: true, reactivateMatchedAccount: true,
+      confirmQualification: true, authorizedRequestCount: 1 });
+    await waitFor(() => Boolean(setup.state.wake));
+    setup.state.auth = syntheticAuth('first'); setup.state.wake();
+    await waitFor(() => setup.manager.get(taskId).state === 'failed');
+    assert.equal(calls, 1);
+    assert.equal(accountDirectory.getAccount('first').runtime.disabled, true);
+    assert.equal(accountDirectory.listAccounts().length, 1);
+  } finally { await setup.manager.shutdown(); }
+});
+
 async function conflictSetup(overrides = {}) {
   const setup = makeManager(overrides);
   const { manager, state, accountDirectory } = setup;

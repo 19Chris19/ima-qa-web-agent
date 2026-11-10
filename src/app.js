@@ -1,3 +1,4 @@
+const { OperationsMetrics } = require('./operations-metrics');
 const chat = require('./chat-presentation');
 const crypto = require('node:crypto');
 const path = require('node:path');
@@ -58,6 +59,8 @@ function createApp({
   airPolicyCapacity = null,
 }) {
   const app = express();
+  const operationsMetrics = new OperationsMetrics();
+  app.locals.operationsMetrics = operationsMetrics;
   const observer = observationExporter || observation;
   botCompatibility ||= airPolicyCapacity ? createAirBotCompatibility(airPolicyCapacity) : null;
   const botExecutionCapacity = () => providerAExecutionCapacity({ pool: imaWebAgentClient, webReadiness, airPolicyCapacity });
@@ -105,7 +108,7 @@ function createApp({
           question: task.input.question,
           upstreamQuestion: task.input.source_intent === 'web_requested' ? `${task.input.question}${WEB_REQUESTED_SUFFIX}` : task.input.question,
           sourceIntent: task.input.source_intent, requestId: task.id, req: {}, res, signal,
-          botContract: task.input.botContract, botCompatibility, recentContextConsumer, observation: observer,
+          botContract: task.input.botContract, botCompatibility, recentContextConsumer, observation: observer, operationsMetrics,
           applicationKey: task.applicationKey || task.scope,
           mode: task.input.botContract ? conversations.require(task.input.conversationId, task.ownerKey).mode :
             task.input.retrieval_policy || conversations.require(task.input.conversationId, task.ownerKey).mode || webReadiness?.mode,
@@ -375,7 +378,7 @@ function createApp({
             question: validation.question,
             upstreamQuestion: validation.sourceIntent === 'web_requested' ? `${validation.question}${WEB_REQUESTED_SUFFIX}` : validation.question,
             sourceIntent: validation.sourceIntent,
-            botContract: validation.botContract, botCompatibility, recentContextConsumer, observation: observer,
+            botContract: validation.botContract, botCompatibility, recentContextConsumer, observation: observer, operationsMetrics,
             applicationKey: req.applicationKey,
             requestId,
             req,
@@ -515,6 +518,7 @@ function botQuestionPlan(question, prepared, policy) {
 }
 
 function observeExecution(context, stage, outcome, error) {
+  context.operationsMetrics?.observe(context, stage, outcome);
   const protocol = error instanceof IMAUpstreamProtocolError;
   try {
     const pending = context.observation?.sample?.({ component: protocol ? 'provider_a_protocol' : 'provider_a_execution',
@@ -979,6 +983,7 @@ async function handleStreamingWebAgentAsk(context) {
       }
 
       if (event.type === 'delta') {
+        context.operationsMetrics?.observe(context, 'first_delta', 'observed');
         if (!stages.has('answer')) { stages.add('answer'); emitStage('answer', 'running'); }
         const safeText = answerTextStream.push(event.text);
         if (safeText) {
