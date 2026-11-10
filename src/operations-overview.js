@@ -1,4 +1,5 @@
 'use strict';
+const { accountActions, recommendedAction } = require('./operations/actions');
 
 // All inputs are already resident in the Provider. No I/O, renewal or probes here.
 const integer = v => Number.isSafeInteger(v) && v >= 0 ? v : null;
@@ -26,13 +27,18 @@ function buildOperationsOverview({ management, readiness, queue, persistence, li
       validatedLimit: integer(evidence?.validatedMaxConcurrent),
       state: storageUnknown ? 'unknown' : !storage ? 'storage' : disabled ? 'disabled' : a.maintenanceOperation ? 'maintenance'
         : login !== 'valid' ? login === 'expired' ? 'login' : 'unknown' : cooling ? 'cooldown' : ready ? 'ready' : 'qualification',
-      reason: storageUnknown ? '账号保存服务状态尚未确认' : !storage ? '账号保存服务未就绪，暂停新派发' : disabled ? '账号已停用'
+      reason: storageUnknown ? '账号保存服务状态尚未确认' : !storage ? '账号保存服务未就绪，暂停新派发' : disabled ? (a.runtime?.disabledReason==='pending_enrollment_qualification' ? '待接入资格未通过，保持停用' : `账号已停用${a.runtime?.disabledReason ? ' · '+String(a.runtime.disabledReason).slice(0,160) : ''}`)
         : a.maintenanceOperation ? '正在维护' : login === 'expired' ? '需要重新登录；历史资格不能代替有效登录'
         : login !== 'valid' ? '登录状态尚未确认' : cooling ? '账号正在冷却'
         : ready ? '可接收当前网站问答' : '尚未满足当前问答资格',
       maintenance: m.maintenance || {}, knowledge: m.knowledge || {}, activeProfile: m.activeProfile || null,
     };
   });
+  for (const row of rows) {
+    const account = accounts.find(a => a.id === row.id);
+    row.actions = accountActions(account, row, { storageReady: storage });
+    row.recommendedAction = recommendedAction(row, row.actions);
+  }
   const rowCapacity = rows.every(x => x.limit !== null) ? rows.reduce((n, x) => n + x.limit, 0) : null;
   const capacity = storage ? min(rowCapacity, readiness?.capacity, queue?.maxConcurrent) : storageUnknown ? null : 0;
   const active = integer(queue?.activeRequests), queued = integer(queue?.queuedRequests);
@@ -61,4 +67,4 @@ function publicOperations(value) {
     persistence: { ready: typeof value.persistence?.ready === 'boolean' ? value.persistence.ready : null }, metrics: safeMetrics(value.metrics) };
 }
 function safeMetrics(q) { return q ? { samples: integer(q.samples), successRate: typeof q.successRate === 'number' && q.successRate >= 0 && q.successRate <= 1 ? q.successRate : null, durationP95Ms: Number.isFinite(q.durationP95Ms) && q.durationP95Ms >= 0 ? q.durationP95Ms : null, firstDeltaP95Ms: Number.isFinite(q.firstDeltaP95Ms) && q.firstDeltaP95Ms >= 0 ? q.firstDeltaP95Ms : null, window: 'last_hour_up_to_512' } : null; }
-module.exports = { buildOperationsOverview, publicOperations };
+module.exports = { buildOperationsOverview, publicOperations, safeMetrics };

@@ -6,18 +6,22 @@
     <title>Provider A · 服务管理</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/admin.css" />
+    <link rel="stylesheet" href="/operations/recent-status.css" />
+    <link rel="stylesheet" href="/admin-refined.css" />
   </head>
   <body data-mode="admin" data-view="overview">
     <aside class="admin-sidebar">
       <strong class="admin-brand"><span class="brand-monogram">P<span>·</span></span><span>Provider A<small>服务管理</small></span></strong>
       <nav id="adminNavigation" aria-label="管理导航" hidden>
-        <a href="#overviewSection" data-view="overview" aria-current="page">◫ <span>服务概览</span></a>
+        <a href="#overviewSection" data-view="overview" aria-current="page">◫ <span>实时概览</span></a>
         <a href="#accountsSection" data-view="accounts">▤ <span>账号池</span></a>
+        <details class="advanced-navigation"><summary>高级工具</summary>
         <a href="#qualificationPanel" data-view="qualification" id="qualificationNav">✓ <span>资格验证</span></a>
         <a href="#exercisePanel" data-view="exercise" id="exerciseNav">↗ <span>演练与报告</span></a>
         <a href="#exerciseReportsPanel" data-view="exercise" id="reportsNav" hidden>演练报告</a>
         <a href="#diagnosticsSection" data-view="diagnostics">⌘ <span>诊断</span></a>
-        <a href="http://127.0.0.1:4610/" target="_blank" rel="noopener">◷ <span>独立状态页 ↗</span></a>
+        </details>
+        <a id="statusPageLink" href="http://127.0.0.1:4610/" target="_blank" rel="noopener">◷ <span>独立状态页 ↗</span></a>
       </nav>
       <a class="admin-home-link" href="/">返回问答</a>
     </aside>
@@ -27,9 +31,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6M9 12h10" /></svg>
         </a>
         <div>
-          <p class="admin-eyebrow">PROVIDER A / OPERATIONS</p><h1 id="workspaceTitle">服务概览</h1>
+          <p class="admin-eyebrow">PROVIDER A / OPERATIONS</p><h1 id="workspaceTitle">实时概览</h1>
           <p id="refreshStatus" role="status">正在确认状态</p>
         </div>
+        <button class="admin-icon-button" id="themeButton" type="button" aria-label="切换明暗主题" title="切换明暗主题">◐</button>
         <button class="admin-icon-button" id="reloadButton" type="button" title="刷新状态" aria-label="刷新状态（不续期登录）">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0 2 5M20 4v7h-7" /></svg>
         </button>
@@ -49,21 +54,25 @@
 
       <section class="admin-panel" id="adminPanel" hidden>
         <section id="overviewSection" data-pane="overview">
-          <div class="admin-summary" id="adminSummary"></div>
+          <div class="overview-top"><section id="serviceHero" class="service-hero" data-state="unknown" aria-labelledby="serviceHeadline"><span class="hero-label"><i></i> 当前服务状态</span><h2 id="serviceHeadline">正在确认状态</h2><p id="serviceDescription">等待可验证的运行快照</p><span class="hero-foot">不以历史资格代替当前可用性</span></section><div class="admin-summary" id="adminSummary"></div></div>
           <p class="admin-summary-note" id="adminSummaryNote"></p>
+          <section class="refined-panel recent-panel"><div class="admin-section-heading"><div><h2>最近 10 分钟</h2><p>每格 10 秒 · 保留格内异常</p></div><span id="recentStamp" class="admin-muted">等待独立监控</span></div><div id="recentStatus"></div><div class="recent-legend"><span data-state="normal">正常</span><span data-state="degraded">容量下降</span><span data-state="busy">繁忙</span><span data-state="outage">故障</span><span data-state="unknown">未知 / 缺采样</span></div></section>
+          <section class="refined-panel attention-panel"><div class="admin-section-heading"><h2>需要处理 <span id="attentionCount" class="count-badge">—</span></h2><a href="#accountsSection" id="viewAllAccounts">查看账号池 →</a></div><div id="attentionAccounts"></div></section>
+          <details class="overview-evidence"><summary>容量依据与回答观测</summary>
           <section class="admin-capacity-panel"><div class="admin-section-heading"><div><p class="admin-eyebrow">CAPACITY</p><h2>回答名额从哪里来</h2></div><span class="admin-muted">按当前网站问答路径</span></div><div id="capacityAllocation"></div><p class="admin-muted">并发是同时生成回答的问题数，不是打开网页的人数。试运行额度不等于稳定实测容量。</p></section>
           <section class="admin-capacity-panel"><h2>真实回答观测</h2><p id="qaObservation">尚无样本，不计算成功率</p><p class="admin-muted">被动统计真实任务；刷新页面不会发问。接口可达与回答完成分别记录。</p></section>
+          </details>
         </section>
 
         <section data-pane="accounts" class="admin-enroll" aria-label="接入账号">
           <div class="admin-section-heading">
             <div>
               <h2>接入与恢复</h2>
-              <p>每次接入打开独立 IMA 浏览器，只允许待接入账号扫码登录</p>
+              <p>新增账号，或扫码自动识别并恢复已有账号</p>
             </div>
             <div class="admin-toolbar"><button id="restoreAnyAccountButton" type="button">扫码恢复任意已有账号</button><button id="addAccountButton" type="button">接入新账号</button></div>
           </div>
-          <p class="admin-enroll-note">每次接入使用全新的临时浏览器资料。请在弹出的 IMA 窗口内扫码并完成手机确认；服务会拦截快捷登录，只在共享知识库验证成功后保存登录态并关闭窗口。</p>
+          <details class="enrollment-help"><summary>接入说明</summary><p class="admin-enroll-note">每次接入使用全新的临时浏览器资料。请在弹出的 IMA 窗口内扫码并完成手机确认；服务会拦截快捷登录，只在共享知识库验证成功后保存登录态并关闭窗口。</p></details>
           <p class="admin-feedback" id="enrollFeedback" role="status"></p>
         </section>
 
@@ -181,10 +190,11 @@
           <div class="admin-exercise-report-list" id="exerciseReportList"></div>
           <div class="admin-exercise-report-detail" id="exerciseReportDetail"></div>
         </section>
-        <section data-pane="diagnostics" id="diagnosticsSection" class="admin-capacity-panel"><p class="admin-eyebrow">DIAGNOSTICS</p><h2>状态依据与诊断</h2><div id="operationsDiagnostics"></div><p class="admin-muted">登录健康、知识库资格、当前策略资格和持久化结果分别判断。未知不等于失败；旧证明不代替当前可用性。</p><a href="/admin-legacy.html">旧版管理入口（保留兼容） ↗</a></section>
+        <section data-pane="diagnostics" id="diagnosticsSection" class="admin-capacity-panel"><p class="admin-eyebrow">DIAGNOSTICS</p><h2>状态依据与诊断</h2><button type="button" id="reconcileButton" hidden>核对保存结果</button><p id="reconcileFeedback" role="status"></p><div id="operationsDiagnostics"></div><p class="admin-muted">登录健康、知识库资格、当前策略资格和持久化结果分别判断。未知不等于失败；旧证明不代替当前可用性。</p><a href="/admin-legacy.html">旧版管理入口（保留兼容） ↗</a></section>
       </section>
 
       <dialog class="admin-account-drawer" id="accountDrawer" aria-labelledby="accountDrawerTitle">
+        <div class="sheet-handle" aria-hidden="true"></div>
         <header class="admin-dialog-header">
           <h2 id="accountDrawerTitle">账号详情</h2>
           <button class="admin-icon-button" id="closeAccountDrawer" type="button" title="关闭详情" aria-label="关闭详情">×</button>
@@ -249,6 +259,7 @@
     </main>
     <script src="/answer-markdown.js" defer></script>
     <script src="/admin-poller.js" defer></script>
+    <script src="/operations/recent-status.js" defer></script>
     <script src="/admin.js" defer></script>
   </body>
 </html>

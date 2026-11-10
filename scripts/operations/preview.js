@@ -4,6 +4,8 @@ const express=require('express'),path=require('node:path'),fs=require('node:fs/p
 const {operationsFixture}=require('../../test-support/operations-fixture');
 const {buildOperationsOverview}=require('../../src/operations-overview');
 const {createStatusServer}=require('./status-server');
+const {RecentStatus}=require('../../src/operations/recent');
+const {composeStatus}=require('../../src/operations/status');
 function createPreviewApp(){
   const app=express();app.use(express.json());app.disable('x-powered-by');
   const input=operationsFixture();let enrollment=null,qualification=null,exercise=null;const qualificationReports=[],exerciseReports=[{id:'synthetic-report',profile:'baseline',status:'completed',requestedClients:1,startedAt:Date.now()-60000,finishedAt:Date.now()-30000,clients:[{index:0,label:'合成客户 一',initial:{question:'如何检查训练数据',answer:'这是合成回答，仅供界面检查。',status:'succeeded',sources:[],elapsedMs:1000},followUp:{question:'请继续说明',answer:'这是合成追问回答。',status:'succeeded',sources:[],elapsedMs:800},review:{}}]}];const calls=[];
@@ -13,8 +15,15 @@ function createPreviewApp(){
     if(!['127.0.0.1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)){res.sendStatus(403);return;}
     if(!['GET','HEAD'].includes(req.method)&&req.headers.origin!==`http://${req.headers.host}`){res.sendStatus(403);return;}
     if(req.path.startsWith('/api'))calls.push({method:req.method,path:req.path});if(calls.length>1000)calls.shift();next();});
+  // Only the synthetic preview seeds a labelled illustrative 10-minute window.
+  const recent=new RecentStatus();const seedAt=Date.now();
+  for(let i=119;i>=0;i--){const at=seedAt-i*5000;recent.now=()=>at;recent.record(composeStatus({overview:{...snapshot(),observedAt:new Date(at).toISOString()},checks:{website:{at,ok:true}},now:at}));}
+  recent.now=Date.now;let scenario='degraded';
+  const statusSnapshot=()=>{const now=Date.now(),o=snapshot();if(scenario==='unknown')o.observedAt=new Date(now-16000).toISOString();const value=composeStatus({overview:o,checks:{website:{at:now,ok:scenario!=='outage'}},now});recent.record(value);return {...value,synthetic:true,recent:recent.snapshot()};};
+  app.get('/api/admin/operations/status',(_req,res)=>res.json({success:true,status:statusSnapshot()}));
+  app.post('/api/admin/persistence/reconcile',(_req,res)=>res.status(409).json({success:false,code:'account_store_unresolved',error:'合成未知结果保持保护；不会强行清除'}));
   app.get('/api/admin/overview',(_req,res)=>res.json({success:true,overview:snapshot()}));
-  const boot=()=>({success:true,provider:'synthetic-preview',enrollment:{supportsAdminPageQr:true,activeEnrollment:enrollment,timeoutSeconds:300,qualification:{required:true,automatic:true,requestsPerTarget:1}},
+  const boot=()=>({success:true,provider:'synthetic-preview',operations:{statusPageUrl:'http://127.0.0.1:4611/'},enrollment:{supportsAdminPageQr:true,activeEnrollment:enrollment,timeoutSeconds:300,qualification:{required:true,automatic:true,requestsPerTarget:1}},
     qualification:{totalAccounts:4,targetAccountCount:1,authorizedRequestCount:7,candidateSetDigest:'synthetic-digest',active:qualification},
     exercise:{capacity:6,availableAccountCount:2,accountCount:4,maxClients:30,defaultClientCount:2,profiles:{baseline:2,queue:4},questionBankCount:30,active:exercise}});
   app.get('/api/admin/bootstrap',(_req,res)=>res.json(boot()));
@@ -35,6 +44,7 @@ function createPreviewApp(){
   app.get('/api/admin/enrollments/:id',(_req,res)=>res.json({enrollment}));
   app.delete('/api/admin/enrollments/:id',(_req,res)=>{enrollment={...enrollment,state:'cancelled'};res.json({enrollment});});
   app.post('/api/admin/accounts/:id/:action',(req,res)=>{const a=input.management.accounts.find(a=>a.id===req.params.id);if(!a)return res.status(404).json({error:'not_found'});
+    if(!snapshot().rows.find(r=>r.id===a.id)?.actions.includes(req.params.action))return res.status(409).json({error:'当前状态不允许此操作'});
     if(!['check','refresh','enable','disable'].includes(req.params.action))return res.status(400).json({error:'unsupported_preview_action'});
     if(req.params.action==='disable')a.status='disabled';if(req.params.action==='enable')a.status='active';
     res.json({success:true,operation:{message:'合成操作完成；未访问 IMA'}});});
@@ -50,20 +60,24 @@ function createPreviewApp(){
   app.put('/api/admin/exercises/reports/:id/reviews/:index',(req,res)=>{const report=exerciseReports.find(r=>r.id===req.params.id);if(!report)return res.sendStatus(404);const client=report.clients.find(c=>c.index===Number(req.params.index));if(!client)return res.sendStatus(404);client.review=req.body;res.json({report});});
   app.delete('/api/admin/exercises/reports/:id',(req,res)=>{const index=exerciseReports.findIndex(r=>r.id===req.params.id);if(index>=0)exerciseReports.splice(index,1);res.json({success:true});});
   app.get('/api/preview/calls',(_req,res)=>res.json({synthetic:true,calls}));
-  app.post('/api/preview/scenario',(req,res)=>{const scenario=req.body.scenario;
-    if(scenario==='storage')input.persistence.ready=false;
+  app.post('/api/preview/scenario',(req,res)=>{const requested=req.body.scenario;scenario=requested;
+    if(['normal','degraded','busy','outage','unknown','reset','storage','qualification'].includes(requested)){Object.assign(input,operationsFixture());qualification=null;exercise=null;}
+    if(requested==='normal'){for(const a of input.management.accounts)a.health.session_valid=true;for(const a of input.readiness.accounts){a.state='ready';a.availableSlots=a.maxConcurrent;}input.readiness.capacity=8;input.readiness.schedulable=8;input.queue.maxConcurrent=8;}
+    if(requested==='unknown')input.persistence.ready=null;
+    if(requested==='qualification'){input.management.accounts[0].health.session_valid=true;input.readiness.accounts[0].state='pending';input.readiness.accounts[0].qualified=false;}
+    if(scenario==='storage'){input.persistence.ready=false;input.persistence.canReconcile=true;}
     if(scenario==='busy'){input.queue.activeRequests=6;input.queue.queuedRequests=4;input.readiness.schedulable=0;for(const r of input.readiness.accounts.slice(2)){r.state='busy';r.availableSlots=0;}}
     if(scenario==='reset'){const fresh=operationsFixture();Object.assign(input,fresh);qualification=null;exercise=null;}
     if(scenario==='qualification_commit_failed'&&qualification){qualificationReports.unshift({...qualification,status:'failed',phase:'completed',failureStage:'qualification_commit',failureCategory:'local_persistence_failed',commitApplied:false,finishedAt:Date.now()});qualification=null;}
     res.json({success:true});});
   app.get('/',(_req,res)=>res.redirect('/admin.html'));
   app.use(express.static(path.resolve(__dirname,'../../public')));
-  return {app,snapshot,calls};
+  return {app,snapshot,calls,statusSnapshot};
 }
-async function main(){const {app,snapshot}=createPreviewApp();app.listen(4601,'127.0.0.1',()=>console.log('Synthetic admin candidate http://127.0.0.1:4601/ — no production account access'));
+async function main(){const {app,snapshot,statusSnapshot}=createPreviewApp();app.listen(4602,'127.0.0.1',()=>console.log('Synthetic admin candidate http://127.0.0.1:4602/ — no production account access'));
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'provider-status-synthetic-'));
-  await createStatusServer({directory,port:4610,synthetic:true,privateEntryUrl:'http://127.0.0.1/synthetic-private-entry',read:async url=>url.includes('/overview')?{overview:snapshot()}:url.includes('/api/qa')?{ready:true,authenticated:true}:{ready:true}});
-  console.log('Synthetic independent status http://127.0.0.1:4610/ — history begins now');
+  await createStatusServer({directory,port:4611,synthetic:true,privateEntryUrl:'http://127.0.0.1/synthetic-private-entry',read:async url=>url.includes('/overview')?{overview:snapshot()}:url.includes('/api/qa')?{ready:statusSnapshot().components.website.state==='normal',authenticated:true}:{ready:true}});
+  console.log('Synthetic independent status http://127.0.0.1:4611/ — history begins now');
 }
 if(require.main===module)main().catch(()=>{console.error('Synthetic preview startup failed');process.exitCode=1;});
 module.exports={createPreviewApp};

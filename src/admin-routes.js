@@ -1,3 +1,4 @@
+const { createStatusReader } = require('./operations/status-proxy');
 const { buildOperationsOverview } = require('./operations-overview');
 const { normalizeAccountId, resolveAccountWriteTarget } = require('./web-agent-account-directory');
 const { accountManagementView } = require('./account-management-view');
@@ -17,6 +18,12 @@ function registerAdminRoutes(app, options = {}) {
   }
 
   const auth = createAdminAuthMiddleware(options.config?.security?.adminToken);
+  const readOperationsStatus = options.operationsStatusReader || createStatusReader();
+  app.get('/api/admin/operations/status', auth, async (_req, res) => {
+    res.set?.('Cache-Control', 'no-store, private');
+    try { res.json({ success: true, status: await readOperationsStatus() }); }
+    catch { res.status(503).json({ success: false, code: 'operations_status_unavailable', error: '独立监控暂不可用' }); }
+  });
   const sharedKnowledgeBaseId = String(options.config?.webAgent?.sharedKnowledgeBaseId || '').trim();
   const syncPool = () => {
     if (webReadiness) webReadiness.sync();
@@ -79,7 +86,13 @@ function registerAdminRoutes(app, options = {}) {
     const overview = buildOperationsOverview({ management, readiness, queue: options.askQueue?.stats?.(), limits, maintenance,
       persistence: { ready: persistenceReady,
         statisticsReady: accountDirectory.statisticsReady !== false,
-        pendingWrites: accountDirectory.queue?.length ?? 0 }, metrics: app.locals.operationsMetrics?.snapshot() || null });
+        pendingWrites: accountDirectory.queue?.length ?? 0,
+        canReconcile: Boolean(accountDirectory.uncertain && accountDirectory.reconcile) }, metrics: app.locals.operationsMetrics?.snapshot() || null });
+    const verificationAvailable = Boolean(webReadiness || app.locals.knowledgeAgentQualificationManager);
+    if (!verificationAvailable) for (const row of overview.rows) {
+      row.actions = row.actions.filter(action => action !== 'verify');
+      if (row.recommendedAction === 'verify') row.recommendedAction = 'inspect';
+    }
     res.set?.('Cache-Control', 'no-store, private');
     res.json({ success: true, overview: { ...overview, accounts: management.accounts, eligibility } });
   });
@@ -377,6 +390,14 @@ function registerAdminRoutes(app, options = {}) {
 
   app.post('/api/admin/accounts/:accountId/enable', auth, async (req, res) => {
     try {
+      // New UI hints are advisory; re-evaluate live conditions before the existing transaction.
+      if (webReadiness?.snapshot) {
+        const state=webReadiness.snapshot(),management=buildManagementSnapshot({accountDirectory,pool:options.imaWebAgentClient,readiness:state,includeEvents:false});
+        const account=management.accounts.find(a=>a.id===req.params.accountId),r=state?.accounts?.find(a=>a.id===req.params.accountId);
+        if (!account || accountDirectory.persistenceReady!==true || account.activeRequests!==0 || account.maintenanceOperation || account.identityDuplicate || account.health?.session_valid!==true || r?.qualified!==true || account.runtime?.disabledReason==='pending_enrollment_qualification') {
+          return res.status(409).json({success:false,error:'账号当前不满足启用条件，请先核对登录、资格与保存状态',code:'account_enable_not_ready'});
+        }
+      }
       await accountDirectory.setDisabled(req.params.accountId, false);
       options.imaWebAgentClient?.setAccountDisabled?.(req.params.accountId, false);
       syncPool();

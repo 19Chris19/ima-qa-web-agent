@@ -2,6 +2,7 @@
 // Separate process; does not import Provider startup or read account/profile files.
 const http=require('node:http'), fs=require('node:fs/promises'), path=require('node:path');
 const {StatusHistory}=require('../../src/operations/history');
+const {RecentStatus}=require('../../src/operations/recent');
 const {composeStatus}=require('../../src/operations/status');
 async function readLocal(url) {
   const parsed=new URL(url);
@@ -14,6 +15,7 @@ async function createStatusServer({directory,port=4610,overviewUrl='http://127.0
   websiteUrl='http://127.0.0.1:4317/api/qa/health',privateEntryUrl=null,hostHealthPath=null,synthetic=false,
   read=readLocal,now=Date.now,poll=true}={}) {
   if(!directory)throw Error('private_history_directory_required');
+  const recent=new RecentStatus({now});
   const history=await new StatusHistory({directory,now}).initialize();let stopped=false,timer,overview=null,checks={},networkAt=-Infinity,last=null,historyCache=await history.summary(),historyAt=0;
   async function tick(){
     try{const r=await read(overviewUrl);if(r.overview?.schema==='provider_operations_v1')overview=r.overview;}catch{/* Prior value expires; never keep stale green. */}
@@ -22,21 +24,22 @@ async function createStatusServer({directory,port=4610,overviewUrl='http://127.0
     }));
       if(hostHealthPath){try{const h=JSON.parse(await fs.readFile(hostHealthPath,'utf8'));const at=Date.parse(h.observedAt);if(Number.isFinite(at)&&now()-at>=0&&now()-at<=90000){checks.website={at,ok:h.websiteAndProvider?.ready===true&&h.websiteAndProvider?.authenticated===true};if(h.tailnet)checks.private_entry={at,ok:h.tailnet.ready===true};else delete checks.private_entry;}else {delete checks.private_entry;delete checks.website;}}catch{delete checks.private_entry;delete checks.website;}}
     }
-    last=composeStatus({overview,checks,now:now()});await history.append(last);
+    last=composeStatus({overview,checks,now:now()});recent.record(last);await history.append(last);
     if(now()-historyAt>=60000){historyCache=await history.summary();historyAt=now();}
   }
-  async function loop(){try{await tick();}catch{history.error=true;}finally{if(!stopped)timer=setTimeout(loop,5000);}}
-  const assets={'/':'status.html','/status.css':'status.css','/status.js':'status.js','/poller.js':'../admin-poller.js'};
+  let target=now();
+  async function loop(){try{await tick();}catch{history.error=true;}finally{target+=5000;if(target<now())target=now()+5000;if(!stopped)timer=setTimeout(loop,Math.max(0,target-now()));}}
+  const assets={'/':'status.html','/status.css':'status.css','/status.js':'status.js','/poller.js':'../admin-poller.js','/recent-status.js':'recent-status.js','/recent-status.css':'recent-status.css'};
   const server=http.createServer(async(req,res)=>{
     const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"};
     if(req.headers.host!==`127.0.0.1:${server.address()?.port}`||req.socket.remoteAddress!=='127.0.0.1'){res.writeHead(403,headers);return res.end();}
     if(req.method!=='GET'){res.writeHead(405,headers);return res.end();}
-    const pathname=new URL(req.url,'http://127.0.0.1').pathname;
+    const requestUrl=new URL(req.url,'http://127.0.0.1');const pathname=requestUrl.pathname;
     if(pathname==='/api/status'){
       const value=composeStatus({overview,checks,now:now()});
       // Cached history has a timestamp; collector errors must remain visible.
       res.writeHead(200,{...headers,'Content-Type':'application/json'});
-      return res.end(JSON.stringify({...value,synthetic,history:{...historyCache,storageError:history.error},historyObservedAt:historyAt}));
+      return res.end(JSON.stringify({...value,synthetic,recent:recent.snapshot(),...(requestUrl.searchParams.get('view')==='recent'?{}:{history:{...historyCache,storageError:history.error},historyObservedAt:historyAt})}));
     }
     if(!assets[pathname]){res.writeHead(404,headers);return res.end();}
     const file=assets[pathname];res.writeHead(200,{...headers,'Content-Type':file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html; charset=utf-8'});

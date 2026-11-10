@@ -110,6 +110,7 @@
   const addConflictIdentityButton = document.querySelector('#addConflictIdentityButton');
   let selectedAccountId = '';
   let drawerTrigger = null;
+  let drawerBodyOverflow='';
   let identityAdditionInFlight = false;
   let enrollmentCancellationInFlight = false;
   let enrollmentRevision = 0;
@@ -121,7 +122,7 @@
   });
   accountDrawer.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;
-    const focusable = [...accountDrawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), summary, [tabindex="0"]')];
+    const focusable = [...accountDrawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), summary, [tabindex="0"]')].filter(el=>el.getClientRects().length>0);
     const first = focusable[0];
     const last = focusable.at(-1);
     if (event.shiftKey && document.activeElement === first) {
@@ -131,6 +132,7 @@
     }
   });
   accountDrawer.addEventListener('close', () => {
+    document.body.style.overflow=drawerBodyOverflow;
     accountList.querySelectorAll('.selected').forEach(row => row.classList.remove('selected'));
     const trigger = [...accountList.querySelectorAll('[data-account-id]')]
       .find(button => button.dataset.accountId === selectedAccountId);
@@ -138,7 +140,7 @@
     (panel.hidden ? tokenInput : trigger || (drawerTrigger?.isConnected && drawerTrigger) || accountCountLabel).focus();
   });
   document.addEventListener('click', event => {
-    accountList.querySelectorAll('details[open]').forEach(menu => {
+    document.querySelectorAll('.admin-more[open]').forEach(menu => {
       if (!menu.contains(event.target)) menu.open = false;
     });
   });
@@ -220,10 +222,18 @@
   window.addEventListener('pagehide', () => operationsPoller?.close());
   let staleTimer;
   const checkStaleness = () => {
+    if(monitorStatus&&Date.now()-monitorStatus.observedAt>15000)renderServiceHero();
     if (operations && Date.now() - Date.parse(operations.observedAt) > 15000) {
       document.querySelector('#refreshStatus').textContent = '状态已过期 · 当前状态未知';
       document.querySelector('#overviewSection').classList.add('operations-stale');
+      setHero('unknown','状态已过期','刷新状态后再进行维护');
+      document.querySelectorAll('#attentionAccounts button').forEach(b=>b.disabled=true);
       for (const el of summary.querySelectorAll('strong')) el.textContent = '—';
+      adminSummaryNote.textContent='运行快照已过期 容量尚未确认 请刷新状态';
+      document.querySelectorAll('#accountList .status-chip').forEach(chip=>{chip.textContent='状态过期';chip.dataset.state='unknown';});
+      document.querySelectorAll('#accountList .account-row-actions button, #accountDrawerContent .drawer-actions button').forEach(button=>button.disabled=true);
+      accountDrawerContent.dataset.stale='true';
+      addAccountButton.disabled=true;document.querySelector('#restoreAnyAccountButton').disabled=true;
     }
   };
   staleTimer = window.setInterval(checkStaleness, 1000);
@@ -241,7 +251,14 @@
         request('/api/admin/v2/accounts/eligibility').catch(() => null),
       ]);
       bootstrap = bootstrapPayload;
+      if(bootstrap.operations?.statusPageUrl)document.querySelector('#statusPageLink').href=bootstrap.operations.statusPageUrl;
       document.querySelector('#syntheticNotice').hidden = bootstrap.provider !== 'synthetic-preview';
+      if(bootstrap.provider==='synthetic-preview'&&!document.querySelector('#previewScenario')){
+        const select=document.createElement('select');select.id='previewScenario';select.setAttribute('aria-label','合成状态场景');
+        for(const [value,label] of Object.entries({degraded:'容量下降',normal:'全部正常',busy:'繁忙排队',outage:'在线故障',storage:'保存保护',unknown:'未知状态',qualification:'待验证资格'})){const option=document.createElement('option');option.value=value;option.textContent=label;select.append(option);}
+        select.addEventListener('change',async()=>{select.disabled=true;try{await request('/api/preview/scenario',{method:'POST',body:JSON.stringify({scenario:select.value})});await loadAdminState();await recentPoller?.refresh();}finally{select.disabled=false;}});
+        document.querySelector('#syntheticNotice').append(' · 切换演示 ',select);
+      }
       eligibilitySnapshot = eligibilityPayload;
       const eligibilityById = new Map((eligibilitySnapshot?.accounts || []).map((account) => [account.id, account]));
       accounts = Array.isArray(accountPayload.accounts)
@@ -267,7 +284,8 @@
       document.querySelector('#adminNavigation').hidden = false;
       renderSummary(accountPayload.summary, accountPayload.queue, eligibilitySnapshot);
       if (operationsPoller) await operationsPoller.refresh();
-      addAccountButton.disabled = !bootstrap?.enrollment?.supportsAdminPageQr;
+      addAccountButton.disabled = !bootstrap?.enrollment?.supportsAdminPageQr || Boolean(operations && operations.persistence?.ready !== true);
+      document.querySelector('#restoreAnyAccountButton').disabled=addAccountButton.disabled;
       addAccountButton.title = bootstrap?.enrollment?.supportsAdminPageQr
         ? ''
         : '当前服务未启用页面二维码接入';
@@ -338,7 +356,9 @@
 
   function acceptOperations(value) {
     if (value?.schema !== 'provider_operations_v1' || !Number.isFinite(Date.parse(value.observedAt)) || Date.now()-Date.parse(value.observedAt)>15000) throw Error('stale_operations');
+    if(operations && Date.now()-Date.parse(operations.observedAt)>15000)operationsSignature='';
     operations=value; operationsReceivedAt=Date.now();
+    delete accountDrawerContent.dataset.stale;
     const byId=new Map(value.rows.map(x=>[x.id,x]));
     if(value.eligibility) eligibilitySnapshot=value.eligibility;
     const eligibilityById=new Map((value.eligibility?.accounts||[]).map(a=>[a.id,a]));
@@ -355,7 +375,7 @@
     }
     for(const row of accountList.querySelectorAll('tbody tr[data-account-id]')) {
       const r=byId.get(row.dataset.accountId),cells=row.querySelectorAll('td');if(!r||cells.length<4)continue;
-      cells[1].textContent={valid:'有效',expired:'已过期',unknown:'未确认'}[r.login]||'未确认';cells[2].textContent=r.ready?'可服务':r.reason;cells[3].textContent=r.ready?`${r.limit??'—'} 路 · ${basisLabel(r.basis)}`:'不计入容量';
+      const state=cells[1].querySelector('.status-chip');if(state){state.textContent=rowStateLabel(r);state.dataset.state=rowTone(r);}cells[2].textContent=r.ready?`${r.limit??'—'} 路 · ${basisLabel(r.basis)}`:'不计入容量';
     }
     const signature=JSON.stringify(value.rows);
     if(signature!==operationsSignature && !accountList.contains(document.activeElement) && !accountList.querySelector('details[open]')) {
@@ -366,7 +386,11 @@
     const v=operations, labels={normal:'服务正常',busy:'名额已满 · 正在排队',degraded:'部分容量可用',outage:'暂不可服务',maintenance:'维护中',unknown:'状态未知'};
     document.querySelector('#overviewSection').classList.remove('operations-stale');
     document.querySelector('#refreshStatus').textContent=`${labels[v.state]||'未知'} · 每 5 秒刷新 · ${new Date(v.observedAt).toLocaleTimeString('zh-CN')}`;
-    summary.replaceChildren(createMetric('可服务账号',`${v.ready} / ${v.total}`),createMetric('同时回答上限',v.capacity??'—'),createMetric('正在回答',v.active??'—'),createMetric('排队等待',v.queued??'—'));
+    summary.replaceChildren(createMetric('可服务账号',`${v.ready} / ${v.total}`),createMetric('空闲名额',v.free??'—'),createMetric('正在回答',v.active??'—'),createMetric('排队等待',v.queued??'—'));
+    renderServiceHero();renderAttention();
+    const canEnroll=bootstrap?.enrollment?.supportsAdminPageQr && v.persistence?.ready===true;
+    addAccountButton.disabled=!canEnroll;document.querySelector('#restoreAnyAccountButton').disabled=!canEnroll;
+    document.querySelector('#reconcileButton').hidden = v.persistence?.canReconcile !== true;
     const trials=v.rows.filter(x=>x.ready&&x.basis==='operator_trial');
     adminSummaryNote.textContent=`空闲 ${v.free??'—'} 路 · 排队上限 ${v.queueLimit??'—'} · ${trials.length?'含试运行额度，尚非稳定并发验收':'按当前调度限制'}${v.warnings.length?' · '+v.warnings.join('；'):''}`;
     const allocation=document.querySelector('#capacityAllocation');allocation.replaceChildren();
@@ -421,6 +445,55 @@
     return item;
   }
 
+  let monitorStatus=null;
+  function setHero(state,title,description){
+    document.querySelector('#serviceHero').dataset.state=state;
+    document.querySelector('#serviceHeadline').textContent=title;
+    document.querySelector('#serviceDescription').textContent=description;
+  }
+  function renderServiceHero(){
+    const fresh=monitorStatus && Date.now()-monitorStatus.observedAt<=15000;
+    const state=fresh?monitorStatus.state:'unknown';
+    const titles={normal:'服务运行正常',degraded:'服务可用 部分账号需维护',busy:'服务繁忙 正在排队',outage:'服务暂不可用',maintenance:'服务维护中',unknown:'服务状态待确认'};
+    setHero(state,titles[state]||titles.unknown,fresh?`${operations?.ready??'—'} 个账号可服务 · ${operations?.free??'—'} 个空闲回答名额`:'Provider 快照与在线入口分别检查 不把未知当正常');
+  }
+  function renderAttention(){
+    const root=document.querySelector('#attentionAccounts');if(root.contains(document.activeElement))return;
+    root.replaceChildren();const rows=accounts.filter(a=>!a.operations?.ready);document.querySelector('#attentionCount').textContent=rows.length;
+    for(const a of rows){const row=document.createElement('div');row.className='attention-row';const dot=document.createElement('span');dot.className='account-symbol';dot.dataset.state=rowTone(a.operations);dot.textContent='◉';
+      const text=document.createElement('div'),name=document.createElement('strong'),reason=document.createElement('p');name.textContent=a.name;reason.textContent=a.operations?.reason||'状态尚未确认';text.append(name,reason);row.append(dot,text,targetAction(a));root.append(row);}
+    if(!rows.length){const text=document.createElement('p');text.className='attention-empty';text.textContent='当前没有待处理账号';root.append(text);}
+  }
+  const recentPoller=typeof AdminPoller==='function'?new AdminPoller({
+    read:signal=>request('/api/admin/operations/status',{signal}),
+    accept:payload=>{
+      if(payload.status?.schema!=='provider_status_v1')throw Error('invalid_status');
+      monitorStatus=payload.status;renderServiceHero();
+      document.querySelector('#recentStamp').textContent=`${new Date(monitorStatus.observedAt).toLocaleTimeString('zh-CN')} 更新`;
+      window.RecentStatusView?.render(document.querySelector('#recentStatus'),monitorStatus.recent);
+    },fail:()=>{monitorStatus=null;renderServiceHero();document.querySelector('#recentStamp').textContent='监控暂不可达 · 既有记录保留';}
+  }):null;
+  void recentPoller?.start();
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)void recentPoller?.refresh();});
+  window.addEventListener('pagehide',()=>recentPoller?.close());
+  window.addEventListener('pageshow',event=>{if(event.persisted)void recentPoller?.start();});
+  document.querySelector('#viewAllAccounts').addEventListener('click',event=>{event.preventDefault();document.querySelector('#adminNavigation a[data-view="accounts"]').click();});
+  document.querySelector('#reconcileButton').addEventListener('click',async event=>{
+    if(event.currentTarget.disabled || operations?.persistence?.canReconcile!==true)return;
+    if(!window.confirm('核对磁盘代际及提交摘要？不会重放原操作或解除资格保护。'))return;
+    const button=event.currentTarget;button.disabled=true;
+    try{await request('/api/admin/persistence/reconcile',{method:'POST',body:'{}'});document.querySelector('#reconcileFeedback').textContent='核对已完成，请以最新保存状态为准';await loadAdminState();}
+    catch{document.querySelector('#reconcileFeedback').textContent='无法证明保存结果；保护保持不变，请查看私有诊断';}
+    finally{button.disabled=false;}
+  });
+  const themeButton=document.querySelector('#themeButton');
+  const storedTheme=localStorage.getItem('provider-admin-theme');if(['light','dark'].includes(storedTheme))document.documentElement.dataset.theme=storedTheme;
+  themeButton.addEventListener('click',()=>{const dark=document.documentElement.dataset.theme==='dark'||(!document.documentElement.dataset.theme&&window.matchMedia?.('(prefers-color-scheme: dark)').matches);const theme=dark?'light':'dark';document.documentElement.dataset.theme=theme;localStorage.setItem('provider-admin-theme',theme);themeButton.setAttribute('aria-label',theme==='dark'?'切换浅色主题':'切换深色主题');});
+  accountDrawer.addEventListener('click',event=>{if(event.target===accountDrawer){const b=accountDrawer.getBoundingClientRect();if(event.clientX<b.left||event.clientX>b.right||event.clientY<b.top||event.clientY>b.bottom)accountDrawer.close();}});
+  const handle=accountDrawer.querySelector('.sheet-handle');let drag=null;
+  handle.addEventListener('pointerdown',event=>{drag={id:event.pointerId,y:event.clientY};handle.setPointerCapture?.(event.pointerId);});
+  handle.addEventListener('pointerup',event=>{if(drag?.id===event.pointerId&&event.clientY-drag.y>60)accountDrawer.close();drag=null;});
+  handle.addEventListener('pointercancel',()=>drag=null);
   function renderQualification() {
     qualificationPanel.hidden = !qualification;
     if (!qualification) return;
@@ -1803,28 +1876,37 @@
       .replace(/'/g, '&#39;');
   }
 
+  function rowTone(r) {return r?.ready?'normal':r?.state==='storage'?'outage':r?.state==='unknown'?'unknown':'degraded';}
+  function rowStateLabel(r) {return r?.ready?'可服务':({login:'登录到期',qualification:'待验证资格',disabled:'已停用',storage:'保存保护中',cooldown:'冷却中',maintenance:'维护中',unknown:'待确认'}[r?.state]||'待确认');}
+  function targetAction(a) {
+    const r=a.operations,action=r?.recommendedAction||'inspect';
+    const label={refresh:'续期登录',reauth:'扫码恢复',verify:'验证此账号',enable:'确认启用',check:'刷新状态',inspect:'查看诊断'}[action]||'查看详情';
+    const button=createAction(r?.ready?'查看详情':label,()=>executeTarget(a,r?.ready?'inspect':action),accountActionsInFlight.has(a.id));button.className='target-action';return button;
+  }
+  function executeTarget(a,action){
+    a=accounts.find(current=>current.id===a.id)||a;
+    if(action==='inspect'){openAccountDrawer(a,document.activeElement);return;}
+    if(Date.now()-Date.parse(operations?.observedAt)>15000 || !a.operations?.actions?.includes(action)) {setFeedback(accountFeedback,'状态已变化，请刷新后重试',true);return;}
+    if(action==='reauth'){document.querySelector('#restoreAnyAccountButton').click();return;}
+    if(action==='verify'){openQualificationConfirmation(a);return;}
+    const text={refresh:'为此账号请求一次登录续期？不会自动重试。',check:'检查此账号登录状态？不会发起问答或续期。',enable:'启用此账号？服务端会再次检查资格及保存状态。',disable:'停用此账号的新派发？不会取消已发出的请求。'}[action];
+    if(text && window.confirm(text))void runAccountAction(a,action);
+  }
   function renderAccounts() {
     const search=document.querySelector('#accountSearch').value.trim().toLowerCase(),filter=document.querySelector('#accountFilter').value;
-    const filtered=accounts.filter(a=> {
-      const r=a.operations;
-      return (!search||`${a.name} ${a.id}`.toLowerCase().includes(search)) && (filter==='all'||filter==='ready'&&r?.ready||filter==='attention'&&!r?.ready||filter==='expired'&&r?.login==='expired'||filter==='disabled'&&a.status==='disabled');
-    });
+    const filtered=accounts.filter(a=> {const r=a.operations;return (!search||`${a.name} ${a.id}`.toLowerCase().includes(search)) && (filter==='all'||filter==='ready'&&r?.ready||filter==='attention'&&!r?.ready||filter==='expired'&&r?.login==='expired'||filter==='disabled'&&a.status==='disabled');});
     accountCountLabel.textContent=`${accounts.length} 个账号 · 显示 ${filtered.length} 个`;
-    accountList.replaceChildren();
-    const table=document.createElement('table');table.className='admin-account-table';
-    const head=document.createElement('thead');head.innerHTML='<tr><th>账号</th><th>登录</th><th>网站问答</th><th>允许并发</th><th>下一步</th><th><span class="sr-only">操作</span></th></tr>';table.append(head);
-    const body=document.createElement('tbody');table.append(body);
-    for(const a of filtered) {
-      const r=a.operations;const row=document.createElement('tr');row.dataset.accountId=a.id;
+    accountList.replaceChildren();const table=document.createElement('table');table.className='admin-account-table';
+    const head=document.createElement('thead');head.innerHTML='<tr><th>账号</th><th>当前状态</th><th>允许并发</th><th>上次检查</th><th><span class="sr-only">处理操作</span></th></tr>';table.append(head);const body=document.createElement('tbody');table.append(body);
+    for(const a of filtered){const r=a.operations,row=document.createElement('tr');row.dataset.accountId=a.id;
       const add=(label,node)=>{const td=document.createElement('td');td.dataset.label=label;if(node instanceof Node)td.append(node);else td.textContent=node;row.append(td);return td;};
-      const name=createAction(a.name,()=>openAccountDrawer(a,name));name.dataset.accountId=a.id;name.className='account-name-button';
-      add('账号',name);add('登录',r?({valid:'有效',expired:'已过期',unknown:'未确认'}[r.login]):'未确认');
-      add('网站问答',r?.ready?'可服务':r?.reason||'正在确认');
+      const name=createAction(a.name,()=>openAccountDrawer(a,name));name.dataset.accountId=a.id;name.className='account-name-button';add('账号',name);
+      const chip=document.createElement('span');chip.className='status-chip';chip.dataset.state=rowTone(r);chip.textContent=rowStateLabel(r);add('当前状态',chip);
       add('允许并发',r?.ready?`${r.limit??'—'} 路 · ${basisLabel(r.basis)}`:'不计入容量');
-      const next=createAction(r?.login==='expired'?'扫码恢复':'查看详情',()=>r?.login==='expired'?document.querySelector('#restoreAnyAccountButton').click():openAccountDrawer(a,next));
-      add('下一步',next);add('操作',createAccountMenu(a));
+      add('上次检查',r?.maintenance?.lastCheckAt?new Date(r.maintenance.lastCheckAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'尚无记录');
+      const actions=document.createElement('div');actions.className='account-row-actions';actions.append(targetAction(a),createAccountMenu(a));add('操作',actions);
       if(a.id===selectedAccountId&&accountDrawer.open)row.classList.add('selected');body.append(row);
-      const feedback=accountActionFeedback.get(a.id);if(feedback?.message){const note=document.createElement('tr');const td=document.createElement('td');td.colSpan=6;td.textContent=feedback.message;note.append(td);body.append(note);}
+      const feedback=accountActionFeedback.get(a.id);if(feedback?.message){const note=document.createElement('tr');const td=document.createElement('td');td.colSpan=5;td.textContent=feedback.message;note.append(td);body.append(note);}
     }
     if(filtered.length)accountList.append(table);else{const p=document.createElement('p');p.className='admin-empty';p.textContent='没有符合条件的账号';accountList.append(p);}
   }
@@ -1890,14 +1972,15 @@
     items.className = 'admin-more-items';
     items.setAttribute('role', 'group');
     items.setAttribute('aria-label', `${account.name}的操作`);
-    const busy = accountActionsInFlight.has(account.id);
-    const add = (label, action, disabled = busy) => items.append(createAction(label, () => {
+    const busy = accountActionsInFlight.has(account.id) || Date.now()-Date.parse(operations?.observedAt)>15000;
+    const allowed=account.operations?.actions;
+    const add = (label, action, disabled = busy, capability) => { if(allowed && capability && !allowed.includes(capability))return;items.append(createAction(label, () => {
       menu.open = false; trigger.focus(); action();
-    }, disabled));
-    add('检查登录状态', () => runAccountAction(account, 'check'));
-    add('续期登录', () => { if (window.confirm('为此账号请求一次登录续期？这不是刷新页面状态。')) void runAccountAction(account, 'refresh'); });
-    add('扫码恢复任意已有账号', () => document.querySelector('#restoreAnyAccountButton').click(), busy || !bootstrap?.enrollment?.supportsAdminPageQr);
-    if (enrollmentQualificationBudget() || bootstrap?.webVerification?.available) add('验证本账号资格', () => openQualificationConfirmation(account), busy || Boolean(activeQualification) || qualificationStarting);
+    }, disabled));};
+    add('检查登录状态', () => executeTarget(account, 'check'),busy,'check');
+    add('续期登录', () => { if (window.confirm('为此账号请求一次登录续期？这不是刷新页面状态。')) void runAccountAction(account, 'refresh'); },busy,'refresh');
+    add('扫码恢复任意已有账号', () => document.querySelector('#restoreAnyAccountButton').click(), busy || !bootstrap?.enrollment?.supportsAdminPageQr,'reauth');
+    if (enrollmentQualificationBudget() || bootstrap?.webVerification?.available) add('验证本账号资格', () => openQualificationConfirmation(account), busy || Boolean(activeQualification) || qualificationStarting,'verify');
     if (account.management?.knowledge?.state === 'verifying') add('取消本账号验证', async () => {
       if (!window.confirm('停止本次资格验证？不会自动重新提问。')) return;
       try { await request(`/api/admin/accounts/${encodeURIComponent(account.id)}/verify/cancel`, {method:'POST'}); await loadAdminState(); }
@@ -1905,13 +1988,13 @@
     });
     const pendingAdmission = account.status === 'disabled' && account.runtime?.disabledReason === 'pending_enrollment_qualification';
     if (!account.identityDuplicate && !pendingAdmission) add(account.status === 'disabled' ? '启用' : '停用',
-      () => runAccountAction(account, account.status === 'disabled' ? 'enable' : 'disable'));
+      () => executeTarget(account, account.status === 'disabled' ? 'enable' : 'disable'),busy,account.status==='disabled'?'enable':'disable');
     if (pendingAdmission) add('保持停用（需资格通过）', () => {}, true);
-    add('删除', () => deleteAccount(account));
+    add('删除', () => deleteAccount(account),busy,'delete');
     menu.append(trigger, items);
     menu.addEventListener('toggle', () => {
       trigger.setAttribute('aria-expanded', String(menu.open));
-      if (menu.open) accountList.querySelectorAll('details[open]').forEach(other => { if (other !== menu) other.open = false; });
+      if (menu.open) document.querySelectorAll('.admin-more[open]').forEach(other => { if (other !== menu) other.open = false; });
     });
     menu.addEventListener('keydown', event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.open = false; trigger.focus(); }
@@ -1933,7 +2016,7 @@
     drawerTrigger = trigger;
     renderAccountDetails(account);
     accountList.querySelectorAll('tbody tr').forEach(row => row.classList.toggle('selected', row.contains(trigger)));
-    if (!accountDrawer.open) accountDrawer.showModal();
+    if (!accountDrawer.open) { drawerBodyOverflow=document.body.style.overflow;document.body.style.overflow='hidden';accountDrawer.showModal(); }
     document.querySelector('#closeAccountDrawer').focus();
   }
 
@@ -1948,9 +2031,10 @@
     primary.className = `admin-account-primary ${accountHealthTone(account)}`;
     primary.textContent = account.operations?.reason || accountPrimaryMessage(account);
     accountDrawerContent.append(primary);
+    let sectionIndex=0;
     const addSection = (title, entries) => {
-      const section = document.createElement('section');
-      const heading = document.createElement('h3'); heading.textContent = title;
+      const section = document.createElement(sectionIndex++===0?'section':'details');
+      const heading = document.createElement(section.tagName==='DETAILS'?'summary':'h3'); heading.textContent = title;
       const list = document.createElement('dl');
       for (const [label, value] of entries) {
         const term = document.createElement('dt'); term.textContent = label;
@@ -1960,7 +2044,8 @@
       }
       section.append(heading, list); accountDrawerContent.append(section);
     };
-    if (account.operations) addSection('当前网站派发', [['状态', account.operations.reason], ['允许并发', String(account.operations.limit ?? '未知')], ['额度依据', basisLabel(account.operations.basis)], ['占用', String(account.operations.active ?? '未知')]]);
+    if (account.operations) addSection('服务资格', [['登录', {valid:'有效',expired:'已到期',unknown:'未确认'}[account.operations.login]], ['知识库问答', account.operations.qualified?'已通过':'未通过 / 待确认'], ['允许并发', `${account.operations.limit??'未知'} 路`], ['额度依据', basisLabel(account.operations.basis)]]);
+    const quick=document.createElement('div');quick.className='drawer-actions';if(account.operations?.actions?.includes('check'))quick.append(createAction('检查登录状态',()=>executeTarget(account,'check'),accountActionsInFlight.has(account.id)));if(account.operations?.actions?.includes('refresh'))quick.append(createAction('续期登录',()=>executeTarget(account,'refresh'),accountActionsInFlight.has(account.id)));quick.append(createAccountMenu(account));if(operations?.persistence?.ready!==true)quick.append(createAction('查看保存诊断',()=>{accountDrawer.close();document.querySelector('#adminNavigation a[data-view="diagnostics"]').click();}));accountDrawerContent.append(quick);
     addSection('Knowledge Agent 资格', [
       ['当前资格', booleanLabel(knowledge.qualified)],
       ['严格验证', booleanLabel(knowledge.strictQualified)],
@@ -1992,7 +2077,7 @@
     const facts = document.createElement('div');
     facts.className = 'admin-account-facts';
     facts.append(createAccountFact('基础检查', statusLabel(account.availabilityStatus), accountHealthTone(account)));
-    accountDrawerContent.append(facts, createAccountHistory(account));
+    const record=document.createElement('details');const caption=document.createElement('summary');caption.textContent='维护记录';record.append(caption,facts,createAccountHistory(account));accountDrawerContent.append(record);
   }
 
   function createAction(label, handler, disabled = false, variant = '') {

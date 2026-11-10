@@ -7,6 +7,8 @@
   function badge(el,state){el.className=`state ${state in labels?state:'unknown'}`;el.textContent=labels[state]||'未知';}
   function render(v){
     document.querySelector('#synthetic').hidden = v.synthetic !== true;
+    window.RecentStatusView?.render(document.querySelector('#recentStatus'),v.recent);
+    document.querySelector('.hero').dataset.state=v.state;
     last=v;document.body.classList.remove('stale');badge(document.querySelector('#state'),v.state);
     document.querySelector('#headline').textContent={normal:'当前服务运行正常',busy:'服务繁忙，问题正在排队',degraded:'服务可用，部分容量需要维护',outage:'部分核心服务暂不可用',maintenance:'正在维护，暂缓新任务',unknown:'当前服务状态尚不能确认'}[v.state]||'状态未知';
     document.querySelector('#stamp').textContent=`更新于 ${new Date(v.observedAt).toLocaleTimeString('zh-CN')} · 运行快照 15 秒后过期`;
@@ -42,7 +44,7 @@
   }
   const poller=new AdminPoller({read:async signal=>{const r=await fetch('/api/status',{signal,cache:'no-store'});if(!r.ok)throw Error('status_unavailable');return r.json();},accept:render,fail:()=>{document.querySelector('#stamp').textContent='暂时无法更新；过期后显示未知';}});
   void poller.start();document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poller.refresh();});
-  let timer;const checkStaleness=()=>{if(last&&Date.now()-last.observedAt>15000){document.body.classList.add('stale');badge(document.querySelector('#state'),'unknown');document.querySelector('#headline').textContent='状态快照已过期';for(const k of Object.keys(names))badge(document.querySelector(`#component-${k}`),'unknown');for(const k of ['ready','capacity','active','queued'])document.querySelector(`#${k}`).textContent='—';}};timer=setInterval(checkStaleness,1000);
+  let timer;const checkStaleness=()=>{if(last&&Date.now()-last.observedAt>15000){document.body.classList.add('stale');document.querySelector('.hero').dataset.state='unknown';badge(document.querySelector('#state'),'unknown');document.querySelector('#headline').textContent='状态快照已过期';for(const k of Object.keys(names))badge(document.querySelector(`#component-${k}`),'unknown');for(const k of ['ready','capacity','active','queued'])document.querySelector(`#${k}`).textContent='—';}};timer=setInterval(checkStaleness,1000);
   window.addEventListener('pageshow',event=>{if(event.persisted){void poller.start();timer=setInterval(checkStaleness,1000);}});
   window.addEventListener('pagehide',()=>{poller.close();clearInterval(timer);});
 })();

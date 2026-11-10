@@ -1,0 +1,21 @@
+{
+  "rounds": 30,
+  "retained": [],
+  "conversationRetention": "default",
+  "eventsPerRound": 24,
+  "concurrentOverviewPerRound": 1,
+  "historyMinuteWrites": 4,
+  "recentPoints": 30,
+  "statusPayloadPeakBytes": 38670,
+  "firstDeltaP95Ms": 25.992875000000367,
+  "eventGapP95Ms": 7.258499999999913,
+  "overviewP95Ms": 10.251749999999902,
+  "cpuMs": 521.346,
+  "elapsedMs": 4170.2289169999995,
+  "eventLoopP95Ms": 2.385919,
+  "rssPeakMiB": 99.921875,
+  "rssFirstMiB": 88.375,
+  "rssLastMiB": 99.921875,
+  "historyBytes": 1194,
+  "productionRequests": 0
+}

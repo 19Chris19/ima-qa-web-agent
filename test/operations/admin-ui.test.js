@@ -6,9 +6,10 @@ const tick=()=>new Promise(r=>setTimeout(r,20));
 async function fixture(t){
   const preview=createPreviewApp(),server=preview.app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));const origin=`http://127.0.0.1:${server.address().port}`;
   const dom=new JSDOM(fs.readFileSync(path.join(__dirname,'../../public/admin.html'),'utf8'),{url:origin+'/admin.html',runScripts:'outside-only',pretendToBeVisual:true});
-  const w=dom.window;w.AbortController=AbortController;w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};w.confirm=()=>true;
+  const w=dom.window;w.scrollTo=()=>{};w.AbortController=AbortController;w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};w.HTMLDialogElement.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event('close'));};w.confirm=()=>true;
   w.fetch=(url,options={})=>fetch(origin+url,{...options,headers:{...options.headers,origin}});
   w.eval(fs.readFileSync(path.join(__dirname,'../../public/admin-poller.js'),'utf8'));
+  w.eval(fs.readFileSync(path.join(__dirname,'../../public/operations/recent-status.js'),'utf8'));
   w.eval(fs.readFileSync(path.join(__dirname,'../../public/admin.js'),'utf8'));
   t.after(async()=>{w.dispatchEvent(new w.Event('pagehide'));w.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
   for(let i=0;i<50&&(!w.document.querySelector('#capacityAllocation').textContent.includes('路') || !w.document.querySelector('#exerciseScript textarea'));i++)await tick();
@@ -43,4 +44,21 @@ test('exercise script editing, confirmation and cancel preserve explicit request
 test('read-only status payload cannot carry full private overview even with extra fields',()=>{
   const {composeStatus}=require('../../src/operations/status');const now=Date.now();const o=overviewFixture(now);o.privateToken='synthetic-token';
   const p=JSON.stringify(composeStatus({overview:o,now}));assert.doesNotMatch(p,/privateToken|synthetic-token|演示账号|synthetic-/);
+});
+
+test('new home order, advanced disclosure, shared recent chart and theme keep refresh read-only',async t=>{
+ const {d,w,calls}=await fixture(t);await tick();assert.equal(d.querySelector('.advanced-navigation').open,false);assert.equal(d.querySelectorAll('#recentStatus .recent-row').length,4);assert.equal(d.querySelectorAll('#recentStatus .recent-bars span').length,240);assert.equal(d.querySelector('#attentionCount').textContent,'2');assert.match(d.querySelector('#serviceHeadline').textContent,/部分账号/);assert.equal(d.querySelectorAll('#attentionAccounts .target-action').length,2);d.querySelector('#themeButton').click();assert.ok(['dark','light'].includes(d.documentElement.dataset.theme));
+ const range=d.querySelector('.recent-selector');range.value='45';range.focus();range.dispatchEvent(new w.Event('input'));const before=range.getAttribute('aria-valuetext');d.querySelector('#reloadButton').click();await tick();assert.equal(range.value,'45');assert.equal(range.getAttribute('aria-valuetext'),before);assert.ok(calls.every(c=>c.method==='GET'));
+});
+test('cancel targeted account check sends nothing and double confirmed action stays single',async t=>{
+ const {d,w,calls}=await fixture(t);d.querySelector('#adminNavigation a[data-view="accounts"]').click();const menu=d.querySelectorAll('#accountList .admin-more')[2];menu.open=true;const check=[...menu.querySelectorAll('button')].find(b=>b.textContent==='检查登录状态');assert.ok(check);w.confirm=()=>false;check.click();await tick();assert.ok(!calls.some(c=>c.method==='POST'));w.confirm=()=>true;check.click();check.click();await tick();await tick();assert.equal(calls.filter(c=>c.path.endsWith('/check')&&c.method==='POST').length,1);
+});
+test('single-account qualification presents exact budget, cancel leaves no maintenance mutation',async t=>{
+ const {d,w,calls}=await fixture(t);const select=d.querySelector('#previewScenario');select.value='qualification';select.dispatchEvent(new w.Event('change'));for(let i=0;i<30&&!d.querySelector('#attentionAccounts').textContent.includes('验证此账号');i++)await tick();const button=[...d.querySelectorAll('#attentionAccounts button')].find(b=>b.textContent==='验证此账号');assert.ok(button);button.click();assert.equal(d.querySelector('#qualificationConfirmDialog').open,true);assert.match(d.querySelector('#qualificationConfirmText').textContent,/最多 1 次/);const before=calls.filter(c=>c.method==='POST').length;d.querySelector('#cancelQualificationConfirmButton').click();await tick();assert.equal(calls.filter(c=>c.method==='POST').length,before);
+});
+test('uncertain save reconciliation needs confirmation, remains protected on inconclusive result',async t=>{
+ const {d,w,calls}=await fixture(t);const select=d.querySelector('#previewScenario');select.value='storage';select.dispatchEvent(new w.Event('change'));for(let i=0;i<30&&d.querySelector('#reconcileButton').hidden;i++)await tick();assert.equal(d.querySelector('#reconcileButton').hidden,false);assert.equal(d.querySelector('#addAccountButton').disabled,true);w.confirm=()=>false;d.querySelector('#reconcileButton').click();await tick();assert.equal(calls.filter(c=>c.path.endsWith('/persistence/reconcile')).length,0);w.confirm=()=>true;d.querySelector('#reconcileButton').click();d.querySelector('#reconcileButton').click();await tick();await tick();assert.equal(calls.filter(c=>c.path.endsWith('/persistence/reconcile')).length,1);assert.match(d.querySelector('#reconcileFeedback').textContent,/保护保持不变/);assert.equal(d.querySelector('#addAccountButton').disabled,true);
+});
+test('expired runtime view becomes unknown, does not leave green account chips or actionable maintenance',async t=>{
+ const {d,w}=await fixture(t);const now=Date.now();w.Date.now=()=>now+16001;await new Promise(resolve=>setTimeout(resolve,1100));assert.equal(d.querySelector('#serviceHero').dataset.state,'unknown');assert.ok([...d.querySelectorAll('#accountList .status-chip')].every(chip=>chip.dataset.state==='unknown'));assert.match(d.querySelector('#adminSummaryNote').textContent,/快照已过期/);assert.ok([...d.querySelectorAll('#accountList .account-row-actions button')].every(b=>b.disabled));w.Date.now=Date.now;d.querySelector('#reloadButton').click();for(let i=0;i<30&&d.querySelector('#reloadButton').disabled;i++)await tick();assert.ok([...d.querySelectorAll('#accountList .status-chip')].some(chip=>chip.dataset.state==='normal'));assert.equal(d.querySelector('#addAccountButton').disabled,false);
 });

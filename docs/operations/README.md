@@ -91,3 +91,7 @@ Node 22，使用项目原有依赖，运行 `node scripts/operations/preview.js`
 ## 参考与许可
 
 借鉴 [New API 渠道管理](https://docs.newapi.ai/en/docs/guide/feature-guide/admin/channel) 的状态筛选/操作分层，以及 [Uptime Kuma](https://github.com/louislam/uptime-kuma)、[OpenAI Status](https://status.openai.com/)、[DeepSeek Status](https://status.deepseek.com/) 的组件状态和采样历史表达。实现为本项目原生 JS/CSS，不复制 New API 的 AGPL 源码，不引入前端框架。
+
+## 精修候选（本地，未部署）
+
+从 `feced06` 分出新版视觉、10 分钟视图和按故障操作的候选，保留本说明原候选及旧预览。新版入口 4602 / 4611，见 [精修候选说明](refined-20261111/README.md)。生产服务未切换。

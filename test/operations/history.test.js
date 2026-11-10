@@ -32,3 +32,8 @@ test('same-minute restart does not manufacture a second observed minute',async t
   h=await new StatusHistory({directory:h.directory,now:()=>now+1000}).initialize();await h.append(snapshot('degraded'));
   const result=await h.summary();assert.equal(result.days.at(-1).observedMinutes,1);assert.equal(result.days.at(-1).states.provider.normal,0);assert.equal(result.days.at(-1).states.provider.degraded,1);
 });
+test('recent read view is cached memory only, omits 30-day payload and restart does not restore fine samples',async t=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'recent-server-test-'));t.after(()=>fs.rm(directory,{recursive:true,force:true}));let now=Date.now(),reads=0;
+ const create=()=>createStatusServer({directory,port:0,poll:false,now:()=>now,read:async url=>{reads++;return url.includes('/overview')?{overview:overviewFixture(now)}:{ready:true,authenticated:true};}});
+ let monitor=await create();await monitor.tick();const base=`http://127.0.0.1:${monitor.server.address().port}`;const before=reads;for(let i=0;i<10;i++){const v=await(await fetch(base+'/api/status?view=recent')).json();assert.equal(v.recent.points,1);assert.equal(v.history,undefined);}assert.equal(reads,before);await monitor.close();monitor=await create();t.after(()=>monitor.close());const v=await(await fetch(`http://127.0.0.1:${monitor.server.address().port}/api/status`)).json();assert.equal(v.recent.points,0);assert.ok(v.history.firstObservedAt);
+});
