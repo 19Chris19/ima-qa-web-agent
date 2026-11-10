@@ -10,7 +10,7 @@ const { knowledgeAgentContractDigest } = require('./ima-knowledge-agent-contract
 const STORE_VERSION = 1;
 const DEFAULT_EVENT_LIMIT = 80;
 const PENDING_QUALIFICATION = 'pending_enrollment_qualification';
-const bindingDigest = account => crypto.createHash('sha256').update(JSON.stringify(account)).digest('hex');
+const bindingDigest = account => crypto.createHash('sha256').update(JSON.stringify(account, (_key,value) => value && typeof value==='object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0)) : value)).digest('hex');
 
 function defaultAccountStorePath() {
   return path.resolve(__dirname, '..', '..', '..', 'runtime', 'ima-web-agent-accounts.json');

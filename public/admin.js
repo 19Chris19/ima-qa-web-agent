@@ -251,9 +251,10 @@
         request('/api/admin/v2/accounts/eligibility').catch(() => null),
       ]);
       bootstrap = bootstrapPayload;
+      if(monitorStatus&&monitorStatus.synthetic!==(bootstrap.provider==='synthetic-preview')){monitorStatus=null;window.RecentStatusView?.render(document.querySelector('#recentStatus'),null);}
       if(bootstrap.operations?.statusPageUrl)document.querySelector('#statusPageLink').href=bootstrap.operations.statusPageUrl;
       document.querySelector('#syntheticNotice').hidden = bootstrap.provider !== 'synthetic-preview';
-      if(bootstrap.provider==='synthetic-preview'&&!document.querySelector('#previewScenario')){
+      if(bootstrap.provider==='synthetic-preview'&&bootstrap.preview?.scenarios!==false&&!document.querySelector('#previewScenario')){
         const select=document.createElement('select');select.id='previewScenario';select.setAttribute('aria-label','合成状态场景');
         for(const [value,label] of Object.entries({degraded:'容量下降',normal:'全部正常',busy:'繁忙排队',outage:'在线故障',storage:'保存保护',unknown:'未知状态',qualification:'待验证资格'})){const option=document.createElement('option');option.value=value;option.textContent=label;select.append(option);}
         select.addEventListener('change',async()=>{select.disabled=true;try{await request('/api/preview/scenario',{method:'POST',body:JSON.stringify({scenario:select.value})});await loadAdminState();await recentPoller?.refresh();}finally{select.disabled=false;}});
@@ -452,7 +453,7 @@
     document.querySelector('#serviceDescription').textContent=description;
   }
   function renderServiceHero(){
-    const fresh=monitorStatus && Date.now()-monitorStatus.observedAt<=15000;
+    const fresh=monitorStatus && bootstrap && monitorStatus.synthetic===(bootstrap.provider==='synthetic-preview') && Date.now()-monitorStatus.observedAt<=15000;
     const state=fresh?monitorStatus.state:'unknown';
     const titles={normal:'服务运行正常',degraded:'服务可用 部分账号需维护',busy:'服务繁忙 正在排队',outage:'服务暂不可用',maintenance:'服务维护中',unknown:'服务状态待确认'};
     setHero(state,titles[state]||titles.unknown,fresh?`${operations?.ready??'—'} 个账号可服务 · ${operations?.free??'—'} 个空闲回答名额`:'Provider 快照与在线入口分别检查 不把未知当正常');
@@ -468,11 +469,15 @@
     read:signal=>request('/api/admin/operations/status',{signal}),
     accept:payload=>{
       if(payload.status?.schema!=='provider_status_v1')throw Error('invalid_status');
-      monitorStatus=payload.status;renderServiceHero();
+      monitorStatus=payload.status;
+      const expectedSynthetic=bootstrap?.provider==='synthetic-preview';
+      if(typeof monitorStatus.synthetic!=='boolean'||(bootstrap&&monitorStatus.synthetic!==expectedSynthetic)){monitorStatus=null;throw Error('operations_status_source_mismatch');}
+      renderServiceHero();
       document.querySelector('#recentStamp').textContent=`${new Date(monitorStatus.observedAt).toLocaleTimeString('zh-CN')} 更新`;
       window.RecentStatusView?.render(document.querySelector('#recentStatus'),monitorStatus.recent);
-    },fail:()=>{monitorStatus=null;renderServiceHero();document.querySelector('#recentStamp').textContent='监控暂不可达 · 既有记录保留';}
+    },fail:error=>{monitorStatus=null;renderServiceHero();document.querySelector('#recentStamp').textContent=error?.code==='operations_status_source_mismatch'?'监控来源不匹配 已拒绝合成状态':'监控暂不可达 · 既有记录保留';}
   }):null;
+  window.addEventListener('provider-model-policy-changed',()=>void operationsPoller?.refresh());
   void recentPoller?.start();
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void recentPoller?.refresh();});
   window.addEventListener('pagehide',()=>recentPoller?.close());
@@ -1877,7 +1882,7 @@
   }
 
   function rowTone(r) {return r?.ready?'normal':r?.state==='storage'?'outage':r?.state==='unknown'?'unknown':'degraded';}
-  function rowStateLabel(r) {return r?.ready?'可服务':({login:'登录到期',qualification:'待验证资格',disabled:'已停用',storage:'保存保护中',cooldown:'冷却中',maintenance:'维护中',unknown:'待确认'}[r?.state]||'待确认');}
+  function rowStateLabel(r) {return r?.ready?'可服务':({login:'登录到期',qualification:'待验证资格',kernel:'新内核待就绪',disabled:'已停用',storage:'保存保护中',cooldown:'冷却中',maintenance:'维护中',unknown:'待确认'}[r?.state]||'待确认');}
   function targetAction(a) {
     const r=a.operations,action=r?.recommendedAction||'inspect';
     const label={refresh:'续期登录',reauth:'扫码恢复',verify:'验证此账号',enable:'确认启用',check:'刷新状态',inspect:'查看诊断'}[action]||'查看详情';
@@ -2044,7 +2049,7 @@
       }
       section.append(heading, list); accountDrawerContent.append(section);
     };
-    if (account.operations) addSection('服务资格', [['登录', {valid:'有效',expired:'已到期',unknown:'未确认'}[account.operations.login]], ['知识库问答', account.operations.qualified?'已通过':'未通过 / 待确认'], ['允许并发', `${account.operations.limit??'未知'} 路`], ['额度依据', basisLabel(account.operations.basis)]]);
+    if (account.operations) addSection('服务资格', [['登录', {valid:'有效',expired:'已到期',unknown:'未确认'}[account.operations.login]], ['知识库问答', account.operations.qualified?'已通过':'未通过 / 待确认'], ['允许并发', `${account.operations.limit??'未知'} 路`], ['额度依据', basisLabel(account.operations.basis)],...(account.operations.imapy? [['新内核',account.operations.imapy.ready?'可服务':account.operations.reason],['设备上下文',account.operations.imapy.contextReady?'已就绪':'缺失'],['模型目录',account.operations.imapy.catalogCurrent?'有效':'待核对']]:[])]);
     const quick=document.createElement('div');quick.className='drawer-actions';if(account.operations?.actions?.includes('check'))quick.append(createAction('检查登录状态',()=>executeTarget(account,'check'),accountActionsInFlight.has(account.id)));if(account.operations?.actions?.includes('refresh'))quick.append(createAction('续期登录',()=>executeTarget(account,'refresh'),accountActionsInFlight.has(account.id)));quick.append(createAccountMenu(account));if(operations?.persistence?.ready!==true)quick.append(createAction('查看保存诊断',()=>{accountDrawer.close();document.querySelector('#adminNavigation a[data-view="diagnostics"]').click();}));accountDrawerContent.append(quick);
     addSection('Knowledge Agent 资格', [
       ['当前资格', booleanLabel(knowledge.qualified)],

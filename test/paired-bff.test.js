@@ -1,0 +1,27 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),net=require('node:net'),crypto=require('node:crypto');
+const {spawn}=require('node:child_process');const {once}=require('node:events');
+const website=process.env.PAIRED_WEBSITE_ROOT;
+test('paired BFF freezes queued selection, survives runtime restart and keeps exact web evidence',{skip:!website&&'Set PAIRED_WEBSITE_ROOT to the paired website candidate'},async t=>{
+ assert.ok(fs.existsSync(path.join(website,'server.mjs')));
+ const {pairedSandbox}=await import('../test-support/paired-sandbox.mjs');let f=await pairedSandbox({delayMs:15}),child;const runtime=path.join(f.dir,'bff');fs.mkdirSync(runtime,{mode:0o700});
+ const socket=net.createServer().listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));const base='http://127.0.0.1:'+port;
+ async function stopBff(){if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}}
+ async function startBff(){child=spawn(process.execPath,['server.mjs'],{cwd:website,stdio:'ignore',env:{PATH:process.env.PATH,NODE_OPTIONS:'--require '+JSON.stringify(path.resolve('test-support/block-real-ima.cjs')),PORT:String(port),DEMO_RUNTIME_DIR:runtime,DEMO_COOKIE_NAME:'paired_test',DEMO_COOKIE_SECRET:'synthetic-cookie',PROVIDER_A_BASE_URL:f.url,PROVIDER_A_API_TOKEN:'synthetic-api',PROVIDER_A_INTERNAL_SERVICE_TOKEN:'synthetic-service',PROVIDER_A_KNOWLEDGE_SCOPE_REF:crypto.createHash('sha256').update(f.kb).digest('hex')}});for(let i=0;i<100;i++){try{const r=await fetch(base+'/api/qa/health');if(r.ok&&(await r.json()).ready)return;}catch{}await new Promise(r=>setTimeout(r,30));}throw Error('synthetic_bff_not_ready');}
+ t.after(async()=>{await stopBff();await f.close();});await startBff();
+ let r=await fetch(base+'/api/qa/conversations',{method:'POST'});assert.equal(r.status,201);const cookie=r.headers.get('set-cookie').split(';')[0];const c=(await r.json()).conversation.conversationId;
+ const headers={Cookie:cookie,Origin:base,'content-type':'application/json','X-Explorer-Preview-Visitor':'a'.repeat(64)};
+ const req=async(route,body)=>{const response=await fetch(base+route,{method:body?'POST':'GET',headers,...(body?{body:JSON.stringify(body)}:{})});const value=await response.json();assert.ok(response.ok,JSON.stringify(value));return value;};
+ const taskDone=async id=>{for(let i=0;i<300;i++){const v=await req('/api/qa/tasks/'+id+'?presentation=chat_v1');if(['succeeded','failed','indeterminate'].includes(v.task.status)){assert.equal(v.task.status,'succeeded',JSON.stringify(v));return v;}await new Promise(r=>setTimeout(r,15));}throw Error('synthetic_timeout');};
+ const cap=await req('/api/qa/chat-capabilities');assert.equal(cap.enabled,true);const quick={modelRef:cap.models[0].modelRef,mode:'quick'},deep={modelRef:cap.models.find(m=>m.modelRef!==quick.modelRef&&m.modes.deep).modelRef,mode:'deep'};
+ const firstInput={question:'Synthetic first turn '+'.'.repeat(350),conversationId:c,requestId:crypto.randomUUID(),modelSelection:quick};const first=(await req('/api/qa/tasks',firstInput)).task;
+ const queueInput={question:'Synthetic queued followup',conversationId:c,requestId:crypto.randomUUID(),modelSelection:{...deep}};const queued=await req('/api/qa/queue',queueInput);queueInput.modelSelection.mode='quick';assert.ok(queued.job?.id);
+ await taskDone(first.id);let second;for(let i=0;i<300;i++){const found=await req('/api/qa/tasks?requestId='+queueInput.requestId);if(found.tasks?.[0]){second=found.tasks[0];break;}await new Promise(r=>setTimeout(r,20));}assert.ok(second);const secondResult=await taskDone(second.id);assert.equal(secondResult.task.modelSelection.mode,'deep');
+ const upstream=f.upstream;const before=upstream.calls.filter(x=>x.pathname.endsWith('/qa'));assert.equal(before.length,2);assert.equal(before[1].body.model_info.model_type,f.models.find(m=>m.modelRef===deep.modelRef).modes.deep.model_type);
+ const dir=f.dir,providerPort=f.server.address().port;await stopBff();await f.close({preserve:true});f=await pairedSandbox({directoryPath:dir,mockUpstream:upstream,port:providerPort,delayMs:15});await startBff();
+ const restored=await taskDone(first.id);assert.equal(restored.task.id,first.id);const duplicate=await req('/api/qa/tasks',firstInput);assert.equal(duplicate.task.id,first.id);assert.equal(upstream.calls.filter(x=>x.pathname.endsWith('/qa')).length,2);
+ const third=(await req('/api/qa/tasks',{question:'Synthetic web followup after restart',conversationId:c,requestId:crypto.randomUUID(),modelSelection:quick,sourceIntent:'web'})).task;const final=await taskDone(third.id);const done=final.snapshot.events.find(e=>e.event==='done').data;
+ assert.equal(done.webEvidenceStatus,'verified');assert.deepEqual(done.citationMap['index:91'].displayNumbers,['7']);assert.equal(done.citationMap['index:91'].sources[0].url,'https://example.org/synthetic-source');
+ const sent=upstream.calls.filter(x=>x.pathname.endsWith('/qa'));assert.equal(sent.length,3);assert.equal(new Set(sent.map(x=>x.body.session_id)).size,1);assert.equal(sent[2].body.model_info.enable_enhancement,true);assert.equal(upstream.calls.filter(x=>x.pathname.endsWith('/init_session')).length,1);
+ const owner=[...f.store.conversations.values()].find(x=>x.id===c)?.ownerKey;const history=f.store.getDetail(c,owner);assert.equal(history.messages.length,6);assert.equal(history.messages.at(-1).webEvidenceStatus,'verified');
+});

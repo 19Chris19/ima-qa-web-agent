@@ -1,0 +1,30 @@
+{
+  "readOnlySourceHashes": true,
+  "files": [
+    {
+      "file": "src/web-agent-enrollment.js",
+      "candidate": "278ec1d5e4587ff4398066a3b3c00982e4c7413158df57f883a38a98e0dca26b",
+      "runningSource": "278ec1d5e4587ff4398066a3b3c00982e4c7413158df57f883a38a98e0dca26b"
+    },
+    {
+      "file": "src/account-persistence-worker.js",
+      "candidate": "15362efd3fd5cd59a1822d319c749f7dff0de98629778394a9a47eb53eefc739",
+      "runningSource": "15362efd3fd5cd59a1822d319c749f7dff0de98629778394a9a47eb53eefc739"
+    },
+    {
+      "file": "src/admin-routes.js",
+      "candidate": "05bb1ab1d36a30957e12106c3a5e0bec3a013a0d662e2e79a96f865988a840f2",
+      "runningSource": "9d3dc7c1bc3955c0cbeb0fa93686644356ac0bfc1ef0ab4558da7042637e7404"
+    },
+    {
+      "file": "src/async-account-directory.js",
+      "candidate": "1f2282366728acaa2815bc45ca99321a228fae4f25b914438dae542322021e7b",
+      "runningSource": "1f2282366728acaa2815bc45ca99321a228fae4f25b914438dae542322021e7b"
+    },
+    {
+      "file": "src/web-agent-account-directory.js",
+      "candidate": "295bd0b4041cc45fbe8788bd1bdbd0ba3d39de1ebf4c56b8962fdb9e028158c4",
+      "runningSource": "566b85ee5426b350e7d0528664cc89cb1f2c341ff7aae6e9898773427d0ab769"
+    }
+  ]
+}

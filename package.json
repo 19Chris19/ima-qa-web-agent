@@ -1,6 +1,6 @@
 {
   "name": "ima-qa-web",
-  "version": "0.7.0",
+  "version": "0.8.0-rc.1",
   "description": "IMA shared knowledge base QA gateway with streaming Web Agent answers, isolated conversations, and encrypted account-pool enrollment.",
   "repository": {
     "type": "git",
@@ -19,6 +19,7 @@
     "public",
     "scripts",
     "src",
+    "vendor",
     "test",
     "test-support",
     ".dockerignore",
@@ -72,7 +73,7 @@
     "proper-lockfile": "^4.1.2"
   },
   "engines": {
-    "node": ">=18.18"
+    "node": ">=22"
   },
   "devDependencies": {
     "dompurify": "3.4.16",

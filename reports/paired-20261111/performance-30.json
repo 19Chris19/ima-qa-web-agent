@@ -1,0 +1,56 @@
+{
+  "syntheticOnly": true,
+  "realImaCalls": 0,
+  "baseline": {
+    "rounds": 30,
+    "monitoring": false,
+    "firstDeltaP95Ms": 91,
+    "eventGapP95Ms": 20.349333000000115,
+    "healthP95Ms": 4.2034589999999525,
+    "eventLoopP95Ms": 40.304639,
+    "cpuMs": 802.467,
+    "elapsedMs": 5208.673624999999,
+    "rssPeakMiB": 121.859375,
+    "statusPayloadPeakBytes": 0,
+    "criticalCommits": 0,
+    "statisticsCommits": 4,
+    "retained": [
+      {
+        "round": 30,
+        "heapMiB": 25.002120971679688,
+        "rssMiB": 121.859375,
+        "tasks": 30,
+        "conversations": 30
+      }
+    ]
+  },
+  "candidate": {
+    "rounds": 30,
+    "monitoring": true,
+    "firstDeltaP95Ms": 90,
+    "eventGapP95Ms": 18.949749999999767,
+    "healthP95Ms": 2.9634170000008453,
+    "eventLoopP95Ms": 39.092223,
+    "cpuMs": 726.52,
+    "elapsedMs": 5267.616250000001,
+    "rssPeakMiB": 139.046875,
+    "statusPayloadPeakBytes": 38639,
+    "criticalCommits": 0,
+    "statisticsCommits": 4,
+    "retained": [
+      {
+        "round": 30,
+        "heapMiB": 25.11005401611328,
+        "rssMiB": 139.046875,
+        "tasks": 30,
+        "conversations": 30
+      }
+    ]
+  },
+  "limitations": [
+    "Same Node process includes a worker and optional monitor; not an isolated production monitor RSS measurement.",
+    "History and completed tasks remain retained under real limits; memory observations include this intended retention.",
+    "GC samples only when --expose-gc is used. Short tests are not cross-day or 3DGS-load acceptance.",
+    "The candidate reads overview and status every round, more often than a normal 5-second browser poll."
+  ]
+}

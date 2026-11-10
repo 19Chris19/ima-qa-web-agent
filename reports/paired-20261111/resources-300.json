@@ -1,0 +1,97 @@
+{
+  "syntheticOnly": true,
+  "realImaCalls": 0,
+  "baseline": null,
+  "candidate": {
+    "rounds": 300,
+    "monitoring": true,
+    "firstDeltaP95Ms": 129,
+    "eventGapP95Ms": 19.32574999999997,
+    "healthP95Ms": 2.332750000001397,
+    "eventLoopP95Ms": 46.399487,
+    "cpuMs": 9642.881,
+    "elapsedMs": 56816.481250000004,
+    "rssPeakMiB": 170.25,
+    "statusPayloadPeakBytes": 38639,
+    "criticalCommits": 0,
+    "statisticsCommits": 50,
+    "retained": [
+      {
+        "round": 30,
+        "heapMiB": 17.256690979003906,
+        "rssMiB": 127.59375,
+        "tasks": 30,
+        "conversations": 30
+      },
+      {
+        "round": 60,
+        "heapMiB": 17.865203857421875,
+        "rssMiB": 137.59375,
+        "tasks": 60,
+        "conversations": 60
+      },
+      {
+        "round": 90,
+        "heapMiB": 18.459449768066406,
+        "rssMiB": 139.390625,
+        "tasks": 90,
+        "conversations": 90
+      },
+      {
+        "round": 120,
+        "heapMiB": 19.045616149902344,
+        "rssMiB": 140.65625,
+        "tasks": 120,
+        "conversations": 120
+      },
+      {
+        "round": 150,
+        "heapMiB": 19.57408905029297,
+        "rssMiB": 142.953125,
+        "tasks": 150,
+        "conversations": 150
+      },
+      {
+        "round": 180,
+        "heapMiB": 20.027626037597656,
+        "rssMiB": 145.203125,
+        "tasks": 180,
+        "conversations": 180
+      },
+      {
+        "round": 210,
+        "heapMiB": 20.460739135742188,
+        "rssMiB": 146.015625,
+        "tasks": 210,
+        "conversations": 210
+      },
+      {
+        "round": 240,
+        "heapMiB": 20.87347412109375,
+        "rssMiB": 150.40625,
+        "tasks": 240,
+        "conversations": 240
+      },
+      {
+        "round": 270,
+        "heapMiB": 21.298362731933594,
+        "rssMiB": 154.40625,
+        "tasks": 270,
+        "conversations": 270
+      },
+      {
+        "round": 300,
+        "heapMiB": 21.807411193847656,
+        "rssMiB": 156.203125,
+        "tasks": 300,
+        "conversations": 300
+      }
+    ]
+  },
+  "limitations": [
+    "Same Node process includes a worker and optional monitor; not an isolated production monitor RSS measurement.",
+    "History and completed tasks remain retained under real limits; memory observations include this intended retention.",
+    "GC samples only when --expose-gc is used. Short tests are not cross-day or 3DGS-load acceptance.",
+    "The candidate reads overview and status every round, more often than a normal 5-second browser poll."
+  ]
+}

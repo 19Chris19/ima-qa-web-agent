@@ -1,5 +1,6 @@
 const { createStatusReader } = require('./operations/status-proxy');
 const { buildOperationsOverview } = require('./operations-overview');
+const { operationsReadiness } = require('./operations/runtime-view');
 const { normalizeAccountId, resolveAccountWriteTarget } = require('./web-agent-account-directory');
 const { accountManagementView } = require('./account-management-view');
 const {
@@ -18,11 +19,11 @@ function registerAdminRoutes(app, options = {}) {
   }
 
   const auth = createAdminAuthMiddleware(options.config?.security?.adminToken);
-  const readOperationsStatus = options.operationsStatusReader || createStatusReader();
+  const readOperationsStatus = options.operationsStatusReader || createStatusReader({expectedSynthetic:options.synthetic===true});
   app.get('/api/admin/operations/status', auth, async (_req, res) => {
     res.set?.('Cache-Control', 'no-store, private');
     try { res.json({ success: true, status: await readOperationsStatus() }); }
-    catch { res.status(503).json({ success: false, code: 'operations_status_unavailable', error: '独立监控暂不可用' }); }
+    catch(error) { const mismatch=error.message==='operations_status_source_mismatch';res.status(503).json({ success: false, code: mismatch?'operations_status_source_mismatch':'operations_status_unavailable', error: mismatch?'监控来源不匹配，已拒绝合成或未知状态':'独立监控暂不可用' }); }
   });
   const sharedKnowledgeBaseId = String(options.config?.webAgent?.sharedKnowledgeBaseId || '').trim();
   const syncPool = () => {
@@ -71,8 +72,8 @@ function registerAdminRoutes(app, options = {}) {
   });
 
   app.get('/api/admin/overview', auth, (_req, res) => {
-    const readiness = webReadiness?.snapshot() || null;
     const pool = options.imaWebAgentClient;
+    const readiness = operationsReadiness(webReadiness?.snapshot() || null,pool,app.locals.imapyKernel);
     const maintenance = Boolean(accountPoolExerciseManager?.isMaintenanceActive?.()
       || app.locals.knowledgeAgentQualificationManager?.isMaintenanceActive?.());
     const limits = (pool?.accounts || []).map(account => ({ id: account.id,
@@ -134,7 +135,8 @@ function registerAdminRoutes(app, options = {}) {
   app.get('/api/admin/bootstrap', auth, (_req, res) => {
     res.json({
       success: true,
-      provider: options.config?.qaProvider || 'ima-web-agent',
+      provider: options.synthetic===true?'synthetic-preview':options.config?.qaProvider || 'ima-web-agent',
+      ...(options.synthetic===true?{preview:{scenarios:false},...(options.operationsStatusPageUrl?{operations:{statusPageUrl:options.operationsStatusPageUrl}}:{})}:{}),
       webVerification: { available: Boolean(webReadiness), authorizedRequestCount: 1 },
       sharedKnowledgeBaseId: sharedKnowledgeBaseId || null,
       enrollment: {

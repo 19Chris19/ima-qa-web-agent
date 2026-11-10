@@ -26,11 +26,12 @@ function buildOperationsOverview({ management, readiness, queue, persistence, li
       limit, available: ready ? integer(r?.availableSlots) : 0, basis,
       validatedLimit: integer(evidence?.validatedMaxConcurrent),
       state: storageUnknown ? 'unknown' : !storage ? 'storage' : disabled ? 'disabled' : a.maintenanceOperation ? 'maintenance'
-        : login !== 'valid' ? login === 'expired' ? 'login' : 'unknown' : cooling ? 'cooldown' : ready ? 'ready' : 'qualification',
+        : login !== 'valid' ? login === 'expired' ? 'login' : 'unknown' : cooling ? 'cooldown' : r?.imapy && !r.imapy.ready ? 'kernel' : ready ? 'ready' : 'qualification',
       reason: storageUnknown ? '账号保存服务状态尚未确认' : !storage ? '账号保存服务未就绪，暂停新派发' : disabled ? (a.runtime?.disabledReason==='pending_enrollment_qualification' ? '待接入资格未通过，保持停用' : `账号已停用${a.runtime?.disabledReason ? ' · '+String(a.runtime.disabledReason).slice(0,160) : ''}`)
         : a.maintenanceOperation ? '正在维护' : login === 'expired' ? '需要重新登录；历史资格不能代替有效登录'
         : login !== 'valid' ? '登录状态尚未确认' : cooling ? '账号正在冷却'
-        : ready ? '可接收当前网站问答' : '尚未满足当前问答资格',
+        : r?.imapy && !r.imapy.ready ? '新内核未就绪：'+({device_context_missing:'缺少本账号设备上下文',catalog_unavailable:'模型目录待核对',default_not_configured:'未设置默认模型',default_unavailable:'默认模型不可用',policy_unavailable:'模型策略保存未确认',account_unavailable:'账号当前不可派发'}[r.imapy.reason]||'能力待核对') : ready ? '可接收当前网站问答' : '尚未满足当前问答资格',
+      ...(r?.imapy?{imapy:r.imapy,legacyQualified:qualified}:{}),
       maintenance: m.maintenance || {}, knowledge: m.knowledge || {}, activeProfile: m.activeProfile || null,
     };
   });
@@ -46,7 +47,7 @@ function buildOperationsOverview({ management, readiness, queue, persistence, li
     : min(Math.max(0, capacity - active), readiness?.schedulable);
   const warnings = [];
   if (capacity === null || active === null || queued === null || free === null) warnings.push('部分计数无法确认，缺失不作为零');
-  if (readiness?.capacity !== queue?.maxConcurrent || rowCapacity !== readiness?.capacity) warnings.push('容量来源不一致，按可确认的较小值展示');
+  if (readiness?.capacity !== queue?.maxConcurrent || rowCapacity !== readiness?.capacity) warnings.push(readiness?.mode==='imapy_chat_v1'?'新内核按已就绪账号计数，旧路径资格单独保留':'容量来源不一致，按可确认的较小值展示');
   if (!storage && !storageUnknown) warnings.push('持久化保护中，不派发新任务');
   const state = storageUnknown ? 'unknown' : !storage ? 'outage' : maintenance ? 'maintenance' : capacity === null || active === null || queued === null ? 'unknown'
     : capacity === 0 ? 'outage' : free === 0 || queued > 0 ? 'busy' : rows.some(x => !x.ready) ? 'degraded' : 'normal';
@@ -54,7 +55,7 @@ function buildOperationsOverview({ management, readiness, queue, persistence, li
     mode: readiness?.mode || 'unknown', state, maintenance, total: rows.length, ready: rows.filter(x => x.ready).length,
     needsLogin: rows.filter(x => x.login === 'expired').length, capacity, active, queued, free,
     queueLimit: integer(queue?.queueLimit), rows, warnings, persistence, metrics,
-    diagnostics: { registered: management?.pool?.totalAccounts ?? rows.length, readinessCapacity: integer(readiness?.capacity),
+    diagnostics: { ...(readiness?.legacyCapacity!==undefined?{legacyCapacity:readiness.legacyCapacity}:{}),registered: management?.pool?.totalAccounts ?? rows.length, readinessCapacity: integer(readiness?.capacity),
       dispatchCeiling: integer(queue?.maxConcurrent), accountCapacity: rowCapacity,
       globalCeiling: integer(management?.pool?.elasticScheduling?.maxGlobal) },
     onlineUsers: null };

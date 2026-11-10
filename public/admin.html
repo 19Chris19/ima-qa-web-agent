@@ -16,6 +16,7 @@
         <a href="#overviewSection" data-view="overview" aria-current="page">◫ <span>实时概览</span></a>
         <a href="#accountsSection" data-view="accounts">▤ <span>账号池</span></a>
         <details class="advanced-navigation"><summary>高级工具</summary>
+        <a href="#modelPolicyPanel" data-view="model-policy">◈ <span>问答模型设置</span></a>
         <a href="#qualificationPanel" data-view="qualification" id="qualificationNav">✓ <span>资格验证</span></a>
         <a href="#exercisePanel" data-view="exercise" id="exerciseNav">↗ <span>演练与报告</span></a>
         <a href="#exerciseReportsPanel" data-view="exercise" id="reportsNav" hidden>演练报告</a>
@@ -190,6 +191,7 @@
           <div class="admin-exercise-report-list" id="exerciseReportList"></div>
           <div class="admin-exercise-report-detail" id="exerciseReportDetail"></div>
         </section>
+        <section id="modelPolicyPanel" data-pane="model-policy" class="admin-capacity-panel" aria-label="问答模型设置"></section>
         <section data-pane="diagnostics" id="diagnosticsSection" class="admin-capacity-panel"><p class="admin-eyebrow">DIAGNOSTICS</p><h2>状态依据与诊断</h2><button type="button" id="reconcileButton" hidden>核对保存结果</button><p id="reconcileFeedback" role="status"></p><div id="operationsDiagnostics"></div><p class="admin-muted">登录健康、知识库资格、当前策略资格和持久化结果分别判断。未知不等于失败；旧证明不代替当前可用性。</p><a href="/admin-legacy.html">旧版管理入口（保留兼容） ↗</a></section>
       </section>
 
@@ -261,5 +263,6 @@
     <script src="/admin-poller.js" defer></script>
     <script src="/operations/recent-status.js" defer></script>
     <script src="/admin.js" defer></script>
+    <script src="/model-policy-admin.js" defer></script>
   </body>
 </html>
