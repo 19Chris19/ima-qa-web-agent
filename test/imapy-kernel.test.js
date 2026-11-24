@@ -1,5 +1,25 @@
 const test = require('node:test');const assert = require('node:assert/strict');const fs = require('node:fs');const os=require('node:os');const path=require('node:path');
 const { ImapyKernel }=require('../src/imapy-kernel');const { ConversationStore }=require('../src/conversation-store');
+test('recorded IMA web client identity is applied only to the matching account', async t => {
+ const f=await fixture(t);
+ const file=path.join(f.dir,'client-context.json');
+ const identity={'IMA-Q36':'test-device','IMA-GUID':'guid-test-device','IMA-IUA':'Synthetic, Browser',PLATFORM:'web','CLIENT-TYPE':'web','WEB-VERSION':'synthetic-current'};
+ const deviceInfo={uskey:'synthetic-signature',uskey_bus_infos_input:'test-device_123'};
+ const entry={principalFingerprint:f.a.principalFingerprint,deviceInfo,clientIdentity:identity,userAgent:'Synthetic; Browser'};
+ const write=()=>fs.writeFileSync(file,JSON.stringify({version:1,accounts:[entry]}),{mode:0o600});
+ const original='IMA-TOKEN=synthetic-token; WEB-VERSION=old';
+ f.a.client.headers['x-ima-cookie']=original;
+ write();
+ const kernel=new ImapyKernel({pool:f.pool,enabled:true,deviceContextPath:file});
+ assert.match(kernel.protocolHeaders(f.a)['x-ima-cookie'],/IMA-TOKEN=synthetic-token.*WEB-VERSION=synthetic-current/);
+ assert.equal(kernel.protocolHeaders(f.a)['user-agent'],'Synthetic; Browser');
+ assert.equal(kernel.protocolHeaders({...f.a,principalFingerprint:'b'.repeat(64)})['x-ima-cookie'],original);
+ assert.equal(f.a.client.headers['x-ima-cookie'],original);
+ delete f.a.client.deviceInfo;
+ entry.deviceInfo={...deviceInfo,uskey_bus_infos_input:'other-device_123'};
+ write();
+ assert.equal(new ImapyKernel({pool:f.pool,deviceContextPath:file}).device(f.a),null);
+});
 async function fixture(t,opts={}){const {makeUpstream,wire,kb}=await import('../test-support/imapy-upstream.mjs');const u=makeUpstream(opts);
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'imapy-kernel-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
  const a={id:'synthetic-account',principalFingerprint:'a'.repeat(64),knowledgeBaseId:kb,client:{headers:{'x-ima-cookie':'SYNTHETIC_COOKIE','x-ima-bkn':'SYNTHETIC_BKN'},credentialGeneration:1,_fetch:u.fetch,deviceInfo:wire.qa.quick.request.device_info}};

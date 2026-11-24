@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { IMAWebProtocolClient } = require('../vendor/imapy-core');
+const { mergeImaClientIdentity, requireImaClientIdentity } = require('./air/ima-client-identity');
 const VERSION = 'imapy_chat_v1';
 const fault = (code, statusCode = 409) => Object.assign(new Error(code), { code, statusCode });
 function selection(value) {
@@ -27,6 +28,7 @@ class ImapyKernel {
     protocolFactory = opts => new IMAWebProtocolClient(opts) }) {
     this.pool = pool; this.enabled = enabled; this.policyPath = policyPath; this.now = now;
     this.deviceContexts = new Map();
+    this.clientContexts = new Map();
     if (deviceContextPath) {
       try { const stat = fs.lstatSync(deviceContextPath);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid() || (stat.mode & 0o777) !== 0o600 || stat.size > 256 * 1024) throw Error();
@@ -37,8 +39,18 @@ class ImapyKernel {
               typeof item.deviceInfo?.uskey !== 'string' || !item.deviceInfo.uskey.length || item.deviceInfo.uskey.length > 4096 ||
               typeof item.deviceInfo.uskey_bus_infos_input !== 'string' || !item.deviceInfo.uskey_bus_infos_input.length || item.deviceInfo.uskey_bus_infos_input.length > 256) throw Error();
           this.deviceContexts.set(item.principalFingerprint, {uskey:item.deviceInfo.uskey,uskey_bus_infos_input:item.deviceInfo.uskey_bus_infos_input});
+          if (item.clientIdentity !== undefined || item.userAgent !== undefined) {
+            const identity = requireImaClientIdentity(item.clientIdentity);
+            const q36 = identity['IMA-Q36'];
+            if (typeof item.userAgent !== 'string' || item.userAgent.length > 512 ||
+                identity['IMA-IUA'] !== item.userAgent.replace(/;/gu, ',') ||
+                identity['IMA-GUID'] !== `guid-${q36}` ||
+                !item.deviceInfo.uskey_bus_infos_input.startsWith(q36 + '_') ||
+                !/^\d+$/u.test(item.deviceInfo.uskey_bus_infos_input.slice(q36.length + 1))) throw Error();
+            this.clientContexts.set(item.principalFingerprint, { identity, userAgent: item.userAgent });
+          }
         }
-      } catch { this.deviceContexts.clear(); }
+      } catch { this.deviceContexts.clear(); this.clientContexts.clear(); }
     }
     this.deviceProvider = deviceProvider || (a => this.deviceContexts.get(a.principalFingerprint) || a.client.deviceInfo || null);
     this.protocolFactory = protocolFactory; this.catalogs = new Map(); this.inflight = new Map();
@@ -72,13 +84,22 @@ class ImapyKernel {
   baseEligible(a) { return !a.disabled && !a.maintenanceOperation && this.pool.persistenceReady?.() !== false &&
     !a.client.pendingCredentialPersistence && !a.client.credentialWritesSuspended && (!this.pool.webReadiness || this.pool.webReadiness(a)); }
   device(a) { const d = this.deviceProvider(a); return d && typeof d.uskey === 'string' && d.uskey.length && typeof d.uskey_bus_infos_input === 'string' && d.uskey_bus_infos_input.length ? d : null; }
+  protocolHeaders(account) {
+    const headers = { ...account.client.headers, extension_version: '' };
+    const context = this.clientContexts.get(account.principalFingerprint);
+    if (context) {
+      headers['x-ima-cookie'] = mergeImaClientIdentity(headers['x-ima-cookie'], context.identity);
+      headers['user-agent'] = context.userAgent;
+    }
+    return headers;
+  }
   async catalog(a, signal) {
     const key = this.key(a), cached = this.catalogs.get(a.id);
     if (cached?.key === key && cached.expiresAt > this.now()) return cached.catalog;
     // The bounded shared read owns its timeout; cancelling one browser does not cancel another caller.
     if (!this.inflight.has(key)) {
       const pending = (async () => {
-        const p = this.protocolFactory({ headers: { ...a.client.headers, extension_version: '' }, now: this.now,
+        const p = this.protocolFactory({ headers: this.protocolHeaders(a), now: this.now,
           fetchImpl: (u, o) => a.client._fetch(u, o) });
         const catalog = await p.getModels({ signal: AbortSignal.timeout(10000) });
         if (this.key(a) !== key || !this.pool.accounts.includes(a)) throw fault('model_catalog_stale');
@@ -150,7 +171,7 @@ class ImapyKernel {
     const principal=protocolPrincipal(a.principalFingerprint);if(!principal)throw fault('model_principal_unproved');
     const modelCatalog = this.catalogs.get(a.id).catalog;
     // getModels is fed through a cache-only adapter below; no additional model HTTP request per turn.
-    const headers = { ...a.client.headers, extension_version: '' };
+    const headers = this.protocolHeaders(a);
     const fetchImpl = async (url, request) => {
       if (this.key(a) !== key || !this.baseEligible(a)) throw fault('credential_generation_stale');
       if (new URL(url).pathname === '/cgi-bin/model_manage/get_models') {
