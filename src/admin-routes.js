@@ -1,3 +1,6 @@
+const { createStatusReader } = require('./operations/status-proxy');
+const { buildOperationsOverview } = require('./operations-overview');
+const { operationsReadiness } = require('./operations/runtime-view');
 const { normalizeAccountId, resolveAccountWriteTarget } = require('./web-agent-account-directory');
 const { accountManagementView } = require('./account-management-view');
 const {
@@ -16,6 +19,12 @@ function registerAdminRoutes(app, options = {}) {
   }
 
   const auth = createAdminAuthMiddleware(options.config?.security?.adminToken);
+  const readOperationsStatus = options.operationsStatusReader || createStatusReader({expectedSynthetic:options.synthetic===true});
+  app.get('/api/admin/operations/status', auth, async (_req, res) => {
+    res.set?.('Cache-Control', 'no-store, private');
+    try { res.json({ success: true, status: await readOperationsStatus() }); }
+    catch(error) { const mismatch=error.message==='operations_status_source_mismatch';res.status(503).json({ success: false, code: mismatch?'operations_status_source_mismatch':'operations_status_unavailable', error: mismatch?'监控来源不匹配，已拒绝合成或未知状态':'独立监控暂不可用' }); }
+  });
   const sharedKnowledgeBaseId = String(options.config?.webAgent?.sharedKnowledgeBaseId || '').trim();
   const syncPool = () => {
     if (webReadiness) webReadiness.sync();
@@ -62,6 +71,33 @@ function registerAdminRoutes(app, options = {}) {
     catch (error) { sendAdminError(res, error); }
   });
 
+  app.get('/api/admin/overview', auth, (_req, res) => {
+    const pool = options.imaWebAgentClient;
+    const readiness = operationsReadiness(webReadiness?.snapshot() || null,pool,app.locals.imapyKernel);
+    const maintenance = Boolean(accountPoolExerciseManager?.isMaintenanceActive?.()
+      || app.locals.knowledgeAgentQualificationManager?.isMaintenanceActive?.());
+    const limits = (pool?.accounts || []).map(account => ({ id: account.id,
+      ...pool.elastic?.snapshot(account, { mode: readiness?.mode }) }));
+    const management = buildManagementSnapshot({ accountDirectory, pool, readiness, includeEvents: false });
+    const eligibility = options.airPolicyCapacity?.eligibilitySnapshot?.() || null;
+    const directoryReady = accountDirectory.persistenceReady;
+    const poolReady = pool?.persistenceReady?.();
+    const persistenceReady = directoryReady === false || poolReady === false ? false
+      : directoryReady === true || poolReady === true ? true : null;
+    const overview = buildOperationsOverview({ management, readiness, queue: options.askQueue?.stats?.(), limits, maintenance,
+      persistence: { ready: persistenceReady,
+        statisticsReady: accountDirectory.statisticsReady !== false,
+        pendingWrites: accountDirectory.queue?.length ?? 0,
+        canReconcile: Boolean(accountDirectory.uncertain && accountDirectory.reconcile) }, metrics: app.locals.operationsMetrics?.snapshot() || null });
+    const verificationAvailable = Boolean(webReadiness || app.locals.knowledgeAgentQualificationManager);
+    if (!verificationAvailable) for (const row of overview.rows) {
+      row.actions = row.actions.filter(action => action !== 'verify');
+      if (row.recommendedAction === 'verify') row.recommendedAction = 'inspect';
+    }
+    res.set?.('Cache-Control', 'no-store, private');
+    res.json({ success: true, overview: { ...overview, accounts: management.accounts, eligibility } });
+  });
+
   app.get('/api/admin/accounts', auth, (req, res) => {
     res.json({
       success: true,
@@ -99,7 +135,9 @@ function registerAdminRoutes(app, options = {}) {
   app.get('/api/admin/bootstrap', auth, (_req, res) => {
     res.json({
       success: true,
-      provider: options.config?.qaProvider || 'ima-web-agent',
+      provider: options.synthetic===true?'synthetic-preview':options.config?.qaProvider || 'ima-web-agent',
+      ...(options.synthetic===true?{preview:{scenarios:false},...(options.operationsStatusPageUrl?{operations:{statusPageUrl:options.operationsStatusPageUrl}}:{})}:{}),
+      webVerification: { available: Boolean(webReadiness), authorizedRequestCount: 1 },
       sharedKnowledgeBaseId: sharedKnowledgeBaseId || null,
       enrollment: {
         authorizationProtocol: 'shared_library_membership_v1',
@@ -220,6 +258,12 @@ function registerAdminRoutes(app, options = {}) {
           name: req.body?.name,
           id: req.body?.id,
           reauthAccountId: req.body?.reauthAccountId,
+          matchExistingAccount: req.body?.matchExistingAccount === true,
+          autoMatchExistingAccount: !req.body?.reauthAccountId && !req.body?.replace
+            && req.body?.matchExistingAccount !== true && req.body?.autoMatchExistingAccount !== false,
+          reactivateMatchedAccount: req.body?.reactivateMatchedAccount === true,
+          confirmQualification: req.body?.confirmQualification === true,
+          authorizedRequestCount: req.body?.authorizedRequestCount,
           replace: Boolean(req.body?.replace),
           testQuestion: req.body?.testQuestion,
         });
@@ -348,6 +392,14 @@ function registerAdminRoutes(app, options = {}) {
 
   app.post('/api/admin/accounts/:accountId/enable', auth, async (req, res) => {
     try {
+      // New UI hints are advisory; re-evaluate live conditions before the existing transaction.
+      if (webReadiness?.snapshot) {
+        const state=webReadiness.snapshot(),management=buildManagementSnapshot({accountDirectory,pool:options.imaWebAgentClient,readiness:state,includeEvents:false});
+        const account=management.accounts.find(a=>a.id===req.params.accountId),r=state?.accounts?.find(a=>a.id===req.params.accountId);
+        if (!account || accountDirectory.persistenceReady!==true || account.activeRequests!==0 || account.maintenanceOperation || account.identityDuplicate || account.health?.session_valid!==true || r?.qualified!==true || account.runtime?.disabledReason==='pending_enrollment_qualification') {
+          return res.status(409).json({success:false,error:'账号当前不满足启用条件，请先核对登录、资格与保存状态',code:'account_enable_not_ready'});
+        }
+      }
       await accountDirectory.setDisabled(req.params.accountId, false);
       options.imaWebAgentClient?.setAccountDisabled?.(req.params.accountId, false);
       syncPool();
@@ -431,6 +483,7 @@ function buildManagementSnapshot({ accountDirectory, pool, readiness, includeEve
     const poolAccount = poolAccounts.get(account.id) || null;
     return {
       ...account,
+      activeRequests: poolAccount?.activeRequests ?? account.activeRequests ?? null,
       schedulerStatus: poolAccount?.status || 'unavailable',
       poolSynchronized: Boolean(poolAccount),
       availabilityStatus: account.health?.status || 'needs_check',

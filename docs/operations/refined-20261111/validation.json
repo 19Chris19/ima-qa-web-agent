@@ -1,0 +1,150 @@
+{
+  "schema": "provider_admin_refined_validation_v1",
+  "baseCommit": "feced0644c85067e8ae7bda3ce6d66d88301ce48",
+  "branch": "codex/provider-admin-refined-20261110",
+  "node": "22.23.3",
+  "fullRegression": {
+    "tests": 1052,
+    "pass": 1047,
+    "fail": 0,
+    "skipped": 5
+  },
+  "affectedAndLegacyCompatibility": {
+    "tests": 41,
+    "pass": 41,
+    "fail": 0,
+    "skipped": 0
+  },
+  "fullLogSha256": "afc49213a943a5574247da9a314d7e861513db5327b222b54719ce519f8ba1ea",
+  "logRetainedPrivately": true,
+  "realImaCalls": 0,
+  "productionChanges": false,
+  "githubPush": false,
+  "payloadBytesObserved": {
+    "adminRecent": 38611,
+    "independentFull": 42849,
+    "independentRecent": 38582
+  },
+  "syntheticPerformance": {
+    "before": {
+      "rounds": 30,
+      "retained": [],
+      "conversationRetention": "default",
+      "eventsPerRound": 24,
+      "concurrentOverviewPerRound": 1,
+      "historyMinuteWrites": 4,
+      "recentPoints": 0,
+      "statusPayloadPeakBytes": 0,
+      "firstDeltaP95Ms": 9.330917,
+      "eventGapP95Ms": 6.756125000000111,
+      "overviewP95Ms": 3.9313339999999926,
+      "cpuMs": 479.034,
+      "elapsedMs": 3959.940917,
+      "eventLoopP95Ms": 1.791999,
+      "rssPeakMiB": 100.25,
+      "rssFirstMiB": 87.90625,
+      "rssLastMiB": 100.25,
+      "historyBytes": 1194,
+      "productionRequests": 0
+    },
+    "after": {
+      "rounds": 30,
+      "retained": [],
+      "conversationRetention": "default",
+      "eventsPerRound": 24,
+      "concurrentOverviewPerRound": 1,
+      "historyMinuteWrites": 4,
+      "recentPoints": 30,
+      "statusPayloadPeakBytes": 38670,
+      "firstDeltaP95Ms": 25.992875000000367,
+      "eventGapP95Ms": 7.258499999999913,
+      "overviewP95Ms": 10.251749999999902,
+      "cpuMs": 521.346,
+      "elapsedMs": 4170.2289169999995,
+      "eventLoopP95Ms": 2.385919,
+      "rssPeakMiB": 99.921875,
+      "rssFirstMiB": 88.375,
+      "rssLastMiB": 99.921875,
+      "historyBytes": 1194,
+      "productionRequests": 0
+    },
+    "stability": {
+      "rounds": 300,
+      "retained": [
+        {
+          "round": 30,
+          "heapUsedMiB": 13.517288208007812,
+          "rssMiB": 101.734375
+        },
+        {
+          "round": 60,
+          "heapUsedMiB": 13.781196594238281,
+          "rssMiB": 102.859375
+        },
+        {
+          "round": 90,
+          "heapUsedMiB": 13.955322265625,
+          "rssMiB": 111.796875
+        },
+        {
+          "round": 120,
+          "heapUsedMiB": 14.163909912109375,
+          "rssMiB": 118.703125
+        },
+        {
+          "round": 150,
+          "heapUsedMiB": 14.172332763671875,
+          "rssMiB": 119.21875
+        },
+        {
+          "round": 180,
+          "heapUsedMiB": 14.265960693359375,
+          "rssMiB": 119.40625
+        },
+        {
+          "round": 210,
+          "heapUsedMiB": 14.305992126464844,
+          "rssMiB": 119.59375
+        },
+        {
+          "round": 240,
+          "heapUsedMiB": 14.343597412109375,
+          "rssMiB": 119.859375
+        },
+        {
+          "round": 270,
+          "heapUsedMiB": 14.376792907714844,
+          "rssMiB": 119.90625
+        },
+        {
+          "round": 300,
+          "heapUsedMiB": 14.474777221679688,
+          "rssMiB": 120.515625
+        }
+      ],
+      "conversationRetention": "bounded_1_conversation_6_turns",
+      "eventsPerRound": 24,
+      "concurrentOverviewPerRound": 1,
+      "historyMinuteWrites": 26,
+      "recentPoints": 120,
+      "statusPayloadPeakBytes": 38729,
+      "firstDeltaP95Ms": 7.854041999999026,
+      "eventGapP95Ms": 6.012917000000016,
+      "overviewP95Ms": 2.5010000000002037,
+      "cpuMs": 4256.415,
+      "elapsedMs": 39111.239583,
+      "eventLoopP95Ms": 1.694719,
+      "rssPeakMiB": 120.515625,
+      "rssFirstMiB": 89.625,
+      "rssLastMiB": 120.421875,
+      "historyBytes": 7789,
+      "productionRequests": 0
+    }
+  },
+  "pending": [
+    "iOS Safari and Android Chrome physical devices",
+    "screen reader acceptance",
+    "real maintenance and deployment authorization",
+    "long-running stability and actual production resource profile"
+  ]
+}

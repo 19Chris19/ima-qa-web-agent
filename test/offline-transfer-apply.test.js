@@ -180,6 +180,29 @@ async function listen(host = '::', port = 0) {
   });
   return server;
 }
+// Reserve both address families. On macOS an IPv6 wildcard listener may
+// coexist with another application's IPv4 listener on the same port, so an
+// IPv6-only "free port" check cannot establish the production stop precondition.
+// Avoid the client ephemeral range as well. No production stop logic is changed.
+let fixturePort = 20000;
+async function listenFixturePort() {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const port = fixturePort++;
+    let ipv4, ipv6;
+    try {
+      ipv4 = await listen('127.0.0.1', port);
+      ipv6 = await listen('::1', port);
+      return { address: () => ipv4.address(), close: callback => {
+        ipv4.close(error => ipv6.close(other => callback(error || other)));
+      } };
+    } catch (error) {
+      if (ipv4) await new Promise(resolve => ipv4.close(resolve));
+      if (ipv6) await new Promise(resolve => ipv6.close(resolve));
+      if (error.code !== 'EADDRINUSE') throw error;
+    }
+  }
+  throw new Error('No isolated synthetic transfer test port available');
+}
 const close = server => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 
 async function fixture(t) {
@@ -197,7 +220,7 @@ async function fixture(t) {
   const add = (pool, id, uid = id) => pool.directory.upsertCapturedAccount({ id, name: id,
     knowledgeBaseId: '999000111', headers: { 'x-ima-cookie': `IMA-UID=synthetic-${uid}; IMA-TOKEN=synthetic-token; IMA-REFRESH-TOKEN=synthetic-refresh` } });
   add(source, 'imported'); add(target, 'original');
-  const first = await listen(), second = await listen();
+  const first = await listenFixturePort(), second = await listenFixturePort();
   const input = { bundle: path.join(root, 'bundle'), sourceStore: source.storePath, sourceKey: source.keyPath,
     targetStore: target.storePath, targetKey: target.keyPath,
     sourcePort: first.address().port, targetPort: second.address().port };

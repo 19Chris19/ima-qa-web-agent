@@ -1,0 +1,7 @@
+import {sandbox} from '../test-support/imapy-sandbox.mjs';import {spawn} from 'node:child_process';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {createHash} from 'node:crypto';
+const args=process.argv.slice(2);const website=args.includes('--website')?args[args.indexOf('--website')+1]:null;
+const f=await sandbox({port:4590,slow:true});const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'website-imapy-synthetic-'));let child;
+if(website){if(!path.isAbsolute(website))throw Error('absolute_website_path_required');child=spawn(process.execPath,['server.mjs'],{cwd:website,stdio:['ignore','ignore','inherit'],env:{PATH:process.env.PATH,PORT:'4591',DEMO_RUNTIME_DIR:runtime,DEMO_COOKIE_NAME:'qa_imapy_synthetic',DEMO_COOKIE_SECRET:'synthetic-cookie-secret',DEMO_DISABLE_ADMIN:'1',PROVIDER_A_BASE_URL:f.url,PROVIDER_A_API_TOKEN:'synthetic-api',PROVIDER_A_INTERNAL_SERVICE_TOKEN:'synthetic-service',PROVIDER_A_KNOWLEDGE_SCOPE_REF:createHash('sha256').update(f.kb).digest('hex')}});}
+console.log(JSON.stringify({syntheticOnly:true,provider:f.url,embed:f.url+'/embed.html',website:website?'http://127.0.0.1:4591/':null}));
+let closing=false;async function close(){if(closing)return;closing=true;if(child){child.kill('SIGTERM');await new Promise(r=>child.once('exit',r));}await f.close();fs.rmSync(runtime,{recursive:true,force:true});}
+process.on('SIGTERM',close);process.on('SIGINT',close);

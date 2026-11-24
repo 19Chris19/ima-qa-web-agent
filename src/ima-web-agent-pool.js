@@ -269,7 +269,7 @@ class IMAWebAgentPool {
       if (!this._requestEligible(account, options)) {
         throw new NoAvailableWebAgentAccountError('账号状态已变化，请稍后重试');
       }
-      const stream = account.client.streamAsk(clientOptions);
+      const stream = options.modelSelection ? this.imapyKernel.stream(account, clientOptions) : account.client.streamAsk(clientOptions);
       let reportedSession = false;
       for await (const event of stream) {
         if (!reportedSession && sessionId) {
@@ -286,7 +286,10 @@ class IMAWebAgentPool {
       await this._markSuccess(account, options.accountLease && this.taskLeases.get(options.accountLease)?.elasticTicket);
     } catch (error) {
       if (!options.signal?.aborted && !(error instanceof NoAvailableWebAgentAccountError)) {
-        await this._markFailure(account, error);
+        if (!options.modelSelection) await this._markFailure(account, error);
+        else if (['ima_web_auth_denied', 'upstream_auth', 'auth_expired'].includes(error.code)) {
+          await this._markFailure(account, Object.assign(new Error('upstream_auth'), { code: 'auth_expired' }));
+        }
       }
       throw error;
     } finally {
@@ -301,7 +304,7 @@ class IMAWebAgentPool {
   }
 
   _requestEligible(account, options) {
-    return this.persistenceReady() && !account.client.pendingCredentialPersistence && !account.client.credentialWritesSuspended
+    return (!options.modelSelection || this.imapyKernel?.supports(account, options.modelSelection, options.sourceIntent === 'web_requested', true)) && this.persistenceReady() && !account.client.pendingCredentialPersistence && !account.client.credentialWritesSuspended
       && !(options.mode === 'knowledge_agent' && this.webReadiness && !this.webReadiness(account))
       && !(options.retrievalPolicy && this.policyEligibility && !this.policyEligibility(account, options));
   }

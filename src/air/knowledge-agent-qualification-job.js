@@ -30,6 +30,8 @@ const SAFE_WARNINGS = new Set(['pool_sync_failed', 'capacity_sync_failed', 'repo
 const SAFE_FAILURE_CATEGORIES = new Set([
   'knowledge_agent_qualification_batch_invalid',
   'network_failure',
+  'local_persistence_failed',
+  'local_generation_conflict',
   'process_interrupted',
   'protocol_failure',
   'qualification_binding_changed',
@@ -543,6 +545,7 @@ class KnowledgeAgentQualificationManager {
           principalFingerprint: account.principalFingerprint,
         },
       }));
+      run.failureStage = 'qualification_commit';
       if (run.accountBinding) {
         await this.accountDirectory.applyKnowledgeAgentQualification(
           entries[0].accountId, entries[0].proof, run.accountBinding,
@@ -551,6 +554,7 @@ class KnowledgeAgentQualificationManager {
         await this.accountDirectory.recordKnowledgeAgentQualifications(entries);
       }
       // The directory write is the commit point; downstream failures cannot undo it.
+      run.failureStage = '';
       run.commitApplied = true;
       run.status = 'succeeded';
       run.phase = 'completed';
@@ -573,6 +577,7 @@ class KnowledgeAgentQualificationManager {
         run.status = run.controller.signal.aborted ? 'cancelled' : 'failed';
         run.failureCategory = run.controller.signal.aborted
           ? 'qualification_cancelled' : run.failureCategory || fixedFailure(error);
+        run.failureStage ||= 'upstream';
       }
     } finally {
       this._finalizeRun(run);
@@ -902,6 +907,7 @@ function publicReportSummary(report) {
 
 function publicOutcome(run) {
   return {
+    ...(run?.failureStage && ['upstream', 'qualification_commit', 'pool_sync', 'report_save'].includes(run.failureStage) ? { failureStage: run.failureStage } : {}),
     ...(typeof run?.commitApplied === 'boolean' ? { commitApplied: run.commitApplied } : {}),
     ...(typeof run?.reportPersisted === 'boolean' ? { reportPersisted: run.reportPersisted } : {}),
     warnings: Array.isArray(run?.warnings)
@@ -910,6 +916,8 @@ function publicOutcome(run) {
 }
 
 function fixedFailure(error) {
+  if (/account_store_.*(?:conflict|locked)|generation_conflict/.test(String(error?.code||''))) return 'local_generation_conflict';
+  if (/account_store_|persistence_|EIO|ENOSPC|EROFS/.test(String(error?.code||''))) return 'local_persistence_failed';
   const value = String(error?.code || error?.reason || error?.message || '');
   if (/auth|401|403|login/u.test(value)) return 'upstream_auth';
   if (/429|quota|limit/u.test(value)) return 'upstream_quota';

@@ -1,0 +1,49 @@
+{
+  "stage": "local_candidate",
+  "realImaRequests": 0,
+  "productionChanges": 0,
+  "provider": {
+    "tests": 1003,
+    "pass": 1001,
+    "fail": 0,
+    "skipped": 2
+  },
+  "website": {
+    "tests": 405,
+    "pass": 404,
+    "fail": 0,
+    "skipped": 1
+  },
+  "imapyDependency": "6b700a924da3911ff869252e7031d7b156cee7a0",
+  "browser": {
+    "providerDefaultSyntheticAnswer": true,
+    "providerEmbedSyntheticAnswer": true,
+    "websiteDeepAnswerAndRefresh": true,
+    "websiteTouchModelSwitchAndFollowup": true,
+    "mobileViewport": [
+      390,
+      844
+    ],
+    "minTouchTargetPx": 44,
+    "escapeAndFocusReturn": true,
+    "reducedMotion": true,
+    "physicalPhoneAcceptance": false
+  },
+  "performance": {
+    "roundsPerGroup": 30,
+    "firstDeltaP95ChangeMs": 12,
+    "eventIntervalP95ChangeMs": 2.3512920000001714,
+    "eventLoopP95Ms": 170.131455,
+    "isolatedKernelRssMeasurement": false
+  },
+  "skips": [
+    "Provider: two opt-in 365-second wall-clock tests",
+    "Website: released-tag installer shell test"
+  ],
+  "pending": [
+    "Real catalog and account-bound device context",
+    "Real quick/deep/model-switch/web/restart acceptance",
+    "iOS Safari and Android Chrome physical devices",
+    "Production deployment and second-stage login/refresh unification"
+  ]
+}

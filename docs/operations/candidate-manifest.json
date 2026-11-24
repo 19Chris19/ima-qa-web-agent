@@ -1,0 +1,253 @@
+{
+  "schema": 1,
+  "baseCommit": "db31c8c554919da5928deb64e0f56ada421a89e8",
+  "branch": "codex/provider-admin-status-20261110",
+  "deploymentApplied": false,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 10276,
+      "sha256": "d21e027996f71530e88c7e5ad170d72c0c468782e458ce0d4a080da8969d2420"
+    },
+    {
+      "path": "docs/operations/README.md",
+      "bytes": 8133,
+      "sha256": "200f06c740223832ed88091e1fd1822fd4a166b22dbc72ccd97318f2a13b0adc"
+    },
+    {
+      "path": "docs/operations/VALIDATION.md",
+      "bytes": 2302,
+      "sha256": "46c92badb0795bb80f4070acf14dff96f0d897209723321d5107825921749e9e"
+    },
+    {
+      "path": "docs/operations/health-monitor.patch",
+      "bytes": 1413,
+      "sha256": "5fb90bbb44b59b0fa6043e6625934e0a102283d8174a7b47317387b394a63285"
+    },
+    {
+      "path": "docs/operations/validation.json",
+      "bytes": 6318,
+      "sha256": "a4d59fa70ecf6acc3308469655980f9b7e10e884032773a088a63ed998639433"
+    },
+    {
+      "path": "provider-a-server.js",
+      "bytes": 8416,
+      "sha256": "31825a5e68d89ef9a2e1052c7488d1dd563ac7c0c22aa14b2b484b10c4aa9793"
+    },
+    {
+      "path": "public/admin-legacy.css",
+      "bytes": 22214,
+      "sha256": "c334774771d4aa550061ed1dd10720f5a3a896e73aedbb93a139913108be651f"
+    },
+    {
+      "path": "public/admin-legacy.html",
+      "bytes": 11715,
+      "sha256": "88e087aeca515265df75ac42295192ed7e8b30b26f6e51cabecc19ab9ae94dc3"
+    },
+    {
+      "path": "public/admin-legacy.js",
+      "bytes": 78105,
+      "sha256": "11e84115ef8b082623de166c362506f4cc91a94a4d15a1088f89eb187032f4ab"
+    },
+    {
+      "path": "public/admin-poller.js",
+      "bytes": 1456,
+      "sha256": "e3cb9282dc5ee372b5883b4aefbfb5418704b18e6a4f018c75f8d3ab3014d9a7"
+    },
+    {
+      "path": "public/admin.css",
+      "bytes": 35350,
+      "sha256": "95ce3cd2ef6b44d30201ecb09c8366393c156fbdbee2c16bfdf9297f06491c36"
+    },
+    {
+      "path": "public/admin.html",
+      "bytes": 16931,
+      "sha256": "25126e07cb5c77601f4ce73a867c6e19bcfa2ca9c2fe6d539f0e646817e39def"
+    },
+    {
+      "path": "public/admin.js",
+      "bytes": 119840,
+      "sha256": "2ec791775cec1b6d01a4505df8761e5eef5ece3cb0f85c79155a4ade7d04605f"
+    },
+    {
+      "path": "public/operations/status.css",
+      "bytes": 4272,
+      "sha256": "9630e18f4fc38d6b8a8c0b39a82f153d9796808a9ff880febb950812aff931af"
+    },
+    {
+      "path": "public/operations/status.html",
+      "bytes": 2051,
+      "sha256": "bf49e47a0a22ac509248d52127ce44035306e1b255029b68cf47627230fafcb7"
+    },
+    {
+      "path": "public/operations/status.js",
+      "bytes": 7022,
+      "sha256": "7a8816d607c663771f4edead16dee4fa5cee0dcc73665017c1351b4da1646bdd"
+    },
+    {
+      "path": "scripts/operations/benchmark.js",
+      "bytes": 5300,
+      "sha256": "779b739e2695c99b2d504617781276829afd3c6ac141b476f9347328b5b8107e"
+    },
+    {
+      "path": "scripts/operations/preview.js",
+      "bytes": 9349,
+      "sha256": "4201318f7d42e55247b41454789cf6f960872e860f96f2920e747c4757b180af"
+    },
+    {
+      "path": "scripts/operations/status-server.js",
+      "bytes": 4894,
+      "sha256": "45d0ac8ac58463a5cdab0908f165a7e1c2dee526cab4800089469b98c3bae6ef"
+    },
+    {
+      "path": "src/account-persistence-diagnostic.js",
+      "bytes": 2439,
+      "sha256": "52a1505dde6e50f234693bb07a91c933628f23ef373544ea4d68d1d62ba9d341"
+    },
+    {
+      "path": "src/account-persistence-worker.js",
+      "bytes": 12542,
+      "sha256": "15362efd3fd5cd59a1822d319c749f7dff0de98629778394a9a47eb53eefc739"
+    },
+    {
+      "path": "src/admin-routes.js",
+      "bytes": 25834,
+      "sha256": "dca43c7ccc55f9bdf54518b621ae936d55336a502833680412d60c039a7449d5"
+    },
+    {
+      "path": "src/air/knowledge-agent-qualification-job.js",
+      "bytes": 37812,
+      "sha256": "da1ee00ddd146182e52a53978c1e21993442d1756bc3fbcf609f4e78f571820d"
+    },
+    {
+      "path": "src/app.js",
+      "bytes": 73160,
+      "sha256": "6c09bdda68c45406ba175f68cac04e761706a25208f6bbc9dbfced9e861a9f49"
+    },
+    {
+      "path": "src/async-account-directory.js",
+      "bytes": 12191,
+      "sha256": "1f2282366728acaa2815bc45ca99321a228fae4f25b914438dae542322021e7b"
+    },
+    {
+      "path": "src/operations-metrics.js",
+      "bytes": 1686,
+      "sha256": "5568366664cd7b8b6babaa1179af845a64ad97fad9657167dd8b6ebd07908f5a"
+    },
+    {
+      "path": "src/operations-overview.js",
+      "bytes": 5748,
+      "sha256": "1050621acbb60ecbc52f4f993a0456e110ca345d38286e5c73112d393382e6d5"
+    },
+    {
+      "path": "src/operations/history.js",
+      "bytes": 5739,
+      "sha256": "43d8a272f82ed2d91a982f4ace4e1cf6d9cde93b604844b74a0207f51e87d7cf"
+    },
+    {
+      "path": "src/operations/status.js",
+      "bytes": 1597,
+      "sha256": "46f8399edeaf411ba50f9053c698ea3cac30dd42d4d121c75731dac069ea377a"
+    },
+    {
+      "path": "src/web-agent-account-directory.js",
+      "bytes": 40921,
+      "sha256": "566b85ee5426b350e7d0528664cc89cb1f2c341ff7aae6e9898773427d0ab769"
+    },
+    {
+      "path": "src/web-agent-enrollment.js",
+      "bytes": 73931,
+      "sha256": "278ec1d5e4587ff4398066a3b3c00982e4c7413158df57f883a38a98e0dca26b"
+    },
+    {
+      "path": "test-support/operations-fixture.js",
+      "bytes": 1870,
+      "sha256": "dc42e0786156b8fa98e031b68aa15589aa9f605e25b6184f41a7ed99e3b2054a"
+    },
+    {
+      "path": "test/account-persistence-diagnostic.test.js",
+      "bytes": 1866,
+      "sha256": "c8e4965592db73b8d9171c92e06ab36f90b04b81cd01176cbce7c28da52693cc"
+    },
+    {
+      "path": "test/admin-backend-contract.test.js",
+      "bytes": 5807,
+      "sha256": "eedfe8cd1a630dad1c9741b353cb26245ea8c21698a300a2f1e48838b51c5633"
+    },
+    {
+      "path": "test/admin-experience.test.js",
+      "bytes": 18717,
+      "sha256": "67666008b6ad2c7474b910227cfa79c5fffebd69af3b16d5981d2c8994a64eb3"
+    },
+    {
+      "path": "test/admin-ui.test.js",
+      "bytes": 808,
+      "sha256": "98975df94b8140007bac22ef9a19afd3e7ab338f721a5ec1d98981482693c2b0"
+    },
+    {
+      "path": "test/air-knowledge-agent-qualification-job.test.js",
+      "bytes": 12023,
+      "sha256": "3e5edb7874fa1666c037cccc7452929c5299a15c3d72f809f84643c3c5e054ff"
+    },
+    {
+      "path": "test/app.test.js",
+      "bytes": 96761,
+      "sha256": "21b48fcfddf66adad15dafe3f634e0a6f19810a1afcb079a6b26b2e2737117f5"
+    },
+    {
+      "path": "test/async-account-directory.test.js",
+      "bytes": 24837,
+      "sha256": "21ef1db00c6a2c70be1b1730fbd796a57041d25595a42da673b4b37fb231f88b"
+    },
+    {
+      "path": "test/enrollment-management.test.js",
+      "bytes": 4115,
+      "sha256": "2a1bafd3ae51e2056d00fa40391b96f78662798b135be51a6e8fcc48e27ee391"
+    },
+    {
+      "path": "test/enrollment-name-ui.test.js",
+      "bytes": 2454,
+      "sha256": "988c7b5829c5ad35547ec552c306a1aad36bff6a3e735a834bb707ef7064ed43"
+    },
+    {
+      "path": "test/offline-transfer-apply.test.js",
+      "bytes": 23377,
+      "sha256": "635b4303eb526851bb670a3955a8350dc8a946b677895fc7793e29ac0ff9a0e0"
+    },
+    {
+      "path": "test/operations/admin-ui.test.js",
+      "bytes": 5672,
+      "sha256": "98710439a6d39b334e81f45244f77a1b254c98319be4ce3963123ceb63c1c391"
+    },
+    {
+      "path": "test/operations/history.test.js",
+      "bytes": 4153,
+      "sha256": "9cffaa53f011f843abb643610c9996eef6f4a16b76c84aa57c729b1fec2a724d"
+    },
+    {
+      "path": "test/operations/overview.test.js",
+      "bytes": 4493,
+      "sha256": "890161e1e5e779d39ad2b75f6cb8e29913564cc8c60e7c3c6f7281182eeb8888"
+    },
+    {
+      "path": "test/operations/poller.test.js",
+      "bytes": 1142,
+      "sha256": "6a771b81e3a3f69a08d73a4f2cbc58501fe31ae95e65c9a661f12e5c60178e06"
+    },
+    {
+      "path": "test/operations/routes.test.js",
+      "bytes": 1644,
+      "sha256": "42f72694d649dccaec58c2b23d8467442a3de7b787bea3570aba70b5baca0816"
+    },
+    {
+      "path": "test/production-admin-compat.test.js",
+      "bytes": 2832,
+      "sha256": "5174eb1a08f9bfd036710643aca2504bc005822130d1aa704df4dfbc6d4698d7"
+    },
+    {
+      "path": "test/web-agent-enrollment.test.js",
+      "bytes": 53230,
+      "sha256": "722e7f377e73aea18a7c3c6804ac0af0f95c2f632847ed535644c597dd3053ff"
+    }
+  ]
+}

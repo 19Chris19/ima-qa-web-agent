@@ -85,8 +85,14 @@ function processStep(value) {
   return { stepId: `chat:${value.phase}`, phase: value.phase, status: value.status, label: PHASES[value.phase] };
 }
 
+function selectionMetadata(v) {
+  return v && /^[a-f0-9]{64}$/.test(v.modelRef || '') && ['quick','deep'].includes(v.mode) && typeof v.name === 'string'
+    ? { modelRef: v.modelRef, mode: v.mode, name: v.name.slice(0, 256), kernelVersion: 'imapy_chat_v1', reported: null } : undefined;
+}
 function metadata(value = {}) {
-  return { ...(Object.hasOwn(value, 'citationMap') ? { citationMap: citationMap(value.citationMap) } : {}),
+  return { ...(selectionMetadata(value.modelSelection) ? { modelSelection: selectionMetadata(value.modelSelection) } : {}),
+    ...(['verified','not_observed','unverified'].includes(value.webEvidenceStatus) ? { webEvidenceStatus: value.webEvidenceStatus, webEvidence: value.webEvidence === true } : {}),
+    ...(Object.hasOwn(value, 'citationMap') ? { citationMap: citationMap(value.citationMap) } : {}),
     ...(Object.hasOwn(value, 'suggestions') ? { suggestions: suggestions(value.suggestions) } : {}),
     ...(Object.hasOwn(value, 'process') ? { process: (Array.isArray(value.process) ? value.process : [])
       .map(processStep).filter(Boolean).slice(-40) } : {}) };
@@ -109,6 +115,7 @@ function withDisplayNumbers(map, answer) {
 }
 
 function projectData(name, data = {}) {
+  if (name === 'selection') return { modelSelection: selectionMetadata(data.modelSelection) };
   if (name === 'sources') return { citationMap: presentationCitations(data.citationMap),
     sourceCount: Number.isSafeInteger(data.sources?.length) ? data.sources.length : Number(data.sourceCount) || 0 };
   if (name === 'process') return processStep(data) || {};

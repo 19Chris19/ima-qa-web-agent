@@ -4,8 +4,9 @@ const path = require('node:path');
 const test = require('node:test');
 const { JSDOM } = require('jsdom');
 
-const html = fs.readFileSync(path.join(__dirname, '../public/admin.html'), 'utf8');
-const script = fs.readFileSync(path.join(__dirname, '../public/admin.js'), 'utf8');
+// Retain regression coverage for the explicitly preserved legacy entry.
+const html = fs.readFileSync(path.join(__dirname, '../public/admin-legacy.html'), 'utf8');
+const script = fs.readFileSync(path.join(__dirname, '../public/admin-legacy.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const sample = (id, state = 'ready') => ({
   id, name: `Synthetic ${id}`, status: 'active', health: { last_check_code: 'web_context_missing', knowledge_ready: false },
@@ -141,6 +142,41 @@ test('identity conflict offers add-as-new only and resumes enrollment through sp
   const mutations = calls.filter(call => call.method === 'POST');
   assert.equal(mutations.length, 1);
   assert.equal(mutations[0].url, '/api/admin/enrollments/synthetic-enrollment/identity');
+});
+
+test('restore an existing account asks for no account name and submits only after confirmation', async t => {
+  const { document, window, calls } = await setup(t, undefined,
+    { enrollment: { supportsAdminPageQr: true } }, (url) => {
+      if (url === '/api/admin/enrollment-preflight') return { enrollment: { ready: true } };
+      if (url === '/api/admin/enrollments') return { enrollment: { taskId: 'synthetic', state: 'failed' } };
+      if (url === '/api/admin/enrollments/synthetic') return { enrollment: { taskId: 'synthetic', state: 'failed' } };
+      throw new Error('Unexpected mock request');
+    });
+  document.querySelector('#restoreAnyAccountButton').click();
+  assert.equal(document.querySelector('#enrollmentDialog').open, true);
+  assert.equal(document.querySelector('#enrollmentName').disabled, true);
+  assert.equal(document.querySelector('#enrollmentName').hidden, true);
+  assert.equal(document.querySelector('#replaceEnrollmentRow').hidden, true);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 0);
+  document.querySelector('#enrollmentForm').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await tick(); await tick();
+  const send = calls.find(call => call.url === '/api/admin/enrollments' && call.method === 'POST');
+  assert.ok(send);
+  const input = JSON.parse(send.body);
+  assert.equal(input.matchExistingAccount, true);
+  assert.equal(input.reauthAccountId, '');
+  assert.equal(input.replace, false);
+});
+
+test('an unmatched automatic recovery cannot offer adding a new identity', async t => {
+  const current = { taskId: 'synthetic', state: 'identity_conflict', identityConflict: { actions: ['cancel'] } };
+  const { document } = await setup(t, undefined,
+    { enrollment: { supportsAdminPageQr: true, activeEnrollment: current } }, () => ({ enrollment: current }));
+  document.querySelector('#startEnrollmentButton').click();
+  await tick();
+  assert.equal(document.querySelector('#enrollmentIdentityConflict').hidden, false);
+  assert.equal(document.querySelector('#identityConflictAddControls').hidden, true);
+  assert.match(document.querySelector('#identityConflictDescription').textContent, /未修改账号池/);
 });
 
 test('identity conflict cancellation uses existing DELETE contract', async t => {

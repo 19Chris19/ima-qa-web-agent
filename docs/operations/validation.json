@@ -1,0 +1,194 @@
+{
+  "schema": "provider_admin_local_acceptance_v1",
+  "date": "2026-11-10",
+  "node": "22.23.3",
+  "localOnly": true,
+  "baseCommit": "db31c8c554919da5928deb64e0f56ada421a89e8",
+  "branch": "codex/provider-admin-status-20261110",
+  "fullRegression": {
+    "tests": 1037,
+    "passed": 1032,
+    "failed": 0,
+    "skipped": 5,
+    "testConcurrency": 1,
+    "configuredCompanionChecks": [
+      "local admin serialization contract",
+      "new admin matched-recovery consent"
+    ],
+    "skippedTests": [
+      "mapped durable HTTP isolation, rotation and scheduler identity with companion executor",
+      "full-clock task survives 365 seconds, disconnect and resubscription without re-dispatch",
+      "actual website parser accepts audited synthetic exports",
+      "actual public serialized store passes unchanged website parser",
+      "real-clock task route -> fair queue -> pool -> native HTTP survives 365 seconds of upstream silence"
+    ]
+  },
+  "browser": {
+    "engine": "Ego Lite Chromium",
+    "desktop": [
+      "light",
+      "dark"
+    ],
+    "mobileEmulation": {
+      "width": 390,
+      "height": 844,
+      "horizontalOverflow": false,
+      "visibleControlsBelow44px": 0
+    },
+    "checked": [
+      "canonical overview and capacity basis",
+      "account filter",
+      "drawer Escape and focus return",
+      "qualification budget dialog and cancel",
+      "exercise editable questions",
+      "report review controls",
+      "status components and six accessible date controls",
+      "reduced motion"
+    ],
+    "realDeviceIOS": false,
+    "realDeviceAndroid": false
+  },
+  "performance": {
+    "baseline30": {
+      "rounds": 30,
+      "eventsPerRound": 24,
+      "concurrentOverviewPerRound": 0,
+      "historyMinuteWrites": 0,
+      "firstDeltaP95Ms": 9.257416999999805,
+      "eventGapP95Ms": 8.368708000000083,
+      "overviewP95Ms": null,
+      "cpuMs": 420.165,
+      "elapsedMs": 4101.682125,
+      "eventLoopP95Ms": 2.179071,
+      "rssPeakMiB": 98.703125,
+      "rssFirstMiB": 87.859375,
+      "rssLastMiB": 98.6875,
+      "historyBytes": 0,
+      "productionRequests": 0
+    },
+    "candidate30": {
+      "rounds": 30,
+      "eventsPerRound": 24,
+      "concurrentOverviewPerRound": 1,
+      "historyMinuteWrites": 30,
+      "firstDeltaP95Ms": 8.736875000000055,
+      "eventGapP95Ms": 8.556166000000303,
+      "overviewP95Ms": 2.3913749999999254,
+      "cpuMs": 505.167,
+      "elapsedMs": 4142.729708,
+      "eventLoopP95Ms": 2.621439,
+      "rssPeakMiB": 99.921875,
+      "rssFirstMiB": 88.21875,
+      "rssLastMiB": 99.921875,
+      "historyBytes": 8963,
+      "productionRequests": 0
+    },
+    "firstDeltaP95ChangeMs": -0.5205419999997503,
+    "eventGapP95ChangeMs": 0.18745800000021973,
+    "conditions": "Fixed synthetic upstream, 24 deltas per round. Candidate stresses one overview request and an asynchronous virtual-minute history write each round; production cadence is lower. Two separate Node processes; not a production latency guarantee.",
+    "stability300": {
+      "rounds": 300,
+      "retained": [
+        {
+          "round": 30,
+          "heapUsedMiB": 13.460769653320312,
+          "rssMiB": 100.875
+        },
+        {
+          "round": 60,
+          "heapUsedMiB": 13.669052124023438,
+          "rssMiB": 101.65625
+        },
+        {
+          "round": 90,
+          "heapUsedMiB": 13.755477905273438,
+          "rssMiB": 101.90625
+        },
+        {
+          "round": 120,
+          "heapUsedMiB": 13.929641723632812,
+          "rssMiB": 102.203125
+        },
+        {
+          "round": 150,
+          "heapUsedMiB": 14.002838134765625,
+          "rssMiB": 103.78125
+        },
+        {
+          "round": 180,
+          "heapUsedMiB": 14.113517761230469,
+          "rssMiB": 110.484375
+        },
+        {
+          "round": 210,
+          "heapUsedMiB": 14.129791259765625,
+          "rssMiB": 110.546875
+        },
+        {
+          "round": 240,
+          "heapUsedMiB": 14.152732849121094,
+          "rssMiB": 110.84375
+        },
+        {
+          "round": 270,
+          "heapUsedMiB": 14.177879333496094,
+          "rssMiB": 111.046875
+        },
+        {
+          "round": 300,
+          "heapUsedMiB": 14.289558410644531,
+          "rssMiB": 111.421875
+        }
+      ],
+      "conversationRetention": "bounded_1_conversation_6_turns",
+      "eventsPerRound": 24,
+      "concurrentOverviewPerRound": 1,
+      "historyMinuteWrites": 300,
+      "firstDeltaP95Ms": 8.629541999998764,
+      "eventGapP95Ms": 6.267541000000165,
+      "overviewP95Ms": 2.660707999999431,
+      "cpuMs": 4237.679,
+      "elapsedMs": 38763.063375,
+      "eventLoopP95Ms": 1.685503,
+      "rssPeakMiB": 111.421875,
+      "rssFirstMiB": 89.1875,
+      "rssLastMiB": 111.296875,
+      "historyBytes": 89896,
+      "productionRequests": 0
+    },
+    "memoryInterpretation": "RSS rose during this short warm-up workload; retained heap after explicit GC rose from about 13.46 to 14.29 MiB. This is not proof of a long-term plateau or a leak. Histories have bounded retention, task observations cap at 512. Multi-hour production observation remains pending; no 64 MiB pass/fail gate was used."
+  },
+  "protection": {
+    "realIMACalls": 0,
+    "qrOrRenewal": 0,
+    "productionDeployments": 0,
+    "productionAccountWrites": 0,
+    "githubPush": false,
+    "statusGETOnly": true,
+    "statusHasAdminRoutes": false,
+    "hostPatchApplied": false,
+    "historyMaxBytes": 33554432
+  },
+  "audit": {
+    "addedPrivateIdentityMatches": 0,
+    "addedPersonalPrivatePathMatches": 0,
+    "addedWechatIdentityMatches": 0,
+    "hostPatchChecksOnPrivateCopy": "passed"
+  },
+  "productionReadOnlyCheck": {
+    "providerHTTP": 200,
+    "providerOK": true,
+    "websiteHTTP": 200,
+    "websiteReady": true,
+    "websiteAuthenticated": true,
+    "realAnswerVerified": false
+  },
+  "testHarnessRepair": "An IPv6 free-port reservation could coexist with a real IPv4 listener. Transfer test fixtures now reserve both loopback families and avoid the client ephemeral range. Production stop protection remains unchanged.",
+  "pending": [
+    "review and GitHub PR authorization",
+    "real QR/renewal/qualification acceptance",
+    "private read-only ingress routing",
+    "production install and multi-hour observation",
+    "iOS Safari and Android Chrome real devices"
+  ]
+}

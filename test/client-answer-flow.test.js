@@ -15,6 +15,7 @@ async function pageWithAnswer(events) {
   window.TextDecoder = TextDecoder;
   window.confirm = () => true;
   window.fetch = async (url) => {
+    if (url.startsWith('/api/chat-capabilities')) return Response.json({enabled:false,models:[]});
     if (url === '/healthz') return Response.json({ provider: 'openapi-mimo', model: 'synthetic' });
     if (url === '/api/capabilities') return Response.json({ features: { durable_qa_tasks_v1: false } });
     if (url.startsWith('/api/conversations?')) return Response.json({ conversations: [] });
@@ -24,7 +25,7 @@ async function pageWithAnswer(events) {
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'model-picker.js', 'client.js']) {
     window.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await waitFor(() => !window.document.querySelector('#sendButton').disabled);
@@ -93,6 +94,7 @@ test('the send control becomes stop and aborts exactly one in-flight request', a
   window.TextDecoder = TextDecoder;
   let asks = 0;
   window.fetch = async (url, options = {}) => {
+    if (url.startsWith('/api/chat-capabilities')) return Response.json({enabled:false,models:[]});
     if (url === '/healthz') return Response.json({ provider: 'openapi-mimo', model: 'synthetic' });
     if (url === '/api/capabilities') return Response.json({ features: { durable_qa_tasks_v1: false } });
     if (url.startsWith('/api/conversations?')) return Response.json({ conversations: [] });
@@ -103,7 +105,7 @@ test('the send control becomes stop and aborts exactly one in-flight request', a
     }
     throw new Error(`Unexpected URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'model-picker.js', 'client.js']) {
     window.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await waitFor(() => !window.document.querySelector('#sendButton').disabled);

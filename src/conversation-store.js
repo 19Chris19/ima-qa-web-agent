@@ -151,6 +151,8 @@ class ConversationStore {
         }
         conversation.upstream.sessionAnswerProfile = profile;
       }
+      const normalized = normalizeUpstream({ ...conversation.upstream, ...upstream }, conversation.upstream);
+      conversation.upstream = normalized;
       this.touch(conversation);
       this._write();
     } catch (error) {
@@ -165,6 +167,7 @@ class ConversationStore {
       accountId: conversation.upstream.accountId,
       sessionId: conversation.upstream.sessionId,
       ...(conversation.upstream.sessionAnswerProfile ? { sessionAnswerProfile: conversation.upstream.sessionAnswerProfile } : {}),
+      ...(conversation.upstream.kernelVersion ? { kernelVersion: conversation.upstream.kernelVersion, kernelCheckpoint: structuredClone(conversation.upstream.kernelCheckpoint) } : {}),
       ...(conversation.mode === 'knowledge_agent' ? { mode: 'knowledge_agent' } : {}),
     };
   }
@@ -488,6 +491,14 @@ function normalizeSessionProfile(value) {
   return ['classic_knowledge', 'ima_agent', 'ima_agent_auto'].includes(value) ? value : '';
 }
 
+function isCheckpointAdvance(a, b) {
+  if (a.sessionId !== b.sessionId || a.knowledgeBaseId !== b.knowledgeBaseId || a.principalFingerprint !== b.principalFingerprint) return false;
+  if (require('../vendor/imapy-core').isScopedAgentCheckpointTransition(a,b)) return true;
+  // A completion may fold the pending+settled journal steps into one history
+  // snapshot. Existing settled evidence must remain an exact prefix.
+  return !a.attempts.some(x => x.status === 'pending') && b.attempts.length === a.attempts.length + 1 &&
+    a.attempts.every((x,i) => JSON.stringify(x) === JSON.stringify(b.attempts[i]));
+}
 function normalizeUpstream(value = {}, previous = {}) {
   const accountId = cleanText(value?.accountId);
   const sessionId = cleanText(value?.sessionId);
@@ -497,6 +508,15 @@ function normalizeUpstream(value = {}, previous = {}) {
   if (sessionId && sessionId === previous.sessionId && previous.sessionAnswerProfile && profile &&
       previous.sessionAnswerProfile !== profile) {
     throw Object.assign(new Error('session_profile_conflict'), { code: 'session_profile_conflict', statusCode: 409 });
+  }
+  const kernelVersion = value.kernelVersion || (sessionId === previous.sessionId ? previous.kernelVersion : '');
+  const kernelCheckpoint = value.kernelCheckpoint || (sessionId === previous.sessionId ? previous.kernelCheckpoint : null);
+  if (kernelVersion) {
+    const cp = require('../vendor/imapy-core').normalizeScopedAgentCheckpoint(kernelCheckpoint);
+    if (kernelVersion !== 'imapy_chat_v1' || !cp || cp.sessionId !== sessionId) throw Object.assign(new Error('kernel_session_conflict'), { code: 'kernel_session_conflict', statusCode: 409 });
+    if (previous.kernelCheckpoint && JSON.stringify(previous.kernelCheckpoint) !== JSON.stringify(cp) &&
+        !isCheckpointAdvance(previous.kernelCheckpoint, cp)) throw Object.assign(new Error('kernel_checkpoint_regression'), {code:'kernel_session_conflict',statusCode:409});
+    return { accountId, sessionId, ...(profile ? { sessionAnswerProfile: profile } : {}), kernelVersion, kernelCheckpoint: cp };
   }
   return { accountId, sessionId, ...(sessionId && profile ? { sessionAnswerProfile: profile } : {}) };
 }

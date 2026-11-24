@@ -6,8 +6,8 @@ const test = require('node:test');
 const publicDirectory = path.join(__dirname, '..', 'public');
 
 test('admin account controls prevent duplicate clicks and render durable health feedback', () => {
-  const script = fs.readFileSync(path.join(publicDirectory, 'admin.js'), 'utf8');
-  const page = fs.readFileSync(path.join(publicDirectory, 'admin.html'), 'utf8');
+  const script = fs.readFileSync(path.join(publicDirectory, 'admin-legacy.js'), 'utf8');
+  const page = fs.readFileSync(path.join(publicDirectory, 'admin-legacy.html'), 'utf8');
 
   assert.match(script, /accountActionsInFlight\.has\(account\.id\)/);
   assert.match(script, /button\.disabled = Boolean\(disabled\)/);

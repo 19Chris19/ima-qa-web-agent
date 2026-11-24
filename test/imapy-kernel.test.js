@@ -1,0 +1,63 @@
+const test = require('node:test');const assert = require('node:assert/strict');const fs = require('node:fs');const os=require('node:os');const path=require('node:path');
+const { ImapyKernel }=require('../src/imapy-kernel');const { ConversationStore }=require('../src/conversation-store');
+test('recorded IMA web client identity is applied only to the matching account', async t => {
+ const f=await fixture(t);
+ const file=path.join(f.dir,'client-context.json');
+ const identity={'IMA-Q36':'test-device','IMA-GUID':'guid-test-device','IMA-IUA':'Synthetic, Browser',PLATFORM:'web','CLIENT-TYPE':'web','WEB-VERSION':'synthetic-current'};
+ const deviceInfo={uskey:'synthetic-signature',uskey_bus_infos_input:'test-device_123'};
+ const entry={principalFingerprint:f.a.principalFingerprint,deviceInfo,clientIdentity:identity,userAgent:'Synthetic; Browser'};
+ const write=()=>fs.writeFileSync(file,JSON.stringify({version:1,accounts:[entry]}),{mode:0o600});
+ const original='IMA-TOKEN=synthetic-token; WEB-VERSION=old';
+ f.a.client.headers['x-ima-cookie']=original;
+ write();
+ const kernel=new ImapyKernel({pool:f.pool,enabled:true,deviceContextPath:file});
+ assert.match(kernel.protocolHeaders(f.a)['x-ima-cookie'],/IMA-TOKEN=synthetic-token.*WEB-VERSION=synthetic-current/);
+ assert.equal(kernel.protocolHeaders(f.a)['user-agent'],'Synthetic; Browser');
+ assert.equal(kernel.protocolHeaders({...f.a,principalFingerprint:'b'.repeat(64)})['x-ima-cookie'],original);
+ assert.equal(f.a.client.headers['x-ima-cookie'],original);
+ delete f.a.client.deviceInfo;
+ entry.deviceInfo={...deviceInfo,uskey_bus_infos_input:'other-device_123'};
+ write();
+ assert.equal(new ImapyKernel({pool:f.pool,deviceContextPath:file}).device(f.a),null);
+});
+async function fixture(t,opts={}){const {makeUpstream,wire,kb}=await import('../test-support/imapy-upstream.mjs');const u=makeUpstream(opts);
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'imapy-kernel-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const a={id:'synthetic-account',principalFingerprint:'a'.repeat(64),knowledgeBaseId:kb,client:{headers:{'x-ima-cookie':'SYNTHETIC_COOKIE','x-ima-bkn':'SYNTHETIC_BKN'},credentialGeneration:1,_fetch:u.fetch,deviceInfo:wire.qa.quick.request.device_info}};
+ const pool={accounts:[a],persistenceReady:()=>true};const kernel=new ImapyKernel({pool,enabled:true,policyPath:path.join(dir,'policy.json')});
+ await kernel.capabilities();const catalog=kernel.catalogs.get(a.id).catalog;const model=catalog.models[0];kernel.setPolicy({defaultModelRef:model.modelRef,allowedModelRefs:catalog.models.map(m=>m.modelRef)});
+ return {kernel,pool,a,u,dir,model,modelSelection:{modelRef:model.modelRef,mode:'quick'}};}
+async function drain(f,opts={}){let binding=opts.binding||{},events=[];for await(const e of f.kernel.stream(f.a,{question:'Synthetic question',modelSelection:f.modelSelection,signal:new AbortController().signal,onKernelCheckpoint:b=>binding=structuredClone(b),...binding,...opts}))events.push(e);return {binding,events};}
+test('directory caches for five minutes and merges same-account reads',async t=>{const f=await fixture(t);await Promise.all(Array.from({length:8},()=>f.kernel.catalog(f.a)));assert.equal(f.u.calls.filter(x=>x.pathname.endsWith('get_models')).length,1);const cap=await f.kernel.capabilities();assert.equal(cap.defaultSelection.mode,'quick');assert.ok(cap.models.length);assert.equal(JSON.stringify(cap).includes('SYNTHETIC_COOKIE'),false);});
+test('admin policy is private and reloads without upstream requests',async t=>{const f=await fixture(t);assert.equal(fs.statSync(path.join(f.dir,'policy.json')).mode&0o777,0o600);const fresh=new ImapyKernel({pool:f.pool,enabled:true,policyPath:path.join(f.dir,'policy.json')});assert.equal(fresh.policy.defaultModelRef,f.model.modelRef);assert.equal(fresh.catalogs.size,0);});
+test('missing device context and unsupported modes fail closed',async t=>{const f=await fixture(t);delete f.a.client.deviceInfo;assert.equal(f.kernel.supports(f.a,f.modelSelection,false),false);assert.ok((await f.kernel.capabilities()).unavailableReasons.includes('device_context_missing'));await assert.rejects(()=>drain(f),{code:'model_selection_unavailable'});assert.equal(f.u.sessions.size,0);});
+test('legacy session selection is refused without modifying it',async t=>{const f=await fixture(t);assert.throws(()=>f.kernel.validateRequest(f.modelSelection,{accountId:f.a.id,sessionId:'legacy'},false),{code:'legacy_session_model_selection_unavailable'});assert.equal((await f.kernel.capabilities({upstream:{sessionId:'legacy'}})).legacy,true);});
+test('real protocol first turn, restart, mode and model switch preserve session',async t=>{const f=await fixture(t);const one=await drain(f);assert.equal(one.events.filter(e=>e.type==='done').length,1);assert.equal(one.binding.kernelCheckpoint.attempts[0].status,'succeeded');
+ const replacement=new ImapyKernel({pool:f.pool,enabled:true,policyPath:path.join(f.dir,'policy.json')});f.kernel=replacement;await f.kernel.capabilities();
+ const two=await drain(f,{binding:one.binding,modelSelection:{modelRef:f.model.modelRef,mode:'deep'},requestId:'synthetic-followup'});
+ assert.equal(two.binding.sessionId,one.binding.sessionId);assert.equal(two.binding.kernelCheckpoint.attempts.length,2);assert.equal(f.u.calls.filter(x=>x.pathname.endsWith('init_session')).length,1);
+ const next=f.kernel.catalogs.get(f.a.id).catalog.models[1];const three=await drain(f,{binding:two.binding,modelSelection:{modelRef:next.modelRef,mode:'quick'},requestId:'synthetic-third'});assert.equal(three.binding.sessionId,one.binding.sessionId);
+ const sends=f.u.calls.filter(x=>x.pathname.endsWith('/qa'));assert.equal(sends.length,3);assert.equal(sends[1].body.model_info.model_type,f.model.modes.deep.model_type);
+});
+test('pending dispatch checkpoint refuses replay and does not call qa again',async t=>{const f=await fixture(t,{reply:()=>{throw Error('synthetic_lost_response');}});let binding;await assert.rejects(()=>drain(f,{onKernelCheckpoint:b=>binding=structuredClone(b)}));assert.equal(binding.kernelCheckpoint.attempts[0].status,'pending');await assert.rejects(()=>drain(f,{binding}));assert.equal(f.u.calls.filter(x=>x.pathname.endsWith('/qa')).length,1);});
+test('credential generation changes invalidate catalog and block dispatch',async t=>{const f=await fixture(t);f.a.client.credentialGeneration++;assert.equal(f.kernel.supports(f.a,f.modelSelection,false),false);await assert.rejects(()=>drain(f,{onKernelCheckpoint:()=>{f.a.client.credentialGeneration++;}}));assert.equal(f.u.calls.filter(x=>x.pathname.endsWith('/qa')).length,0);});
+test('web request is explicit enhancement and no web sources are not verified',async t=>{const f=await fixture(t);const result=await drain(f,{sourceIntent:'web_requested'});const sent=f.u.calls.find(x=>x.pathname.endsWith('/qa'));assert.equal(sent.body.model_info.enable_enhancement,true);const done=result.events.find(e=>e.type==='done');assert.equal(done.webEvidence,false);assert.notEqual(done.webEvidenceStatus,'verified');});
+test('checkpoint binding persists privately across store restart',async t=>{const f=await fixture(t);const result=await drain(f);const opts={persist:true,storePath:path.join(f.dir,'conversations.json')};const store=new ConversationStore(opts);const id=store.create('owner').conversationId;store.bindTaskUpstream(id,{accountId:f.a.id,...result.binding},'owner');const fresh=new ConversationStore(opts);assert.equal(fresh.getUpstream(id,'owner').kernelCheckpoint.attempts.length,1);assert.equal(JSON.stringify(fresh.publicState(fresh.require(id,'owner'))).includes('kernelCheckpoint'),false);});
+test('HTTP task chain persists selection and history; replay keeps original identity',async t=>{
+ const f=await fixture(t);const {IMAWebAgentPool}=require('../src/ima-web-agent-pool');const {createApp}=require('../src/app');
+ const pool=new IMAWebAgentPool({accounts:[{id:f.a.id,headers:f.a.client.headers,principalFingerprint:f.a.principalFingerprint,knowledgeBaseId:f.a.knowledgeBaseId,maxConcurrent:2}]},{clientFactory:()=>({...f.a.client,applyConfig(){},stopAutoRefresh(){}})});
+ const store=new ConversationStore({persist:true,storePath:path.join(f.dir,'http-conversations.json')});const cid=store.create('synthetic-http',{mode:'knowledge_agent'}).conversationId;
+ const app=createApp({config:{qaProvider:'ima-web-agent',mimo:{},webAgent:{sharedKnowledgeBaseId:f.a.knowledgeBaseId},imapy:{enabled:true,policyPath:path.join(f.dir,'policy.json')},conversations:{storePath:store.storePath},security:{apiToken:'synthetic-api'},concurrency:{maxConcurrentAsk:2,queueLimit:5},limits:{maxQuestionLength:2000},rateLimit:{windowMs:0,max:0}},imaWebAgentClient:pool,conversationStore:store});
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));t.after(async()=>{await app.locals.durableQATasks.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
+ const request=(route,body,key='synthetic-once')=>fetch(`http://127.0.0.1:${server.address().port}`+route,{method:body?'POST':'GET',headers:{'content-type':'application/json',authorization:'Bearer synthetic-api','x-ima-client-id':'synthetic-http','idempotency-key':key},...(body?{body:JSON.stringify(body)}:{})});
+ assert.equal((await request('/api/chat-capabilities')).status,200);
+ app.locals.imapyKernel.catalogs.get(f.a.id).expiresAt=0;
+ const body={question:'Synthetic HTTP question',conversationId:cid,modelSelection:f.modelSelection};const initial=await request('/api/tasks',body);assert.equal(initial.status,202);const receipt=await initial.json();
+ let data;for(let i=0;i<100;i++){data=await(await request('/api/tasks/'+receipt.task.id+'?presentation=chat_v1')).json();if(['succeeded','failed','indeterminate'].includes(data.task.status))break;await new Promise(r=>setTimeout(r,10));}
+ assert.equal(data.task.status,'succeeded',JSON.stringify(data));assert.equal(data.snapshot.events.find(e=>e.event==='done').data.modelSelection.mode,'quick');
+ assert.equal(store.getUpstream(cid,'synthetic-http').kernelVersion,'imapy_chat_v1');
+ assert.equal((await request('/api/tasks',body)).status,200);assert.equal((await request('/api/tasks',{...body,modelSelection:{...f.modelSelection,mode:'deep'}})).status,409);
+ assert.equal(f.u.calls.filter(x=>x.pathname.endsWith('/qa')).length,1);
+ const history=store.getDetail(cid,'synthetic-http');assert.equal(history.messages.at(-1).modelSelection.mode,'quick');
+});
+test('private device contexts bind to the exact principal and never enter public capabilities',async t=>{const f=await fixture(t);delete f.a.client.deviceInfo;const file=path.join(f.dir,'devices.json');fs.writeFileSync(file,JSON.stringify({version:1,accounts:[{principalFingerprint:f.a.principalFingerprint,deviceInfo:{uskey:'SYNTHETIC_DEVICE',uskey_bus_infos_input:'SYNTHETIC_BUS'}}]}),{mode:0o600});const k=new ImapyKernel({pool:f.pool,enabled:true,deviceContextPath:file,policyPath:path.join(f.dir,'policy.json')});assert.equal(k.device(f.a).uskey,'SYNTHETIC_DEVICE');assert.equal(k.device({...f.a,principalFingerprint:'b'.repeat(64)}),null);assert.equal(JSON.stringify(await k.capabilities()).includes('SYNTHETIC_DEVICE'),false);fs.chmodSync(file,0o644);const unsafe=new ImapyKernel({pool:f.pool,enabled:true,deviceContextPath:file});assert.equal(unsafe.device(f.a),null);});
+test('late reversed webpage metadata preserves exact reference keys and web evidence',async t=>{const f=await fixture(t,{reply:({record,session})=>{record.answer='First [7](@index-ref?id=91), second [2](@index-ref?id=37)';session.records.push(record);const ref=(key,snippet)=>['STRUCTURED_BLOCK',{Id:'synthetic-'+key,Type:'referenceIndexes',Data:{reference_indexes:{indexes:{[key]:{type:1,jumpUrl:'https://example.org/synthetic-paper',title:'Synthetic public source',content:snippet}}}}}];return new Response([['MESSAGE',{Text:record.answer}],ref('37','Second excerpt'),ref('91','First excerpt'),['COMPLETED',{Code:0}]].map(([event,data])=>`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(''));}});const result=await drain(f,{sourceIntent:'web_requested'});const done=result.events.find(e=>e.type==='done');assert.equal(done.citationMap['index:91'].sources[0].snippet,'First excerpt');assert.deepEqual(done.citationMap['index:91'].displayNumbers,['7']);assert.deepEqual(done.citationMap['index:37'].displayNumbers,['2']);assert.equal(done.webEvidenceStatus,'verified');});

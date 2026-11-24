@@ -25,6 +25,15 @@
   let recoveryRequired = false;
   let connectionNotice = '';
   let draftRevision = 0;
+  let providerWebRequested = false;
+  const modelPicker = window.ChatModelPicker.create({ mount: document.querySelector('.composer-tools'),
+    load: async id => { const r = await fetch('/api/chat-capabilities' + (id ? '?conversationId=' + encodeURIComponent(id) : ''), requestOptions()); if (!r.ok) throw Error(); return r.json(); },
+    notice: text => { connectionNotice = text; updateSendButton(); }, webRequested: () => providerWebRequested });
+  const webToggle = document.createElement('button');webToggle.type='button';webToggle.className='model-picker-trigger';webToggle.hidden=true;webToggle.setAttribute('aria-label','本轮请求联网');webToggle.setAttribute('aria-pressed','false');
+  webToggle.innerHTML='<svg width=20 height=20 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx=12 cy=12 r=9/><path d="M3 12h18M12 3c5 5 5 13 0 18M12 3c-5 5-5 13 0 18"/></svg>';
+  document.querySelector('.composer-tools').insertBefore(webToggle,sendButton);
+  webToggle.addEventListener('click',()=>{providerWebRequested=!providerWebRequested;webToggle.setAttribute('aria-pressed',String(providerWebRequested));modelPicker.render();});
+  new MutationObserver(()=>{webToggle.hidden=modelPicker.button.hidden;}).observe(modelPicker.button,{attributes:true,attributeFilter:['hidden']});
   const phases = {
     preparing: ['准备会话', '正在准备会话…'],
     submitting: ['提交中', '正在发送问题…'],
@@ -155,7 +164,7 @@
       if (!response.ok || !data.conversation?.conversationId) {
         throw new Error(data.error || '无法新建会话');
       }
-      setCurrentConversation(data.conversation.conversationId);
+      setCurrentConversation(data.conversation.conversationId, true);
       renderWelcome();
       await refreshConversationList();
       if (epoch !== viewEpoch) return;
@@ -298,6 +307,7 @@
   async function submitQuestion(rawQuestion, options = {}) {
     const question = rawQuestion.trim();
     if (!question || isBusy || navigating || recoveryRequired || (!tasksEnabled && !legacyProvider)) return false;
+    const modelSelection = options.modelSelection || modelPicker.capture(); if (modelSelection === null) return false;
     const view = beginView();
     view.question = question;
     view.originalDraft = rawQuestion;
@@ -337,7 +347,7 @@
       view.reference = { conversationId, requestKey: identity.requestKey };
       localStorage.setItem(taskStorageKey, JSON.stringify(view.reference));
       view.submitted = true;
-      const task = await tasks.submit(question, conversationId, identity.key, options.sourceIntent);
+      const task = await tasks.submit(question, conversationId, identity.key, options.sourceIntent || (providerWebRequested ? 'web' : ''), modelSelection);
       if (!current(view)) return;
       attachTask(view, task);
       void refreshConversationList();
@@ -498,6 +508,7 @@
   }
 
   function renderTaskEvent(view, event) {
+    if (event.data?.modelSelection) { view.message.modelSelection = event.data.modelSelection; window.ChatModelPicker.renderSelection(view.message.bubble, event.data.modelSelection); }
     if (!['sources', 'delta', 'process', 'suggestions', 'error', 'done'].includes(event.event)) return;
     const message = view.message ||= appendMessage('assistant', '', { pending: true });
     if (event.event === 'sources') {
@@ -571,6 +582,7 @@
       experience.answerCopy(message, status !== 'succeeded');
       attachAnswerRetry(message, view.task, status, view.question || view.task?.question, view.userMessage);
       window.ChatPresentation?.renderProcess(message.bubble, message.process, true);
+      window.ChatModelPicker.renderSelection(message.bubble, message.modelSelection);
       if (status === 'succeeded') window.ChatPresentation?.renderSuggestions(message.bubble, message.suggestions, input, true);
       if (view.submissionRejected && !message.answer.trim()) {
         // A rejected submission is still a draft, not an accepted conversation turn.
@@ -666,6 +678,7 @@
       if (message.role === 'assistant' && (message.sources?.length || message.citationMap || window.ChatPresentation)) {
         renderAnswer(view.text, message.content || '', { citationMap: message.citationMap, taskId: message.taskId, sourceIndexes: sourceIndexes(message.sources), partial: message.complete === false || message.interrupted === true });
         window.ChatPresentation?.renderProcess(view.bubble, message.process, true);
+        window.ChatModelPicker.renderSelection(view.bubble, message.modelSelection);
         window.ChatPresentation?.renderSuggestions(view.bubble, message.suggestions, input, isBusy || navigating);
         renderSources(view.bubble, message.sources, {
           searchSummary: message.searchSummary || '',
@@ -687,8 +700,9 @@
     appendMessage('assistant', '可以开始提问。');
   }
 
-  function setCurrentConversation(nextConversationId) {
+  function setCurrentConversation(nextConversationId, keepSelection = false) {
     conversationId = String(nextConversationId || '');
+    void modelPicker.refresh(conversationId, keepSelection);
     if (conversationId) {
       localStorage.setItem(conversationStorageKey, conversationId);
     }
@@ -696,6 +710,7 @@
 
   function clearCurrentConversation() {
     conversationId = '';
+    void modelPicker.refresh('');
     localStorage.removeItem(conversationStorageKey);
   }
 
@@ -907,4 +922,5 @@
   }
 
   function scrollToBottom() { latestControl.pin(); }
+  queueMicrotask(() => void modelPicker.refresh(conversationId));
 })();

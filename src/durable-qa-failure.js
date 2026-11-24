@@ -2,6 +2,8 @@
 
 // Public diagnostics are a fixed vocabulary, never upstream messages or arbitrary codes.
 const SAFE_FAILURES = new Set([
+  'model_selection_unavailable', 'model_kernel_unavailable', 'kernel_session_conflict', 'credential_generation_stale',
+  'ima_web_auth_denied', 'ima_web_dispatch_uncertain', 'ima_web_restore_history_unproved', 'ima_web_model_unavailable',
   'upstream_headers_timeout', 'upstream_idle_timeout', 'upstream_buffer_limit',
   'upstream_connection_interrupted', 'upstream_terminal_missing', 'upstream_terminal_duplicate',
   'upstream_empty_answer', 'upstream_event_after_terminal', 'upstream_stream_missing',

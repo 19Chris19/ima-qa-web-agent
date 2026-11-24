@@ -1,0 +1,90 @@
+{
+  "baseCommit": "feced0644c85067e8ae7bda3ce6d66d88301ce48",
+  "files": [
+    {
+      "path": "public/admin-refined.css",
+      "bytes": 18560,
+      "sha256": "c2b21ac6ea2563119ea2f7e955708d43ea53b6e5b95981cd402f76cf0061c5ce"
+    },
+    {
+      "path": "public/admin.html",
+      "bytes": 18927,
+      "sha256": "4928de86ed8da3013e4b767218b5a18d21b47766fdac9bad9034275f7320c227"
+    },
+    {
+      "path": "public/admin.js",
+      "bytes": 130691,
+      "sha256": "616097a887736269ae61727975d247de5bd3f51838fd3feac8302fe9aa7eaca8"
+    },
+    {
+      "path": "public/operations/recent-status.css",
+      "bytes": 2719,
+      "sha256": "140aa09b43b1f3cbb251812dceb500ae1caa4e21bd0c5f053a941ce3df6c4cfc"
+    },
+    {
+      "path": "public/operations/recent-status.js",
+      "bytes": 3717,
+      "sha256": "330443fd4ac743690658c9bd1bc4df9309887a6d6cd4ed8c108ad4291d7eb748"
+    },
+    {
+      "path": "public/operations/status.css",
+      "bytes": 6510,
+      "sha256": "b85429738d6ce2c35430ceecb5cfd84b7eaa7c6727944387ccb34e9df1b466b9"
+    },
+    {
+      "path": "public/operations/status.html",
+      "bytes": 2460,
+      "sha256": "0f55dff21d56f32c21e0c65fdc6d9235203d05175806af074ee02a9d926b675d"
+    },
+    {
+      "path": "public/operations/status.js",
+      "bytes": 7224,
+      "sha256": "8d480416fd1ab9dd1eedf96ae158270b9b2d25c62ada533971dd72fa70f692f3"
+    },
+    {
+      "path": "scripts/operations/benchmark.js",
+      "bytes": 6131,
+      "sha256": "61929c1193dd9bdbeb1c78cd0cdd54b77b3af35ed97179f8bc45b6d5ac12a076"
+    },
+    {
+      "path": "scripts/operations/preview.js",
+      "bytes": 11504,
+      "sha256": "d07ad4897e6407c77502f65a9e7fd1489d980f5fcb1a92e1c44ab619ba0cfbfd"
+    },
+    {
+      "path": "scripts/operations/status-server.js",
+      "bytes": 5292,
+      "sha256": "68aee215d1ae6578bd3afc1f1931765f431ce25f5ec935d24a57451e0eae54aa"
+    },
+    {
+      "path": "src/admin-routes.js",
+      "bytes": 27672,
+      "sha256": "471da78f5aab563cae798b10a6a5b22242dc04c3e341ae55c09826ad16e478a5"
+    },
+    {
+      "path": "src/operations-overview.js",
+      "bytes": 6268,
+      "sha256": "648a2292961fe7ccce69db1e546762c0fcaebb5f788352800460ece4af6548c7"
+    },
+    {
+      "path": "src/operations/actions.js",
+      "bytes": 1418,
+      "sha256": "01487220bb6c81c444aa6d56d3f1d98f2993cf54240b4c9fda6092a292109ad0"
+    },
+    {
+      "path": "src/operations/recent.js",
+      "bytes": 2184,
+      "sha256": "c8b3b823c4de7c814090f54af3e6284f1c34997d2c6a8d313a2a9ce738ba9b6d"
+    },
+    {
+      "path": "src/operations/status-proxy.js",
+      "bytes": 2632,
+      "sha256": "bd8abbe91cd21e55aa54cb09dadf34cfdfce5ef2c1742d87d08f63c04171dfd6"
+    },
+    {
+      "path": "src/operations/status.js",
+      "bytes": 1581,
+      "sha256": "2298f91ed78b417e555f096b5f07ee9d5e6503eb1683cda0b73ca9512ff95123"
+    }
+  ]
+}

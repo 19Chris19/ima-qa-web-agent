@@ -10,7 +10,7 @@ const { knowledgeAgentContractDigest } = require('./ima-knowledge-agent-contract
 const STORE_VERSION = 1;
 const DEFAULT_EVENT_LIMIT = 80;
 const PENDING_QUALIFICATION = 'pending_enrollment_qualification';
-const bindingDigest = account => crypto.createHash('sha256').update(JSON.stringify(account)).digest('hex');
+const bindingDigest = account => crypto.createHash('sha256').update(JSON.stringify(account, (_key,value) => value && typeof value==='object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a<b?-1:a>b?1:0)) : value)).digest('hex');
 
 function defaultAccountStorePath() {
   return path.resolve(__dirname, '..', '..', '..', 'runtime', 'ima-web-agent-accounts.json');
@@ -210,7 +210,7 @@ class WebAgentAccountDirectory {
     return sanitizeAccount(this.getAccount(id), { includeEvents: true });
   }
 
-  upsertCapturedAccount(options = {}, target = resolveAccountWriteTarget(this.load().accounts, options)) {
+  upsertCapturedAccount(options = {}, target = resolveAccountWriteTarget(this.load().accounts, options), internalOptions = {}) {
     const { id, name } = target;
     const runtimeEnvPath = options.runtimeEnvPath || '';
     const headers = normalizeHeaders(options.headers);
@@ -255,7 +255,8 @@ class WebAgentAccountDirectory {
         eventType: 'account_captured',
         message: `Captured ${name} from browser login`,
       },
-      { replace: Boolean(options.replace), requireQualification: options.requireQualification === true },
+      { replace: Boolean(options.replace), requireQualification: options.requireQualification === true,
+        prepareExplicitReactivation: internalOptions.prepareExplicitReactivation === true },
     );
     if (runtimeEnvPath) {
       this.writeRuntimeEnvFile(id);
@@ -272,6 +273,22 @@ class WebAgentAccountDirectory {
       });
     }
     return existing.principalFingerprint === fingerprint ? 'same' : 'distinct';
+  }
+
+  matchCapturedIdentity(headers) {
+    const fingerprint = this._identityFingerprint(normalizeHeaders(headers));
+    if (!fingerprint) {
+      throw Object.assign(new Error('无法确认 IMA 身份，已保留原登录态'), {
+        statusCode: 409, code: 'ima_identity_unverified',
+      });
+    }
+    const accounts = this.load().accounts;
+    const matches = accounts.filter((account) => account.principalFingerprint === fingerprint);
+    // An unverified or duplicated identity cannot safely establish a unique target.
+    if (accounts.some((account) => !account.principalFingerprint) || matches.length > 1) {
+      return { status: 'ambiguous' };
+    }
+    return matches.length === 1 ? { status: 'matched', accountId: matches[0].id } : { status: 'not_found' };
   }
 
   addCapturedAccount(options = {}) {
@@ -306,6 +323,9 @@ class WebAgentAccountDirectory {
       error.code = 'ima_identity_mismatch';
       throw error;
     }
+    if (options.prepareExplicitReactivation === true && options.requireQualification !== true) {
+      throw Object.assign(new Error('恢复账号前必须验证资格'), { statusCode: 409, code: 'enrollment_qualification_required' });
+    }
     return this.upsertCapturedAccount({
       id: existing.id,
       name: existing.name,
@@ -322,7 +342,7 @@ class WebAgentAccountDirectory {
       source: options.source || 'admin-qr-reauth',
       requireQualification: options.requireQualification === true,
       replace: true,
-    }, target);
+    }, target, { prepareExplicitReactivation: options.prepareExplicitReactivation === true });
   }
 
   setDisabled(accountId, disabled, reason = '') {
@@ -562,7 +582,7 @@ class WebAgentAccountDirectory {
     }
     if (options.requireQualification === true || existing?.runtime.enrollmentQualificationRequired === true) {
       nextAccount.runtime.disabled = true;
-      nextAccount.runtime.disabledReason = existing?.runtime.disabled === true
+      nextAccount.runtime.disabledReason = !options.prepareExplicitReactivation && existing?.runtime.disabled === true
         && !['auth_failed', 'knowledge_base_unavailable'].includes(existing.runtime.disabledReason)
         ? existing.runtime.disabledReason : PENDING_QUALIFICATION;
       nextAccount.runtime.enrollmentQualificationRequired = true;

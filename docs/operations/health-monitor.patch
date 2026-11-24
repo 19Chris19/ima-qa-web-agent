@@ -1,0 +1,27 @@
+--- a/host/health-monitor.mjs
++++ b/host/health-monitor.mjs
+@@ -1,3 +1,4 @@
++import { createRequire } from 'node:module';
+ import { mkdirSync, writeFileSync, renameSync, existsSync } from 'node:fs';
+ import { join, isAbsolute } from 'node:path';
+ import { setTimeout as delay } from 'node:timers/promises';
+@@ -6,6 +7,19 @@
+ if (!isAbsolute(directory || '')) throw Error('absolute_status_directory_required');
+ process.umask(0o077); mkdirSync(directory, { recursive: true, mode: 0o700 });
+ let previous = '';
++// Optional local status UI, hosted by the existing independent monitor process.
++// Set PROVIDER_STATUS_UI=1 only during a separately approved deployment.
++if (process.env.PROVIDER_STATUS_UI === '1') {
++  const source = process.env.PROVIDER_SOURCE_ROOT;
++  if (!isAbsolute(source || '')) throw Error('absolute_provider_source_required');
++  const { createStatusServer } = createRequire(import.meta.url)(join(source, 'scripts/operations/status-server.js'));
++  const status = await createStatusServer({
++    directory: join(directory, 'history'), port: Number(process.env.PROVIDER_STATUS_PORT || 4610),
++    hostHealthPath: join(directory, 'health.json'),
++  });
++  process.once('SIGTERM', () => { void status.close().finally(() => process.exit(0)); });
++}
++
+ while (true) {
+   const checks = await Promise.all([
+     fetch('http://127.0.0.1:4317/api/qa/health', { signal: AbortSignal.timeout(10000) })

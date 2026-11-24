@@ -53,7 +53,7 @@ function dockerCopyLayout(t) {
   const directory = temporaryDirectory(t);
   const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
   const instructions = fs.readFileSync(path.join(root, 'Dockerfile'), 'utf8').split('\n').filter(line => /^COPY\s/u.test(line));
-  const publicInputs = new Set(['package.json', 'package-lock.json', 'public', 'src', 'scripts',
+  const publicInputs = new Set(['vendor', 'package.json', 'package-lock.json', 'public', 'src', 'scripts',
     'provider-a-server.js', 'eval/questions.jsonl']);
   // Materialize only tracked, named COPY inputs, never untracked runtime files.
   for (const instruction of instructions) {

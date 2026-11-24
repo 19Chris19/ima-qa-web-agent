@@ -26,6 +26,7 @@ async function page(t, { mode = 'index', history = null, clipboardFails = false 
   w.fetch = async (url, options = {}) => {
     const parsed = new URL(url, w.location.href); parsed.searchParams.delete('presentation');
     url = parsed.pathname + (parsed.searchParams.size ? '?' + parsed.searchParams : '');
+    if (url.startsWith('/api/chat-capabilities')) return Response.json({enabled:false,models:[]});
     if (url === '/healthz') return Response.json({ provider: 'openapi-mimo', model: 'synthetic' });
     if (url === '/api/capabilities') return Response.json({ features: { durable_qa_tasks_v1: false } });
     if (url.startsWith('/api/conversations?')) return Response.json({ conversations: [] });
@@ -42,7 +43,7 @@ async function page(t, { mode = 'index', history = null, clipboardFails = false 
     }
     throw Error(`Unexpected synthetic URL: ${url}`);
   };
-  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'client.js']) {
+  for (const file of ['vendor/marked.umd.js', 'vendor/purify.min.js', 'answer-renderer.js', 'qa-experience.js', 'chat-controls.js', 'qa-tasks.js', 'model-picker.js', 'client.js']) {
     w.eval(fs.readFileSync(path.join(publicRoot, file), 'utf8'));
   }
   await tick();
@@ -71,7 +72,7 @@ for (const mode of ['index', 'embed']) {
     assert.equal(primary.getAttribute('aria-label'), '停止回答');
     assert.equal(primary.getAttribute('aria-disabled'), 'false');
     assert.equal(p.d.querySelector('#draftStopButton'), null);
-    assert.equal(p.form.querySelectorAll('button').length, 1);
+    assert.equal(p.form.querySelectorAll('button:not([hidden])').length, 1);
     primary.click(); await tick();
     assert.equal(p.asks[0].signal.aborted, true);
     assert.equal(p.input.value, 'retained draft');

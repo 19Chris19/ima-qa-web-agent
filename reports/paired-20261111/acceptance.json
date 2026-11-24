@@ -1,0 +1,15 @@
+{
+  "schema": "paired_candidate_acceptance_v1",
+  "date": "2026-11-11",
+  "stage": "local_synthetic",
+  "providerVersion": "0.8.0-rc.1",
+  "websiteVersion": "0.6.0-rc.1",
+  "providerTests": {"total":1081,"passed":1079,"failed":0,"skipped":2,"skips":"365-second long-clock acceptance"},
+  "websiteTests": {"total":409,"passed":409,"failed":0,"skipped":0},
+  "companionTestsEnabled": ["provider_identity","website_archive_parser","paired_bff_restart_queue_mapping"],
+  "performanceReports": ["performance-30.json","resources-300.json"],
+  "realImaCalls": 0,
+  "productionMutations": 0,
+  "githubMutations": 0,
+  "pending": ["independent-account real acceptance", "limited existing-pool real acceptance", "iOS Safari and Android Chrome", "long-duration memory retention plateau", "remote CI", "release artifacts", "production rollout"]
+}

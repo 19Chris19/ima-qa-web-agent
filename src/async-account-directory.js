@@ -79,6 +79,7 @@ class AsyncAccountDirectory extends WebAgentAccountDirectory {
   initializeWebMode(mode) { return this._call('initializeWebMode', [mode]); }
   setWebMode(mode) { return this._call('setWebMode', [mode]); }
   classifyCapturedIdentity(...args) { return this._call('classifyCapturedIdentity', args); }
+  matchCapturedIdentity(...args) { return this._call('matchCapturedIdentity', args); }
   applyKnowledgeAgentQualification(id, proof, expected) {
     const account = this.getAccount(id);
     if (!expected || expected.account !== account || expected.events !== account?.events) return Promise.reject(conflict());
@@ -166,6 +167,11 @@ class AsyncAccountDirectory extends WebAgentAccountDirectory {
     if (message.ok) { this._publish(message.snapshot); pending.resolve(message.result); }
     else {
       const error = errorFor(message.error.code, message.error.statusCode);
+      // Diagnostic values are allowlisted in the worker; never log pending.args.
+      try { this.onDiagnostic({ component: 'account_store_operation',
+        operation: pending.method, code: error.code, statusCode: error.statusCode,
+        phase: message.error.phase || 'unknown', reason: message.error.reason || 'unclassified',
+        prepared: Boolean(pending.receipt) }); } catch {}
       if (['account_store_commit_failed', 'account_store_generation_conflict', 'account_store_locked', 'account_store_invalid'].includes(error.code)) {
         this._setReady(false); this.uncertain = pending.receipt || { before: pending.before, after: pending.before };
       }

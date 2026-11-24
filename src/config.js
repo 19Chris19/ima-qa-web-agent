@@ -401,6 +401,7 @@ function getConfig(env = process.env) {
       maxSnippetLength: 900,
       maxSourceContentLength: 1800,
     },
+    imapy: { enabled: readEnv(env, 'IMA_IMAPY_ENABLED') === '1', policyPath: readEnv(env, 'IMA_IMAPY_MODEL_POLICY_PATH'), deviceContextPath: readEnv(env, 'IMA_IMAPY_DEVICE_CONTEXT_PATH') },
     security: {
       ...applicationSecurity,
       applications,

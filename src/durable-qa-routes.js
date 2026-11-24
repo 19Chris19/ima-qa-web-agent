@@ -20,8 +20,8 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       req.taskOwner = getConversationOwnerKey(req, res);
       next();
     });
-    const route = handler => (req, res) => {
-      try { handler(req, res); }
+    const route = handler => async (req, res) => {
+      try { await handler(req, res); }
       catch (error) {
         if (res.headersSent) { res.end(); return; }
         const code = /^[a-z_]{1,64}$/u.test(error.code || '') ? error.code :
@@ -29,7 +29,7 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
         res.status(error.statusCode || 503).json({ error: code, failureReason: code });
       }
     };
-    router.post('/', route((req, res) => {
+    router.post('/', route(async (req, res) => {
       checkMaintenance();
       const key = req.get('Idempotency-Key');
       if (typeof key !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/u.test(key)) throw fault('idempotency_key_required', 400);
@@ -43,7 +43,19 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       if (!validation.botContract && validation.retrievalPolicy === 'knowledge_agent' && webReadiness && webReadiness.mode !== 'knowledge_agent') throw fault('knowledge_agent_unavailable', 409);
       const input = { question: req.body.question, conversationId: validation.conversationId,
         retrieval_policy: validation.retrievalPolicy, knowledge_scope_ref: validation.knowledgeScopeRef, source_intent: validation.sourceIntent,
-        ...(validation.botContract ? { botContract: validation.botContract } : {}) };
+        ...(validation.botContract ? { botContract: validation.botContract } : {}),
+        ...(req.body.modelSelection !== undefined ? { modelSelection: require('./imapy-kernel').selection(req.body.modelSelection) } : {}) };
+      if (input.modelSelection) {
+        if (validation.botContract || (req.body.webSearch !== undefined && typeof req.body.webSearch !== 'boolean')) throw fault('model_selection_invalid', 400);
+        if (scope === 'internal' && req.body.webSearch !== undefined && req.body.webSearch !== (input.source_intent === 'web_requested')) throw fault('model_selection_invalid',400);
+        if (req.body.webSearch === true) input.source_intent = 'web_requested';
+      } else if (req.body.webSearch !== undefined) throw fault('model_selection_invalid', 400);
+      const existing = input.modelSelection && tasks.store.find(req.taskOwner, scope, key, input, req.applicationKey || scope);
+      if (!existing && input.modelSelection) {
+        const kernel = app.locals.imapyKernel;
+        if (!kernel) throw fault('model_kernel_unavailable', 409);
+        await kernel.prepare(conversations.getUpstream(input.conversationId, req.taskOwner));
+      }
       const result = tasks.submit({ ownerKey: req.taskOwner, scope, applicationKey: req.applicationKey || scope, key, input,
       validateInput() {
         if (!validation.botContract) return;
@@ -52,6 +64,9 @@ function registerDurableQARoutes(app, { tasks, config, conversations, webReadine
       }, validateNew() {
         admit(req, res, scope);
         const conversation = conversations.require(input.conversationId, req.taskOwner);
+        const upstream = conversations.getUpstream(input.conversationId, req.taskOwner);
+        if (input.modelSelection) app.locals.imapyKernel?.validateRequest(input.modelSelection, upstream, input.source_intent === 'web_requested');
+        else if (upstream.kernelVersion) throw fault('model_selection_required', 409);
         if (!validation.botContract && input.retrieval_policy === 'knowledge_agent' && conversation.mode !== 'knowledge_agent') throw fault('conversation_mode_conflict', 409);
       } });
       res.status(result.isNew ? 202 : 200).json({ task: result.task });
