@@ -30,7 +30,7 @@ function buildOperationsOverview({ management, readiness, queue, persistence, li
       reason: storageUnknown ? '账号保存服务状态尚未确认' : !storage ? '账号保存服务未就绪，暂停新派发' : disabled ? (a.runtime?.disabledReason==='pending_enrollment_qualification' ? '待接入资格未通过，保持停用' : `账号已停用${a.runtime?.disabledReason ? ' · '+String(a.runtime.disabledReason).slice(0,160) : ''}`)
         : a.maintenanceOperation ? '正在维护' : login === 'expired' ? '需要重新登录；历史资格不能代替有效登录'
         : login !== 'valid' ? '登录状态尚未确认' : cooling ? '账号正在冷却'
-        : r?.imapy && !r.imapy.ready ? '新内核未就绪：'+({device_context_missing:'缺少本账号设备上下文',catalog_unavailable:'模型目录待核对',default_not_configured:'未设置默认模型',default_unavailable:'默认模型不可用',policy_unavailable:'模型策略保存未确认',account_unavailable:'账号当前不可派发'}[r.imapy.reason]||'能力待核对') : ready ? '可接收当前网站问答' : '尚未满足当前问答资格',
+        : r?.imapy && !r.imapy.ready ? '新内核未就绪：'+({device_context_missing:'缺少本账号设备上下文',catalog_unavailable:'模型目录待核对',default_not_configured:'未设置默认模型',default_unavailable:'默认模型不可用',policy_unavailable:'模型策略保存未确认',account_unavailable:'账号当前不可派发'}[r.imapy.reason]||'能力待核对') : ready ? r?.imapy?.catalogRefreshRequired ? '可接收问答，提交前更新模型目录' : '可接收当前网站问答' : '尚未满足当前问答资格',
       ...(r?.imapy?{imapy:r.imapy,legacyQualified:qualified}:{}),
       maintenance: m.maintenance || {}, knowledge: m.knowledge || {}, activeProfile: m.activeProfile || null,
     };

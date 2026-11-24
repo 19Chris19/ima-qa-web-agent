@@ -140,9 +140,12 @@ class ImapyKernel {
   }
   accountStatus(a) {
     const c=this.catalogs.get(a.id),contextReady=Boolean(this.device(a));
-    const catalogCurrent=Boolean(c&&c.key===this.key(a)&&c.expiresAt>this.now());
-    const reason=!this.enabled?'kernel_disabled':!this.policyReady?'policy_unavailable':!this.baseEligible(a)?'account_unavailable':!protocolPrincipal(a.principalFingerprint)?'principal_unproved':!contextReady?'device_context_missing':!catalogCurrent?'catalog_unavailable':!this.policy.defaultModelRef?'default_not_configured':!this.supports(a,{modelRef:this.policy.defaultModelRef,mode:'quick'},false)?'default_unavailable':null;
-    return {enabled:this.enabled,contextReady,catalogCurrent,ready:reason===null,reason};
+    const catalogKnown=Boolean(c&&c.key===this.key(a));
+    const catalogCurrent=Boolean(catalogKnown&&c.expiresAt>this.now());
+    // Cache expiry requires validation on the next dispatch. It does not undo
+    // the last confirmed model support for these same account credentials.
+    const reason=!this.enabled?'kernel_disabled':!this.policyReady?'policy_unavailable':!this.baseEligible(a)?'account_unavailable':!protocolPrincipal(a.principalFingerprint)?'principal_unproved':!contextReady?'device_context_missing':!catalogKnown?'catalog_unavailable':!this.policy.defaultModelRef?'default_not_configured':!this.supports(a,{modelRef:this.policy.defaultModelRef,mode:'quick'},false,true)?'default_unavailable':null;
+    return {enabled:this.enabled,contextReady,catalogCurrent,catalogRefreshRequired:catalogKnown&&!catalogCurrent,ready:reason===null,reason};
   }
   adminStatus() {
     return { version: VERSION, enabled: this.enabled, policyReady: this.policyReady, policy: clone(this.policy),

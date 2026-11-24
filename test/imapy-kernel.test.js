@@ -27,6 +27,22 @@ async function fixture(t,opts={}){const {makeUpstream,wire,kb}=await import('../
  await kernel.capabilities();const catalog=kernel.catalogs.get(a.id).catalog;const model=catalog.models[0];kernel.setPolicy({defaultModelRef:model.modelRef,allowedModelRefs:catalog.models.map(m=>m.modelRef)});
  return {kernel,pool,a,u,dir,model,modelSelection:{modelRef:model.modelRef,mode:'quick'}};}
 async function drain(f,opts={}){let binding=opts.binding||{},events=[];for await(const e of f.kernel.stream(f.a,{question:'Synthetic question',modelSelection:f.modelSelection,signal:new AbortController().signal,onKernelCheckpoint:b=>binding=structuredClone(b),...binding,...opts}))events.push(e);return {binding,events};}
+test('idle catalog expiry keeps known account capacity while dispatch revalidates the same selection', async t => {
+ let removeDefault=false;
+ const f=await fixture(t,{editModels:payload=>{if(removeDefault)payload.models.shift();}});
+ f.kernel.catalogs.get(f.a.id).expiresAt=0;
+ const status=f.kernel.accountStatus(f.a);
+ assert.equal(status.ready,true);
+ assert.equal(status.catalogCurrent,false);
+ assert.equal(status.catalogRefreshRequired,true);
+ assert.equal(f.kernel.supports(f.a,f.modelSelection,false),false);
+ assert.equal(f.u.calls.filter(c=>c.pathname.endsWith('get_models')).length,1);
+ removeDefault=true;
+ await assert.rejects(drain(f),{code:'model_selection_unavailable'});
+ assert.equal(f.u.calls.filter(c=>c.pathname.endsWith('/qa')).length,0);
+ assert.equal(f.kernel.accountStatus(f.a).ready,false);
+ assert.equal(f.kernel.accountStatus(f.a).reason,'default_unavailable');
+});
 test('directory caches for five minutes and merges same-account reads',async t=>{const f=await fixture(t);await Promise.all(Array.from({length:8},()=>f.kernel.catalog(f.a)));assert.equal(f.u.calls.filter(x=>x.pathname.endsWith('get_models')).length,1);const cap=await f.kernel.capabilities();assert.equal(cap.defaultSelection.mode,'quick');assert.ok(cap.models.length);assert.equal(JSON.stringify(cap).includes('SYNTHETIC_COOKIE'),false);});
 test('admin policy is private and reloads without upstream requests',async t=>{const f=await fixture(t);assert.equal(fs.statSync(path.join(f.dir,'policy.json')).mode&0o777,0o600);const fresh=new ImapyKernel({pool:f.pool,enabled:true,policyPath:path.join(f.dir,'policy.json')});assert.equal(fresh.policy.defaultModelRef,f.model.modelRef);assert.equal(fresh.catalogs.size,0);});
 test('missing device context and unsupported modes fail closed',async t=>{const f=await fixture(t);delete f.a.client.deviceInfo;assert.equal(f.kernel.supports(f.a,f.modelSelection,false),false);assert.ok((await f.kernel.capabilities()).unavailableReasons.includes('device_context_missing'));await assert.rejects(()=>drain(f),{code:'model_selection_unavailable'});assert.equal(f.u.sessions.size,0);});
