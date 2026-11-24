@@ -42,6 +42,7 @@ export async function startRecoveryUiFixture(port = 0) {
         return res.end(`window.recoveryFixtureReady=true;localStorage.setItem('ima-qa-conversation-id', ${JSON.stringify(conversationId)});sessionStorage.setItem('qa-native-conversation-id', ${JSON.stringify(conversationId)});document.querySelector('textarea').value='保留这份草稿';`);
       }
       if (pathname === '/healthz') return json(res, { provider: 'ima-web-agent', model: 'synthetic' });
+      if (api === '/api/chat-capabilities') return json(res, { enabled: false, models: [] });
       if (api === '/api/health') return json(res, { connected: true, configured: true, authenticated: true, contractSupported: true, durableTasksSupported: true, ready: true, capacity: 1, webIntentSupported: true });
       if (api === '/api/capabilities') return json(res, { features: { durable_qa_tasks_v1: true } });
       if (pathname === '/questions.json') return json(res, Array.from({ length: 50 }, (_, i) => ({ id: `q${i}`, zh: `本地合成问题 ${i}`, en: `Local synthetic question ${i}` })));
