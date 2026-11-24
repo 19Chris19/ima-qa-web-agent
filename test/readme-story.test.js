@@ -10,7 +10,7 @@ test('README explains the stable service before operational detail', () => {
   const text = read('README.md');
   assert.match(text, /^# IMA QA Web Agent$/m);
   assert.ok(text.length < 15000);
-  for (const value of ['v0.7.0', 'v0.5.0', 'durable_qa_tasks_v1', '合成演示', '不自动重问', 'Windows', 'Linux',
+  for (const value of ['v0.8.2', 'v0.6.1', 'durable_qa_tasks_v1', '合成演示', '不自动重问', 'Windows', 'Linux',
     'sh onboard.sh doctor', 'docs/AGENT_DEPLOYMENT.md']) {
     assert.ok(text.includes(value), value);
   }

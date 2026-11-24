@@ -1,6 +1,6 @@
 # IMA QA Web Agent
 
-> **v0.8.1 配套知天下 v0.6.1**。新增模型选择、快速／深度模式和实时账号后台。
+> **v0.8.2 配套知天下 v0.6.1**。新增模型选择、快速／深度模式和实时账号后台。
 
 ![IMA QA Web Agent：把已授权 IMA 知识库接成可部署的问答服务](assets/readme/hero-v2.svg)
 
@@ -50,8 +50,8 @@
 
 | 当前稳定版本 | 配套与发布说明 |
 | --- | --- |
-| **Provider A v0.7.0** | [版本说明](docs/releases/v0.7.0.md) · [镜像与配套发布](docs/PAIRED_RELEASES.md) |
-| **知天下 v0.5.0** | [独立品牌网站](https://github.com/19Chris19/explorer-ai-qa-demo)的固定配套，不附送在本项目中 |
+| **Provider A v0.8.2** | [版本说明](docs/PAIRED_RELEASE_20261124.md) · [镜像与配套发布](docs/PAIRED_RELEASES.md) |
+| **知天下 v0.6.1** | [独立品牌网站](https://github.com/19Chris19/explorer-ai-qa-demo)的固定配套，不附送在本项目中 |
 
 先提供**官方知识库分享链接**，无需手工寻找数字 ID。缺少 Docker 时，Agent 应说明安装内容并取得许可，从官方渠道安装；不绕过系统授权或覆盖已有安装。
 
