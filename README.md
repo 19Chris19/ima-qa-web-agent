@@ -1,5 +1,7 @@
 # IMA QA Web Agent
 
+> **v0.8.0 配套知天下 v0.6.0**。新增模型选择、快速／深度模式和实时账号后台。
+
 ![IMA QA Web Agent：把已授权 IMA 知识库接成可部署的问答服务](assets/readme/hero-v2.svg)
 
 **把你已获授权的 IMA 共享知识库，接成网站和应用可以调用的问答服务。**
