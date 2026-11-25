@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sourceUrl": "https://fe-static.ima.myqcloud.com/ima/assets/chat/assets/features-vendor-0CN5-XOO.js",
+  "sampledAt": "2026-10-17T06:45:16.376Z",
+  "bytes": 776916,
+  "sha256": "2f37a4caad620cd52c43bb24db706c2374f03dfe64b30f73b18a2f1d128abb29",
+  "candidatePaths": [],
+  "methodSuffixes": [],
+  "servicePrefixCandidates": [],
+  "featureMentions": [
+    "report"
+  ],
+  "evidenceLevel": "public_script_candidate",
+  "callable": false,
+  "limitations": "Literal mentions only. No execution, request dispatch, authentication or runtime validation. Missing matches do not prove absence."
+}

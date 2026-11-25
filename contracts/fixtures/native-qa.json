@@ -1,0 +1,53 @@
+{
+  "session": {
+    "input": {
+      "knowledgeBaseId": "SCRUBBED_KB"
+    },
+    "expected": {
+      "envInfo": {
+        "robotType": 5,
+        "interactType": 0
+      },
+      "relatedUrl": "SCRUBBED_KB",
+      "sceneType": 1,
+      "msgsLimit": 10,
+      "forbidAutoAddToHistoryList": true,
+      "knowledgeBaseInfoWithFolder": {
+        "knowledgeBaseId": "SCRUBBED_KB",
+        "folderIds": []
+      }
+    }
+  },
+  "qa": {
+    "input": {
+      "question": "Scrubbed question",
+      "sessionId": "SCRUBBED_SESSION",
+      "clientId": "SCRUBBED_CLIENT",
+      "knowledgeBaseId": "SCRUBBED_KB",
+      "modelId": "SCRUBBED_MODEL",
+      "modelType": 3
+    },
+    "expected": {
+      "session_id": "SCRUBBED_SESSION",
+      "robot_type": 5,
+      "question": "Scrubbed question",
+      "question_type": 2,
+      "client_id": "SCRUBBED_CLIENT",
+      "command_info": {
+        "type": 14,
+        "knowledge_qa_info": {
+          "tags": [],
+          "knowledge_ids": [],
+          "media_id_infos": []
+        }
+      },
+      "model_info": {
+        "model_id": "SCRUBBED_MODEL",
+        "model_type": 3,
+        "enable_enhancement": false
+      },
+      "history_info": {},
+      "client_tools": []
+    }
+  }
+}

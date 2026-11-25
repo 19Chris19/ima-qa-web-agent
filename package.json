@@ -34,7 +34,8 @@
     "LICENSE",
     "provider-a-server.js",
     "README.md",
-    "server.js"
+    "server.js",
+    "contracts"
   ],
   "scripts": {
     "eval:dry-run": "node eval/run-eval.mjs --dry-run",
@@ -50,7 +51,9 @@
     "build:web-vendor": "node scripts/build-web-renderer-vendor.mjs",
     "test:mobile-ui": "node scripts/check-mobile-ui.mjs",
     "soak:synthetic": "node scripts/soak-provider-a.mjs",
-    "test": "node --test --test-concurrency=2"
+    "test": "node --test --test-concurrency=2",
+    "contracts:check": "node scripts/check-ima-contracts.mjs",
+    "contracts:inspect": "node scripts/inspect-ima-bundle.mjs"
   },
   "keywords": [
     "ima",
