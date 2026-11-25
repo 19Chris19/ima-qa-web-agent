@@ -77,3 +77,28 @@ test('HTTP task chain persists selection and history; replay keeps original iden
 });
 test('private device contexts bind to the exact principal and never enter public capabilities',async t=>{const f=await fixture(t);delete f.a.client.deviceInfo;const file=path.join(f.dir,'devices.json');fs.writeFileSync(file,JSON.stringify({version:1,accounts:[{principalFingerprint:f.a.principalFingerprint,deviceInfo:{uskey:'SYNTHETIC_DEVICE',uskey_bus_infos_input:'SYNTHETIC_BUS'}}]}),{mode:0o600});const k=new ImapyKernel({pool:f.pool,enabled:true,deviceContextPath:file,policyPath:path.join(f.dir,'policy.json')});assert.equal(k.device(f.a).uskey,'SYNTHETIC_DEVICE');assert.equal(k.device({...f.a,principalFingerprint:'b'.repeat(64)}),null);assert.equal(JSON.stringify(await k.capabilities()).includes('SYNTHETIC_DEVICE'),false);fs.chmodSync(file,0o644);const unsafe=new ImapyKernel({pool:f.pool,enabled:true,deviceContextPath:file});assert.equal(unsafe.device(f.a),null);});
 test('late reversed webpage metadata preserves exact reference keys and web evidence',async t=>{const f=await fixture(t,{reply:({record,session})=>{record.answer='First [7](@index-ref?id=91), second [2](@index-ref?id=37)';session.records.push(record);const ref=(key,snippet)=>['STRUCTURED_BLOCK',{Id:'synthetic-'+key,Type:'referenceIndexes',Data:{reference_indexes:{indexes:{[key]:{type:1,jumpUrl:'https://example.org/synthetic-paper',title:'Synthetic public source',content:snippet}}}}}];return new Response([['MESSAGE',{Text:record.answer}],ref('37','Second excerpt'),ref('91','First excerpt'),['COMPLETED',{Code:0}]].map(([event,data])=>`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(''));}});const result=await drain(f,{sourceIntent:'web_requested'});const done=result.events.find(e=>e.type==='done');assert.equal(done.citationMap['index:91'].sources[0].snippet,'First excerpt');assert.deepEqual(done.citationMap['index:91'].displayNumbers,['7']);assert.deepEqual(done.citationMap['index:37'].displayNumbers,['2']);assert.equal(done.webEvidenceStatus,'verified');});
+
+test('an unrecognized event protects only that Session and permits a fresh question on the same account', async t => {
+  const { sse } = await import('../test-support/imapy-upstream.mjs');
+  let first = true;
+  const f = await fixture(t, { reply({ record, session }) {
+    session.records.push(record);
+    const frames = [['MESSAGE', { Text: record.answer }]];
+    if (first) {
+      first = false;
+      frames.push(['SYNTHETIC_UNRECOGNIZED', { Code: 0 }]);
+    }
+    frames.push(['COMPLETED', { Code: 0 }]);
+    return new Response(sse(frames));
+  } });
+  let binding;
+  await assert.rejects(drain(f, { onKernelCheckpoint: saved => { binding = structuredClone(saved); } }),
+    { code: 'protocol_variant_unrecognized', outcomeUnknown: true });
+  assert.equal(binding.kernelCheckpoint.attempts.at(-1).status, 'pending');
+  await assert.rejects(drain(f, { binding }), { code: 'ima_web_dispatch_uncertain' });
+  const second = await drain(f, { question: 'An independent question' });
+  assert.notEqual(second.binding.sessionId, binding.sessionId);
+  assert.equal(second.events.at(-1).type, 'done');
+  const requests = f.u.calls.filter(call => call.pathname.endsWith('/qa'));
+  assert.deepEqual(requests.map(call => call.body.session_id), [binding.sessionId, second.binding.sessionId]);
+});
